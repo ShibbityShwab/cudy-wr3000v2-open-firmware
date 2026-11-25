@@ -1,0 +1,5552 @@
+{
+ "pristine": "/home/shibbityshwab/luofu-reval-20261122/pristine",
+ "v1end_state": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+ "folds": {
+  "027": {
+   "source": "027-arm-clk-luofu-readonly-mux-fix.patch",
+   "targets": [
+    "0019"
+   ],
+   "note": "6.18 clk-core read-only mux fix -> 0019 clock tree",
+   "candidates": {
+    "l0pre@027": {
+     "commit": "0544bc00efaca46f9f1fbee5eaeb9c37ae317c4a",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 1,
+     "hunks_total": 1,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/clk/hisilicon/crg-luofu.c",
+       "header": "@@ -505,14 +505,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0019": {
+     "commit": "33fc00ef2263a9c16702829a6895ddb82571eafd",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 1,
+     "hunks_total": 1,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/clk/hisilicon/crg-luofu.c",
+       "header": "@@ -505,14 +505,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 1,
+     "hunks_total": 1,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/clk/hisilicon/crg-luofu.c",
+       "header": "@@ -505,14 +505,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 1
+  },
+  "031": {
+   "source": "031-net-lsw-eps-channel-map.patch",
+   "targets": [
+    "0016",
+    "0021",
+    "0022",
+    "0025"
+   ],
+   "note": "LSW EPS channel-map init -> LSW group",
+   "candidates": {
+    "l0pre@031": {
+     "commit": "84b180fd8976b3b835e8fb5a9210ffe4d424242c",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 6,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0016": {
+     "commit": "db3e2d794b604287dfc537f78543d62871177ab9",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:329",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1588",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1680",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1743",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1082",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0021": {
+     "commit": "4ad33aa80497035cac5ce3ea26de0d606f13eb8f",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:329",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1588",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1680",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1743",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1082",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0022": {
+     "commit": "a77dd981c3f6b7d3d15d45beb6a0daec65041c8b",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:203",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:329",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1588",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1680",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1743",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1082",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0025": {
+     "commit": "21f54d7a5816c1847a920c26cc0dceda75de777e",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 6,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 6,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -203,6 +203,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -329,6 +333,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1588,6 +1593,71 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1680,8 +1750,8 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1743,6 +1813,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1082,6 +1082,15 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 6
+  },
+  "032": {
+   "source": "032-net-lsw-eqm-qminit.patch",
+   "targets": [
+    "0025",
+    "0026"
+   ],
+   "note": "EQM queue-manager init -> new RFC 0027",
+   "candidates": {
+    "l0pre@032": {
+     "commit": "54a88066862791d78c85400115f05a59da809e0b",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 24,
+     "hunks_total": 24,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -39,9 +39,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -131,17 +143,21 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -155,9 +171,12 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -181,7 +200,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -207,6 +226,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -265,6 +288,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -282,6 +307,79 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -313,9 +411,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -330,10 +432,13 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -460,6 +565,26 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -476,6 +601,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1600,10 +1727,17 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1618,38 +1752,32 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1658,6 +1786,738 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1751,9 +2611,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1827,6 +2688,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1835,16 +2710,24 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1859,6 +2742,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1884,5 +2771,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 20,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -158,6 +158,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 21,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -168,7 +171,11 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 22,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -179,9 +186,16 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 23,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -288,4 +302,173 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 24,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0025": {
+     "commit": "21f54d7a5816c1847a920c26cc0dceda75de777e",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 16,
+     "hunks_total": 24,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -39,9 +39,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -131,17 +143,21 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -155,9 +171,12 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -181,7 +200,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -207,6 +226,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -265,6 +288,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -282,6 +307,79 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -313,9 +411,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -330,10 +432,13 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:330",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -460,6 +565,26 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -476,6 +601,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1600,10 +1727,17 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1600",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1618,38 +1752,32 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1618",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1658,6 +1786,738 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1658",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1751,9 +2611,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1751",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1827,6 +2688,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1827",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1835,16 +2710,24 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1859,6 +2742,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1884,5 +2771,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 20,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -158,6 +158,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 21,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -168,7 +171,11 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 22,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -179,9 +186,16 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 23,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -288,4 +302,173 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 24,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 17,
+     "hunks_total": 24,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -39,9 +39,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -131,17 +143,21 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -155,9 +171,12 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -181,7 +200,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -207,6 +226,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -265,6 +288,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -282,6 +307,79 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -313,9 +411,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -330,10 +432,13 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:330",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -460,6 +565,26 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -476,6 +601,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1600,10 +1727,17 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1600",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1618,38 +1752,32 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1618",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1658,6 +1786,738 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1658",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1751,9 +2611,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1751",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1827,6 +2688,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1827",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1835,16 +2710,24 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1859,6 +2742,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1884,5 +2771,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 20,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -158,6 +158,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 21,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -168,7 +171,11 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 22,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -179,9 +186,16 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 23,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -288,4 +302,173 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 24,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 17,
+     "hunks_total": 24,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -39,9 +39,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -131,17 +143,21 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -155,9 +171,12 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -181,7 +200,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -207,6 +226,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:207",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -265,6 +288,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -282,6 +307,79 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -313,9 +411,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -330,10 +432,13 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:330",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -460,6 +565,26 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -476,6 +601,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1600,10 +1727,17 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1600",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1618,38 +1752,32 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1618",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1658,6 +1786,738 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1658",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1751,9 +2611,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1751",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1827,6 +2688,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1827",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1835,16 +2710,24 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1859,6 +2742,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1884,5 +2771,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 20,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -158,6 +158,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 21,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -168,7 +171,11 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 22,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -179,9 +186,16 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 23,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -288,4 +302,173 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 24,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 24
+  },
+  "036": {
+   "source": "036-net-lsw-pfe-init.patch",
+   "targets": [
+    "0025",
+    "0026"
+   ],
+   "note": "PFE init -> new RFC 0028",
+   "candidates": {
+    "l0pre@036": {
+     "commit": "7f4f7ce108e0d94d969f2eaacf60695a2f2d2f26",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 14,
+     "hunks_total": 14,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -43,6 +43,12 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -230,6 +236,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -418,6 +428,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -433,12 +444,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2396,7 +2409,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2433,11 +2446,25 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2466,7 +2493,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2518,6 +2545,139 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2611,10 +2771,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2709,9 +2869,27 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2742,6 +2920,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2771,5 +2951,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -471,4 +471,46 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0025": {
+     "commit": "21f54d7a5816c1847a920c26cc0dceda75de777e",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 14,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -43,6 +43,12 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -230,6 +236,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:230",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -418,6 +428,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:418",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -433,12 +444,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2396,7 +2409,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2396",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2433,11 +2446,25 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2466,7 +2493,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2466",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2518,6 +2545,139 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2518",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2611,10 +2771,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2611",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2709,9 +2869,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2709",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2742,6 +2920,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2742",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2771,5 +2951,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2771",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -471,4 +471,46 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:471",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 14,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -43,6 +43,12 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -230,6 +236,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:230",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -418,6 +428,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:418",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -433,12 +444,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2396,7 +2409,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2396",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2433,11 +2446,25 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2466,7 +2493,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2466",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2518,6 +2545,139 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2518",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2611,10 +2771,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2611",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2709,9 +2869,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2709",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2742,6 +2920,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2742",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2771,5 +2951,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2771",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -471,4 +471,46 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:471",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 14,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -43,6 +43,12 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:43",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -230,6 +236,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:230",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -418,6 +428,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:418",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -433,12 +444,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2396,7 +2409,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2396",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2433,11 +2446,25 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2433",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2466,7 +2493,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2466",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2518,6 +2545,139 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2518",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2611,10 +2771,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2611",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2709,9 +2869,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2709",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2742,6 +2920,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2742",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2771,5 +2951,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2771",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -471,4 +471,46 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:471",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 14
+  },
+  "038": {
+   "source": "038-net-gmac-maxframe-init.patch",
+   "targets": [
+    "0009",
+    "0023"
+   ],
+   "note": "GEMAC max-frame init -> 0009/0023",
+   "candidates": {
+    "l0pre@038": {
+     "commit": "bf0f4dd0160749e8893b36c1620f6d8102861c48",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 6,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -86,6 +86,25 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -144,6 +163,50 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -248,6 +311,22 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -263,6 +342,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,6 +518,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -489,5 +584,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0009": {
+     "commit": "0c5a654144e11e6832de84e7978d92c138495a40",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:86",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -86,6 +86,25 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:86",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -144,6 +163,50 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:144",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -248,6 +311,22 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:248",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -263,6 +342,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:263",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,6 +518,21 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -489,5 +584,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:489",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0023": {
+     "commit": "971c2d0f4e1a88d0e7b3ce26f103115e02cc1e82",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:263",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 5,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -86,6 +86,25 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -144,6 +163,50 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -248,6 +311,22 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -263,6 +342,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:263",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,6 +518,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -489,5 +584,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 6,
+     "hunks_total": 6,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -86,6 +86,25 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -144,6 +163,50 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -248,6 +311,22 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -263,6 +342,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,6 +518,21 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -489,5 +584,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 6
+  },
+  "041": {
+   "source": "041-net-gmac-macconf-nodoorbell.patch",
+   "targets": [
+    "0009",
+    "0023"
+   ],
+   "note": "GEMAC MAC-config replay -> 0009/0023",
+   "candidates": {
+    "l0pre@041": {
+     "commit": "56f4287c159ae508a2ba15d72abb634a50d81d8a",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 7,
+     "hunks_total": 7,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -117,6 +117,32 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -191,6 +217,14 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -306,6 +340,51 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -381,6 +460,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -416,6 +416,18 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -563,6 +575,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1280,7 +1293,14 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0009": {
+     "commit": "0c5a654144e11e6832de84e7978d92c138495a40",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 7,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -117,6 +117,32 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -191,6 +217,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:191",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -306,6 +340,51 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:306",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -381,6 +460,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:381",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -416,6 +416,18 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: No such file or directory"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -563,6 +575,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: No such file or directory"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1280,7 +1293,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: No such file or directory"
+       ]
+      }
+     ]
+    },
+    "v1:0023": {
+     "commit": "971c2d0f4e1a88d0e7b3ce26f103115e02cc1e82",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 2,
+     "hunks_total": 7,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -117,6 +117,32 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -191,6 +217,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:191",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -306,6 +340,51 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -381,6 +460,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:381",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -416,6 +416,18 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -563,6 +575,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:563",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1280,7 +1293,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1280",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 2,
+     "hunks_total": 7,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -117,6 +117,32 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -191,6 +217,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:191",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -306,6 +340,51 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -381,6 +460,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:381",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -416,6 +416,18 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -563,6 +575,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:563",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1280,7 +1293,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1280",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 7
+  },
+  "043": {
+   "source": "043-net-lsw-ifc-default-table.patch",
+   "targets": [
+    "0025",
+    "0026"
+   ],
+   "note": "IFC default table -> new RFC 0028",
+   "candidates": {
+    "l0pre@043": {
+     "commit": "2277f7b7eb1eb310f5347385b9bb070d15da9709",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 11,
+     "hunks_total": 11,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -240,6 +240,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -429,6 +433,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -446,12 +451,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2469,8 +2476,14 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2678,6 +2691,185 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2772,7 +2964,8 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2883,9 +3076,27 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2920,6 +3131,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2951,5 +3164,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -513,4 +513,47 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0025": {
+     "commit": "21f54d7a5816c1847a920c26cc0dceda75de777e",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 11,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -240,6 +240,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -429,6 +433,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:429",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -446,12 +451,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:446",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2469,8 +2476,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2469",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2678,6 +2691,185 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2678",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2772,7 +2964,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2772",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2883,9 +3076,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2883",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2920,6 +3131,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2920",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2951,5 +3164,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2951",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -513,4 +513,47 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:513",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 11,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -240,6 +240,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -429,6 +433,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:429",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -446,12 +451,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:446",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2469,8 +2476,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2469",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2678,6 +2691,185 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2678",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2772,7 +2964,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2772",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2883,9 +3076,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2883",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2920,6 +3131,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2920",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2951,5 +3164,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2951",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -513,4 +513,47 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:513",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 11,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -240,6 +240,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:240",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -429,6 +433,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:429",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -446,12 +451,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:446",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2469,8 +2476,14 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2469",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2678,6 +2691,185 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2678",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2772,7 +2964,8 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2772",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2883,9 +3076,27 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2883",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2920,6 +3131,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2920",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2951,5 +3164,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2951",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -513,4 +513,47 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:513",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 11
+  },
+  "044": {
+   "source": "044-net-lsw-ifc-gate-token-fix.patch",
+   "targets": [
+    "0022"
+   ],
+   "note": "final luofu_switch.* option names -> 0022",
+   "candidates": {
+    "l0pre@044": {
+     "commit": "3d091492422639e9b1791d301ca498de69275876",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 19,
+     "hunks_total": 19,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -19,12 +19,12 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -33,23 +33,23 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -150,11 +150,11 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1170,7 +1170,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1737,7 +1737,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2967,7 +2967,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2984,10 +2984,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3002,10 +3002,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3013,13 +3013,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3043,13 +3043,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3057,20 +3057,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3078,13 +3078,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -28,7 +28,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -247,7 +247,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -472,7 +472,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -535,7 +535,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -45,7 +45,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0022": {
+     "commit": "a77dd981c3f6b7d3d15d45beb6a0daec65041c8b",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:19",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 3,
+     "hunks_total": 19,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -19,12 +19,12 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:19",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -33,23 +33,23 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:33",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -150,11 +150,11 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:150",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1170,7 +1170,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1737,7 +1737,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1737",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2967,7 +2967,7 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2967",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2984,10 +2984,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3002,10 +3002,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3002",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3013,13 +3013,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3013",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3043,13 +3043,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3043",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3057,20 +3057,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3057",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3078,13 +3078,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3078",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -28,7 +28,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -247,7 +247,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:247",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -472,7 +472,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:472",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -535,7 +535,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:535",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -45,7 +45,7 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:45",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:33",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 8,
+     "hunks_total": 19,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -19,12 +19,12 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -33,23 +33,23 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:33",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -150,11 +150,11 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:150",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1170,7 +1170,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -1737,7 +1737,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:1737",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2967,7 +2967,7 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2967",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2984,10 +2984,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3002,10 +3002,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3013,13 +3013,13 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3043,13 +3043,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3043",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3057,20 +3057,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3057",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3078,13 +3078,13 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3078",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -28,7 +28,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -247,7 +247,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -303,7 +303,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:303",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -472,7 +472,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:472",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 17,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -535,7 +535,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:535",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 18,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -45,7 +45,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 19,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 19
+  },
+  "046": {
+   "source": "046-net-lsw-ifc-fix-eps-ext.patch",
+   "targets": [
+    "0025",
+    "0026"
+   ],
+   "note": "IFC EPS extension -> new RFC 0028",
+   "candidates": {
+    "l0pre@046": {
+     "commit": "06cdde434bd3411ef3aae261db36414c7e24ddec",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 16,
+     "hunks_total": 16,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -438,6 +442,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -456,6 +462,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -463,6 +471,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2755,7 +2764,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2822,7 +2832,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2845,7 +2856,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2854,7 +2865,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2904,7 +2916,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2954,6 +2966,136 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3048,10 +3190,11 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3174,12 +3317,30 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3218,6 +3379,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3251,5 +3414,5 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -553,7 +553,31 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0025": {
+     "commit": "21f54d7a5816c1847a920c26cc0dceda75de777e",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 16,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -438,6 +442,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -456,6 +462,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:456",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -463,6 +471,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:463",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2755,7 +2764,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2755",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2822,7 +2832,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2822",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2845,7 +2856,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2845",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2854,7 +2865,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2854",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2904,7 +2916,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2904",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2954,6 +2966,136 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2954",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3048,10 +3190,11 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3048",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3174,12 +3317,30 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3174",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3218,6 +3379,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3218",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3251,5 +3414,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3251",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -553,7 +553,31 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:553",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 16,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -438,6 +442,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -456,6 +462,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:456",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -463,6 +471,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:463",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2755,7 +2764,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2755",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2822,7 +2832,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2822",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2845,7 +2856,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2845",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2854,7 +2865,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2854",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2904,7 +2916,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2904",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2954,6 +2966,136 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2954",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3048,10 +3190,11 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3048",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3174,12 +3317,30 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3174",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3218,6 +3379,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3218",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3251,5 +3414,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3251",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -553,7 +553,31 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:553",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 16,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -438,6 +442,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -456,6 +462,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:456",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -463,6 +471,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:463",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2755,7 +2764,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2755",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2822,7 +2832,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2822",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2845,7 +2856,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2845",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2854,7 +2865,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2854",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2904,7 +2916,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2904",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2954,6 +2966,136 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2954",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3048,10 +3190,11 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3048",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3174,12 +3317,30 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3174",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 13,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3218,6 +3379,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3218",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 14,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3251,5 +3414,5 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3251",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 15,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -553,7 +553,31 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:553",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 16,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -594,7 +594,7 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:594",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 16
+  },
+  "048": {
+   "source": "048-net-pie-rxcfg-w13.patch",
+   "targets": [
+    "0020"
+   ],
+   "note": "PIE RXCFG RX-enable word -> 0020",
+   "candidates": {
+    "l0pre@048": {
+     "commit": "fe9612fd114a233c4acfbfcc02b624d698a3e097",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 4,
+     "hunks_total": 4,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -417,6 +417,67 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1611,6 +1672,17 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -394,6 +394,14 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,8 +446,6 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0020": {
+     "commit": "428afc15a61ac8459409be3d27305682bf05941f",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:417",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 1,
+     "hunks_total": 4,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -417,6 +417,67 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:417",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1611,6 +1672,17 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -394,6 +394,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:394",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,8 +446,6 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:417",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 1,
+     "hunks_total": 4,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -417,6 +417,67 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:417",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1611,6 +1672,17 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -394,6 +394,14 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:394",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -438,8 +446,6 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:438",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 4
+  },
+  "051": {
+   "source": "051-net-gmac-macregs-w16.patch",
+   "targets": [
+    "0009",
+    "0023"
+   ],
+   "note": "GEMAC static MAC config words -> 0009/0023",
+   "candidates": {
+    "l0pre@051": {
+     "commit": "90625fc19e2f781b4e61ed6676924c0d7b910850",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -164,6 +164,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -612,6 +614,107 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -794,6 +897,17 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0009": {
+     "commit": "0c5a654144e11e6832de84e7978d92c138495a40",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:164",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -164,6 +164,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:164",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -612,6 +614,107 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:612",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -794,6 +897,17 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:794",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1:0023": {
+     "commit": "971c2d0f4e1a88d0e7b3ce26f103115e02cc1e82",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:164",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 1,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -164,6 +164,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:164",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -612,6 +614,107 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -794,6 +897,17 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:794",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:794",
+      "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+     ],
+     "hunks_ok": 2,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -164,6 +164,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -612,6 +614,107 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+       "header": "@@ -794,6 +897,17 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:794",
+        "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 3
+  },
+  "053": {
+   "source": "053-net-pie-rxdecode-vendor-exact.patch",
+   "targets": [
+    "0024"
+   ],
+   "note": "vendor-exact PIE RX completion decode -> 0024",
+   "candidates": {
+    "l0pre@053": {
+     "commit": "f3c7ec1d88d63e0b2ecabab9ea26b1ee24287934",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -519,6 +519,23 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -713,28 +730,57 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1300,6 +1346,32 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0024": {
+     "commit": "641ba18f5c44abf868f56b1de011ca2caf9fa02e",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:519",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 2,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -519,6 +519,23 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:519",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -713,28 +730,57 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1300,6 +1346,32 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:519",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 2,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -519,6 +519,23 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:519",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -713,28 +730,57 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1300,6 +1346,32 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 3
+  },
+  "059": {
+   "source": "059-net-lsw-napt-init.patch",
+   "targets": [
+    "0026"
+   ],
+   "note": "NAPT flow-engine init -> new RFC 0029",
+   "candidates": {
+    "l0pre@059": {
+     "commit": "58e5106a01acdc64f51eba42147a25e25a656504",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 12,
+     "hunks_total": 12,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -132,6 +132,13 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -514,6 +521,50 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -305,6 +309,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -324,6 +329,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -474,6 +480,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -635,6 +643,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2712,6 +2721,265 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3730,6 +3998,20 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3759,7 +4041,7 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3780,6 +4062,10 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3820,6 +4106,8 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:514",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+     ],
+     "hunks_ok": 4,
+     "hunks_total": 12,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -132,6 +132,13 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -514,6 +521,50 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:514",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -305,6 +309,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -324,6 +329,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -474,6 +480,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:474",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -635,6 +643,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2712,6 +2721,265 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2712",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3730,6 +3998,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3730",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3759,7 +4041,7 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3759",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3780,6 +4062,10 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3780",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3820,6 +4106,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3820",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:514",
+      "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+     ],
+     "hunks_ok": 4,
+     "hunks_total": 12,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -132,6 +132,13 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+       "header": "@@ -514,6 +521,50 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch-regs.h:514",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch-regs.h: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -242,6 +242,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 4,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -305,6 +309,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 5,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -324,6 +329,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 6,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -474,6 +480,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:474",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 7,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -635,6 +643,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 8,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -2712,6 +2721,265 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:2712",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 9,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3730,6 +3998,20 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3730",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 10,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3759,7 +4041,7 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3759",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 11,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3780,6 +4062,10 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3780",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 12,
+       "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+       "header": "@@ -3820,6 +4106,8 @@",
+       "gated": false,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:3820",
+        "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 12
+  },
+  "060": {
+   "source": "060-net-pie-exception-delivery.patch",
+   "targets": [
+    "0026"
+   ],
+   "note": "PIE exception-class delivery -> new RFC 0030",
+   "candidates": {
+    "l0pre@060": {
+     "commit": "260f587eb46989511a0da822030c8e0cb52265a9",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -520,21 +520,22 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -557,8 +558,9 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1470,17 +1472,10 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0026": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:520",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -520,21 +520,22 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:520",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -557,8 +558,9 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:557",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1470,17 +1472,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1470",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": false,
+     "whole_patch_error": [
+      "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:520",
+      "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+     ],
+     "hunks_ok": 0,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -520,21 +520,22 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:520",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -557,8 +558,9 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:557",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+       "header": "@@ -1470,17 +1472,10 @@",
+       "gated": true,
+       "ok": false,
+       "error": [
+        "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:1470",
+        "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+       ]
+      }
+     ]
+    }
+   },
+   "hunk_count": 3
+  },
+  "066": {
+   "source": "066-thermal-luofu-tvsensor-w23.patch",
+   "targets": [
+    "0012"
+   ],
+   "note": "thermal v1/hwver-3 read path -> 0012",
+   "candidates": {
+    "l0pre@066": {
+     "commit": "c4f9d449444e2073dc9b293cb003dcf18072d68d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/thermal/Kconfig",
+       "header": "@@ -272,8 +272,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -2,118 +2,460 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -122,6 +464,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0012": {
+     "commit": "f46dd44e7ad413255d8d6732d210e4558fa42902",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/thermal/Kconfig",
+       "header": "@@ -272,8 +272,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -2,118 +2,460 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -122,6 +464,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 3,
+     "hunks_total": 3,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "drivers/thermal/Kconfig",
+       "header": "@@ -272,8 +272,9 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -2,118 +2,460 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 3,
+       "file": "drivers/thermal/luofu_tvsensor.c",
+       "header": "@@ -122,6 +464,7 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 3
+  },
+  "067": {
+   "source": "067-dt-bindings-thermal-luofu-tvsensor-w23.patch",
+   "targets": [
+    "0012"
+   ],
+   "note": "thermal binding update -> 0012",
+   "candidates": {
+    "l0pre@067": {
+     "commit": "52b9242d1368923260c0145beb0dde4190a3f3b3",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 2,
+     "hunks_total": 2,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -11,21 +11,23 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -35,22 +37,63 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1:0012": {
+     "commit": "f46dd44e7ad413255d8d6732d210e4558fa42902",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 2,
+     "hunks_total": 2,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -11,21 +11,23 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -35,22 +37,63 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    },
+    "v1end": {
+     "commit": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+     "whole_patch_ok": true,
+     "whole_patch_error": [],
+     "hunks_ok": 2,
+     "hunks_total": 2,
+     "hunks": [
+      {
+       "hunk": 1,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -11,21 +11,23 @@",
+       "gated": true,
+       "ok": true,
+       "error": []
+      },
+      {
+       "hunk": 2,
+       "file": "Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml",
+       "header": "@@ -35,22 +37,63 @@",
+       "gated": false,
+       "ok": true,
+       "error": []
+      }
+     ]
+    }
+   },
+   "hunk_count": 2
+  }
+ }
+}

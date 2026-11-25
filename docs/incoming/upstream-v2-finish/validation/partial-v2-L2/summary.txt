@@ -1,0 +1,7 @@
+patch(1): 26/26 patches applied, RC=0
+patch(1): hunks with offset=3 fuzz=0
+git am: 26/26 patches applied, RC=0
+tree equivalence: identical
+checkpatch (default): errors=0 warnings=73
+checkpatch (strict): errors=0 warnings=73
+PASS: all validation steps completed; no hardware or build was involved.

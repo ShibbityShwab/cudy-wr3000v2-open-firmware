@@ -1,0 +1,1 @@
+patch(1): hunks with offset=3 fuzz=0

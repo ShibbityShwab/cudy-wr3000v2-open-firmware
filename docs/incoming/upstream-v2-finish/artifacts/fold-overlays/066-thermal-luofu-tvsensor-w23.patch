@@ -1,0 +1,547 @@
+diff --git a/drivers/thermal/Kconfig b/drivers/thermal/Kconfig
+index 365967cc4..95e6ab279 100644
+--- a/drivers/thermal/Kconfig
++++ b/drivers/thermal/Kconfig
+@@ -272,8 +272,9 @@ config LUOFU_TVSENSOR
+ 	  The Hi5671Y "luofu" SoC has a temperature sensor whose die
+ 	  temperature is read from a single register. Enable this to register
+ 	  it with the thermal framework; the board devicetree describes the
+-	  thermal zone and its trip points. The driver is polled and performs
+-	  no register writes.
++	  thermal zone and its trip points. The driver is read-only by
++	  default; the vendor enable/trim sequence is run only when the
++	  module parameter "enable" is set (bench validation).
+ 
+ 	  To compile this driver as a module, choose M here: the module will
+ 	  be called luofu_tvsensor.
+diff --git a/drivers/thermal/luofu_tvsensor.c b/drivers/thermal/luofu_tvsensor.c
+index 893df449d..35c07ade3 100644
+--- a/drivers/thermal/luofu_tvsensor.c
++++ b/drivers/thermal/luofu_tvsensor.c
+@@ -2,118 +2,460 @@
+ /*
+  * HiSilicon Hi5671Y "luofu" temperature sensor
+  *
+- * The sensor is a single register block: the die temperature is the low 16
+- * bits of the word at offset 0x24, converted with the linear formula of the
+- * vendor driver's v4 path (the only path this board's hwver 3 uses):
++ * W23 draft (release-line fix for patch 012).  The W22-era driver in the
++ * release line read base+0x24 with a "v4" formula for the board's hwver 3,
++ * which is the wrong variant: the vendor hi_tvsensor.ko selects the v1
++ * hardware-op table for every hwver other than 4, and on this board
++ * (hwver = 3) the temperature is the low 10 bits of the word at +0x04:
+  *
+- *     raw = readl(base + 0x24) & 0xffff
+- *     millidegrees = ((165 * raw - 32835) / 100) * 1000 - 40000
++ *     raw = readl(base + 0x04) & 0x3ff;
++ *     temp_mC = ((165 * raw - 20625) / 797) * 1000 - 40000;
+  *
+- * The formula was decoded from the vendor module and verified numerically
+- * (raw 240 -> 27.0 C, nominal slope 1.65 C/LSB); the integer division
+- * truncates toward zero exactly like the vendor's ARM sdiv.  The result is
+- * reported as-is: the conversion extrapolates outside the calibrated range
+- * (raw 0 yields a value below THERMAL_TEMP_INVALID, which the thermal core
+- * treats as "no valid temperature"), and this driver does not clamp or
+- * invent a validity window.
++ * That is the vendor v1 hwver-3 conversion (the v1 hwver-1/2 magic and the
++ * v4 +0x24 conversions are kept below for completeness).  The vendor probe
++ * also enables and trims the sensor; it does not work without those writes:
+  *
+- * This driver deliberately implements only the documented minimum:
++ *   +0x00 bit 24 = 1                     sensor enable
++ *   +0x04 bit 27 = 0                     mode (vendor set_mode(base, 0))
++ *   +0x04 bit 20 = 0                     efuse-trim-en: use the efuse trim
++ *   +0x04 bit 20 = 1, bits 10..19 = trim  else: DT trim (sign/magnitude)
++ *   +0x400 bit 0  = 1                    only when addition-en is present
++ *   +0x10 bit 0   = 1                    keep the threshold IRQ masked
++ *   +0x08 [9:0]   = threshold raw        only when hisilicon,threshold-mc
++ *   +0x0c         = 1                    clear the latched interrupt
+  *
+- *   - the temperature read path.  It is store-free: the only MMIO access in
+- *     the whole driver is the read in ->get_temp;
+- *   - registration as an of-thermal sensor.  The thermal zone, its trip
+- *     points and its polling delay are board devicetree data; the zone polls
+- *     this sensor at its polling-delay.
++ * The writes are gated by the "enable" module parameter (default 0 =
++ * read-only).  W23 does not claim the sensor interrupt, so the threshold IRQ
++ * is left masked; the register polarity is inferred from the vendor order
++ * (it masks before programming and unmasks only after its handler is
++ * registered) and is a bench-validation item, not a proven fact.
+  *
+- * Deliberately not implemented, because the register model is not
+- * established (no offset/encoding has been decoded and no store to this
+- * block has been measured):
++ * The thermal zone reports a value only when the enable gate is on.  Without
++ * the enable/trim sequence an undriven sensor reads 0, and the correct
++ * formula would then report -65 C, which is a legal thermal value but not a
++ * measurement; reporting -ENODATA until the gate is on avoids that.
+  *
+- *   - threshold programming ("set_th") and the interrupt path ("set_int_mask",
+- *     "clr_int", the vendor threshold/critical event IRQ).  The node claims
+- *     no interrupt and the zone is polled;
+- *   - enable/mode and trim ("set_trim", and the vendor "trim",
+- *     "int-base-offset", "addition-en", "efuse-trim-en" properties).  No
+- *     vendor enable sequence is needed for the read path: the vendor kernel
+- *     reads the sensor without re-enabling it, so the bootloader leaves it
+- *     running;
+- *   - any register write at all.  There is no write path in this driver.
++ * Register layout (v1 path used by this board):
++ *   +0x000  u32  sensor enable (bit 24)
++ *   +0x004  u32  temperature [9:0], trim [10..19], trim-source bit 20,
++ *                mode bit 27
++ *   +0x008  u32  threshold [9:0]
++ *   +0x00c  u32  interrupt clear (write 1)
++ *   +0x010  u32  interrupt mask (int-base-offset + 4)
++ *   +0x400  u32  addition-enable (bit 0); 0x14900900, only with addition-en
+  *
+- * The block is not part of the CRG system-controller page and the vendor
+- * devicetree gives it no clock or reset; none are modelled.  Whether the
+- * block has a gate or a reset that Linux must manage is unknown (see the
+- * binding).
++ * The block has no clock/reset in the vendor devicetree.  The board DT node
++ * is expected to cover at least 0x404 bytes so that +0x400 is mapped.
+  */
+ 
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include <linux/device.h>
+ #include <linux/err.h>
+ #include <linux/io.h>
+ #include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/mutex.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/property.h>
++#include <linux/slab.h>
++#include <linux/sysfs.h>
+ #include <linux/thermal.h>
+ 
+-/* Register layout: only the temperature word is decoded. */
+-#define LUOFU_TVSENSOR_TEMP_REG	0x24
+-#define LUOFU_TVSENSOR_RAW_MASK	0xffff
++#define LUOFU_TVSENSOR_CTRL		0x00
++#define LUOFU_TVSENSOR_TEMP		0x04
++#define LUOFU_TVSENSOR_THRESHOLD	0x08
++#define LUOFU_TVSENSOR_INT_CLEAR	0x0c
++#define LUOFU_TVSENSOR_INT_MASK		0x10
++#define LUOFU_TVSENSOR_ADDITION		0x400
++
++#define LUOFU_TVSENSOR_TEMP_V4		0x24
++#define LUOFU_TVSENSOR_RAW_MASK		0x3ff
++#define LUOFU_TVSENSOR_TRIM_MASK	0x7fc00
++#define LUOFU_TVSENSOR_TRIM_SIGN	BIT(19)
++#define LUOFU_TVSENSOR_TRIM_SOURCE	BIT(20)
++#define LUOFU_TVSENSOR_CTRL_ENABLE	BIT(24)
++#define LUOFU_TVSENSOR_MODE		BIT(27)
++#define LUOFU_TVSENSOR_ADDITION_EN	BIT(0)
++
++/* The vendor devicetree's 0x14-byte reg is too short even for the v1 path. */
++#define LUOFU_TVSENSOR_WINDOW_MIN	0x404
+ 
+ struct luofu_tvsensor {
++	struct device *dev;
+ 	void __iomem *base;
++	size_t map_size;
++	struct mutex lock;	/* protects the register sequences and reads */
++	u32 hwver;
++	u32 int_base_offset;
++	bool addition_en;
++	bool efuse_trim_en;
++	s32 trim;
++	s32 threshold_mc;
++	bool enabled;
+ };
+ 
+-static int luofu_tvsensor_get_temp(struct thermal_zone_device *tz, int *temp)
++static int enable_writes;
++static struct luofu_tvsensor *luofu_sensor;
++static DEFINE_MUTEX(luofu_sensor_lock);
++
++/*
++ * v1 hwver-1/2 conversion: the vendor compiles it as a signed magic-multiply
++ * of (165 * raw + offset), adds the original value to the high word and
++ * shifts right by 9; the sign correction is the vendor's own.
++ */
++static int luofu_v1_magic_temp(u32 raw, s32 offset, s32 magic)
+ {
+-	struct luofu_tvsensor *sensor = thermal_zone_device_priv(tz);
+-	u32 raw;
+-	int deg;
++	s32 v = 165 * (s32)raw + offset;
++	s32 high = (s32)(((s64)magic * v) >> 32);
++	s32 q = (high + v) >> 9;
+ 
+-	raw = readl(sensor->base + LUOFU_TVSENSOR_TEMP_REG) &
+-	      LUOFU_TVSENSOR_RAW_MASK;
++	q -= v >> 31;
++	return q * 1000 - 40000;
++}
+ 
+-	/*
+-	 * Keep the vendor formula operation for operation so the reported
+-	 * value matches the vendor driver bit for bit, including the
+-	 * truncation of the division.  No overflow: 165 * 0xffff fits in int.
+-	 */
+-	deg = (165 * (int)raw - 32835) / 100;
+-	*temp = deg * 1000 - 40000;
++static int luofu_read_temp(struct luofu_tvsensor *sensor, u32 *raw, int *temp_mc)
++{
++	int mc;
+ 
++	switch (sensor->hwver) {
++	case 1:
++		*raw = readl(sensor->base + LUOFU_TVSENSOR_TEMP) &
++		       LUOFU_TVSENSOR_RAW_MASK;
++		mc = luofu_v1_magic_temp(*raw, -26235, -0x57f57f57);
++		break;
++	case 2:
++		*raw = readl(sensor->base + LUOFU_TVSENSOR_TEMP) &
++		       LUOFU_TVSENSOR_RAW_MASK;
++		mc = luofu_v1_magic_temp(*raw, -23925, -0x5b212ad3);
++		break;
++	case 3:
++		*raw = readl(sensor->base + LUOFU_TVSENSOR_TEMP) &
++		       LUOFU_TVSENSOR_RAW_MASK;
++		mc = ((165 * (int)*raw - 20625) / 797) * 1000 - 40000;
++		break;
++	case 4:
++		/*
++		 * The vendor v4 table has a second conversion selected by the
++		 * high half of its hwver argument; this driver passes only the
++		 * low nibble, so the normal-path conversion is used.  The v4
++		 * enable/trim path is not implemented in W23.
++		 */
++		*raw = readl(sensor->base + LUOFU_TVSENSOR_TEMP_V4);
++		mc = ((165 * (int)*raw - 23925) / 795) * 1000 - 40000;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (sensor->efuse_trim_en)
++		mc += sensor->trim;
++
++	*temp_mc = mc;
+ 	return 0;
+ }
+ 
++static int luofu_get_temp(struct thermal_zone_device *tz, int *temp)
++{
++	struct luofu_tvsensor *sensor = thermal_zone_device_priv(tz);
++	u32 raw;
++	int mc, ret;
++
++	mutex_lock(&sensor->lock);
++	if (!sensor->enabled) {
++		ret = -ENODATA;
++		goto out;
++	}
++	ret = luofu_read_temp(sensor, &raw, &mc);
++	if (!ret)
++		*temp = mc;
++out:
++	mutex_unlock(&sensor->lock);
++	return ret;
++}
++
+ static const struct thermal_zone_device_ops luofu_tvsensor_ops = {
+-	.get_temp = luofu_tvsensor_get_temp,
++	.get_temp = luofu_get_temp,
++};
++
++static int luofu_apply_enable(struct luofu_tvsensor *sensor)
++{
++	u32 ctrl, temp_ctrl, mask;
++	int ret = 0;
++
++	if (sensor->hwver == 4)
++		return -EOPNOTSUPP;
++
++	mutex_lock(&sensor->lock);
++
++	/* Step 1: vendor set_mode(base, 0) -> +0x04 bit 27 = 0. */
++	temp_ctrl = readl(sensor->base + LUOFU_TVSENSOR_TEMP);
++	temp_ctrl &= ~LUOFU_TVSENSOR_MODE;
++	writel(temp_ctrl, sensor->base + LUOFU_TVSENSOR_TEMP);
++
++	/*
++	 * Step 2: vendor set_int_mask(base, 1, int-base-offset) masks the
++	 * threshold interrupt while the block is configured.  W23 never
++	 * unmasks it because it does not request the IRQ.
++	 */
++	mask = readl(sensor->base + sensor->int_base_offset + 4);
++	writel(mask | BIT(0), sensor->base + sensor->int_base_offset + 4);
++
++	/* Step 3: vendor set_trim(base, efuse_trim_en, trim). */
++	temp_ctrl = readl(sensor->base + LUOFU_TVSENSOR_TEMP);
++	if (sensor->efuse_trim_en) {
++		temp_ctrl &= ~LUOFU_TVSENSOR_TRIM_SOURCE;
++	} else {
++		s32 trim = sensor->trim;
++		u32 magnitude = (u32)(trim < 0 ? -trim : trim);
++
++		magnitude &= LUOFU_TVSENSOR_RAW_MASK;
++		temp_ctrl &= ~(LUOFU_TVSENSOR_TRIM_MASK |
++			       LUOFU_TVSENSOR_TRIM_SOURCE |
++			       LUOFU_TVSENSOR_TRIM_SIGN);
++		temp_ctrl |= magnitude << 10;
++		if (trim <= 0)
++			temp_ctrl |= LUOFU_TVSENSOR_TRIM_SIGN;
++		temp_ctrl |= LUOFU_TVSENSOR_TRIM_SOURCE;
++	}
++	writel(temp_ctrl, sensor->base + LUOFU_TVSENSOR_TEMP);
++
++	/*
++	 * Step 4: vendor set_en(regmap, base, 1, addition_en): enable the
++	 * sensor, the addition-enable word when present, then the vendor's
++	 * ten delay loops (the loop count's units are [U]; use one ms).
++	 */
++	ctrl = readl(sensor->base + LUOFU_TVSENSOR_CTRL);
++	writel(ctrl | LUOFU_TVSENSOR_CTRL_ENABLE,
++	       sensor->base + LUOFU_TVSENSOR_CTRL);
++
++	if (sensor->addition_en) {
++		if (sensor->map_size >= LUOFU_TVSENSOR_WINDOW_MIN) {
++			u32 addition = readl(sensor->base + LUOFU_TVSENSOR_ADDITION);
++
++			writel(addition | LUOFU_TVSENSOR_ADDITION_EN,
++			       sensor->base + LUOFU_TVSENSOR_ADDITION);
++		} else {
++			dev_warn(sensor->dev,
++				 "addition-en present but reg window is too short for +0x400\n");
++		}
++	}
++	usleep_range(1000, 2000);
++
++	/* Step 5: optional threshold, decoded v1 hwver-3 inverse. */
++	if (sensor->threshold_mc > 0) {
++		if (sensor->hwver == 3) {
++			s32 deg = sensor->threshold_mc / 1000;
++			s32 raw_th = (797 * deg + 52505) / 165;
++			u32 threshold;
++
++			raw_th = clamp(raw_th, 0, (s32)LUOFU_TVSENSOR_RAW_MASK);
++			threshold = readl(sensor->base + LUOFU_TVSENSOR_THRESHOLD);
++			threshold &= ~LUOFU_TVSENSOR_RAW_MASK;
++			threshold |= raw_th;
++			writel(threshold, sensor->base + LUOFU_TVSENSOR_THRESHOLD);
++		} else {
++			dev_warn(sensor->dev,
++				 "threshold property supported only for hwver 3\n");
++		}
++	}
++
++	/* Step 6: vendor clr_int(base, int-base-offset) clears the latch. */
++	writel(BIT(0), sensor->base + sensor->int_base_offset);
++
++	sensor->enabled = true;
++	mutex_unlock(&sensor->lock);
++
++	dev_info(sensor->dev,
++		 "enable sequence applied: ctrl=0x%08x temp_ctrl=0x%08x int_mask=0x%08x\n",
++		 readl(sensor->base + LUOFU_TVSENSOR_CTRL),
++		 readl(sensor->base + LUOFU_TVSENSOR_TEMP),
++		 readl(sensor->base + sensor->int_base_offset + 4));
++	return ret;
++}
++
++static int luofu_enable_set(const char *val, const struct kernel_param *kp)
++{
++	struct luofu_tvsensor *sensor;
++	int new, ret;
++
++	ret = kstrtoint(val, 0, &new);
++	if (ret)
++		return ret;
++	if (new < 0 || new > 1)
++		return -EINVAL;
++
++	mutex_lock(&luofu_sensor_lock);
++	sensor = luofu_sensor;
++	if (new && !enable_writes) {
++		if (sensor && !sensor->enabled)
++			ret = luofu_apply_enable(sensor);
++		if (!ret)
++			enable_writes = 1;
++	} else if (!new) {
++		enable_writes = 0;
++	}
++	mutex_unlock(&luofu_sensor_lock);
++	if (new && !ret && sensor)
++		dev_info(sensor->dev,
++			 "enable gate set; bench validation in progress\n");
++	return ret;
++}
++
++static const struct kernel_param_ops luofu_enable_ops = {
++	.set = luofu_enable_set,
++	.get = param_get_int,
++};
++module_param_cb(enable, &luofu_enable_ops, &enable_writes, 0644);
++MODULE_PARM_DESC(enable,
++		 "0 = read-only poll (default), 1 = run the vendor enable/trim sequence (bench)");
++
++static ssize_t raw_show(struct device *dev, struct device_attribute *attr,
++			char *buf)
++{
++	struct luofu_tvsensor *sensor = dev_get_drvdata(dev);
++	u32 raw = 0;
++	int mc = 0;
++	int ret;
++
++	mutex_lock(&sensor->lock);
++	ret = luofu_read_temp(sensor, &raw, &mc);
++	mutex_unlock(&sensor->lock);
++
++	if (ret)
++		return ret;
++
++	return sysfs_emit(buf, "raw=0x%08x temp_mC=%d hwver=%u enabled=%u\n",
++			  raw, mc, sensor->hwver, sensor->enabled);
++}
++static DEVICE_ATTR_RO(raw);
++
++static ssize_t regs_show(struct device *dev, struct device_attribute *attr,
++			 char *buf)
++{
++	struct luofu_tvsensor *sensor = dev_get_drvdata(dev);
++	int len = 0;
++
++	mutex_lock(&sensor->lock);
++	len += sysfs_emit_at(buf, len, "0x00=0x%08x\n",
++			     readl(sensor->base + LUOFU_TVSENSOR_CTRL));
++	len += sysfs_emit_at(buf, len, "0x04=0x%08x\n",
++			     readl(sensor->base + LUOFU_TVSENSOR_TEMP));
++	len += sysfs_emit_at(buf, len, "0x08=0x%08x\n",
++			     readl(sensor->base + LUOFU_TVSENSOR_THRESHOLD));
++	len += sysfs_emit_at(buf, len, "0x0c=0x%08x\n",
++			     readl(sensor->base + LUOFU_TVSENSOR_INT_CLEAR));
++	len += sysfs_emit_at(buf, len, "0x%02x=0x%08x\n",
++			     sensor->int_base_offset + 4,
++			     readl(sensor->base + sensor->int_base_offset + 4));
++	if (sensor->map_size >= LUOFU_TVSENSOR_WINDOW_MIN)
++		len += sysfs_emit_at(buf, len, "0x400=0x%08x\n",
++				     readl(sensor->base + LUOFU_TVSENSOR_ADDITION));
++	mutex_unlock(&sensor->lock);
++	return len;
++}
++static DEVICE_ATTR_RO(regs);
++
++static struct attribute *luofu_tvsensor_attrs[] = {
++	&dev_attr_raw.attr,
++	&dev_attr_regs.attr,
++	NULL,
++};
++
++static const struct attribute_group luofu_tvsensor_group = {
++	.attrs = luofu_tvsensor_attrs,
+ };
+ 
+ static int luofu_tvsensor_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
+-	struct thermal_zone_device *tz;
+ 	struct luofu_tvsensor *sensor;
++	struct thermal_zone_device *tz;
++	struct resource *res;
++	u32 values[2];
++	u32 val;
++	int ret;
+ 
+ 	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
+ 	if (!sensor)
+ 		return -ENOMEM;
+ 
++	sensor->dev = dev;
++	mutex_init(&sensor->lock);
++
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res)
++		return dev_err_probe(dev, -ENODEV, "missing register resource\n");
++	sensor->map_size = resource_size(res);
++
+ 	sensor->base = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(sensor->base))
+ 		return dev_err_probe(dev, PTR_ERR(sensor->base),
+ 				     "failed to map the sensor registers\n");
+ 
+-	/*
+-	 * Probe performs no register access: the first read happens in
+-	 * ->get_temp once the thermal core starts the zone's monitor, and the
+-	 * zone, trips and polling delay come from the board devicetree.
+-	 */
++	if (device_property_read_u32(dev, "hwver", &sensor->hwver))
++		sensor->hwver = 3;
++	if (sensor->hwver < 1 || sensor->hwver > 4)
++		return dev_err_probe(dev, -EINVAL,
++				     "unsupported hwver %u\n", sensor->hwver);
++	if (sensor->hwver != 3)
++		dev_warn(dev, "hwver %u: only the hwver-3 enable sequence is implemented (board is hwver 3)\n",
++			 sensor->hwver);
++
++	if (!device_property_read_u32_array(dev, "trim", values, 2))
++		sensor->trim = values[0] ? -(s32)values[1] : (s32)values[1];
++
++	sensor->efuse_trim_en = device_property_read_bool(dev, "efuse-trim-en");
++	sensor->addition_en = device_property_read_bool(dev, "addition-en");
++	if (device_property_read_u32(dev, "int-base-offset", &val))
++		val = 0xc;
++	sensor->int_base_offset = val & 0xf;
++
++	if (device_property_read_u32(dev, "hisilicon,threshold-mc", &val))
++		sensor->threshold_mc = -1;
++	else
++		sensor->threshold_mc = (s32)val;
++
++	platform_set_drvdata(pdev, sensor);
++
++	ret = devm_device_add_group(dev, &luofu_tvsensor_group);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to create sysfs attributes\n");
++
+ 	tz = devm_thermal_of_zone_register(dev, 0, sensor, &luofu_tvsensor_ops);
+ 	if (IS_ERR(tz))
+ 		return dev_err_probe(dev, PTR_ERR(tz),
+ 				     "failed to register thermal sensor\n");
+ 
+-	dev_info(dev, "thermal sensor registered\n");
++	mutex_lock(&luofu_sensor_lock);
++	luofu_sensor = sensor;
++	mutex_unlock(&luofu_sensor_lock);
+ 
++	if (enable_writes && !sensor->enabled) {
++		ret = luofu_apply_enable(sensor);
++		if (ret)
++			dev_err(dev, "enable sequence failed: %d (continuing read-only)\n",
++				ret);
++	}
++
++	dev_info(dev,
++		 "registered: hwver=%u enable=%d trim=%d efuse-trim-en=%d addition-en=%d raw=0x%08x\n",
++		 sensor->hwver, enable_writes, sensor->trim,
++		 sensor->efuse_trim_en, sensor->addition_en,
++		 readl(sensor->base + (sensor->hwver == 4 ?
++				       LUOFU_TVSENSOR_TEMP_V4 : LUOFU_TVSENSOR_TEMP)));
+ 	return 0;
+ }
+ 
++static void luofu_tvsensor_remove(struct platform_device *pdev)
++{
++	mutex_lock(&luofu_sensor_lock);
++	if (luofu_sensor == platform_get_drvdata(pdev))
++		luofu_sensor = NULL;
++	mutex_unlock(&luofu_sensor_lock);
++}
++
+ static const struct of_device_id luofu_tvsensor_of_match[] = {
+ 	{ .compatible = "hisilicon,luofu-tvsensor" },
+ 	{ }
+@@ -122,6 +464,7 @@ MODULE_DEVICE_TABLE(of, luofu_tvsensor_of_match);
+ 
+ static struct platform_driver luofu_tvsensor_driver = {
+ 	.probe = luofu_tvsensor_probe,
++	.remove = luofu_tvsensor_remove,
+ 	.driver = {
+ 		.name = "luofu-tvsensor",
+ 		.of_match_table = luofu_tvsensor_of_match,

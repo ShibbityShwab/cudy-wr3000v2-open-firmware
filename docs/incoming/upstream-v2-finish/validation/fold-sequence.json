@@ -1,0 +1,140 @@
+{
+ "v1_state": "2cf02420466756b9cd09c5fb78bbe919f249196d",
+ "head_state": "5ada4838822bd40f3f0e3432b29c164e87a6ba39",
+ "composed": 10,
+ "total": 16,
+ "folds": [
+  {
+   "fold": "027",
+   "source": "027-arm-clk-luofu-readonly-mux-fix.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "031",
+   "source": "031-net-lsw-eps-channel-map.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "032",
+   "source": "032-net-lsw-eqm-qminit.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "036",
+   "source": "036-net-lsw-pfe-init.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "038",
+   "source": "038-net-gmac-maxframe-init.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "041",
+   "source": "041-net-gmac-macconf-nodoorbell.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-gmac.c:117",
+    "error: drivers/net/ethernet/hisilicon/luofu-gmac.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "043",
+   "source": "043-net-lsw-ifc-default-table.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "044",
+   "source": "044-net-lsw-ifc-gate-token-fix.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "046",
+   "source": "046-net-lsw-ifc-fix-eps-ext.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+    "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "048",
+   "source": "048-net-pie-rxcfg-w13.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:417",
+    "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "051",
+   "source": "051-net-gmac-macregs-w16.patch",
+   "method": "git apply -C1 (reduced context)",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "053",
+   "source": "053-net-pie-rxdecode-vendor-exact.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:519",
+    "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "059",
+   "source": "059-net-lsw-napt-init.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-switch.c:242",
+    "error: drivers/net/ethernet/hisilicon/luofu-switch.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "060",
+   "source": "060-net-pie-exception-delivery.patch",
+   "method": null,
+   "ok": false,
+   "error": [
+    "error: patch failed: drivers/net/ethernet/hisilicon/luofu-pie.c:520",
+    "error: drivers/net/ethernet/hisilicon/luofu-pie.c: patch does not apply"
+   ]
+  },
+  {
+   "fold": "066",
+   "source": "066-thermal-luofu-tvsensor-w23.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  },
+  {
+   "fold": "067",
+   "source": "067-dt-bindings-thermal-luofu-tvsensor-w23.patch",
+   "method": "git apply",
+   "ok": true,
+   "error": []
+  }
+ ],
+ "diffstat": ".../bindings/thermal/hisilicon,luofu-tvsensor.yaml |   87 +-\n drivers/clk/hisilicon/crg-luofu.c                  |   12 +-\n drivers/net/ethernet/hisilicon/luofu-gmac.c        |  215 ++-\n drivers/net/ethernet/hisilicon/luofu-pie.c         |    9 +\n drivers/net/ethernet/hisilicon/luofu-switch-regs.h |  278 +++-\n drivers/net/ethernet/hisilicon/luofu-switch.c      | 1434 +++++++++++++++++++-\n drivers/thermal/Kconfig                            |    5 +-\n drivers/thermal/luofu_tvsensor.c                   |  459 ++++++-\n 8 files changed, 2368 insertions(+), 131 deletions(-)",
+ "numstat": "65\t22\tDocumentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml\n6\t6\tdrivers/clk/hisilicon/crg-luofu.c\n212\t3\tdrivers/net/ethernet/hisilicon/luofu-gmac.c\n9\t0\tdrivers/net/ethernet/hisilicon/luofu-pie.c\n273\t5\tdrivers/net/ethernet/hisilicon/luofu-switch-regs.h\n1399\t35\tdrivers/net/ethernet/hisilicon/luofu-switch.c\n3\t2\tdrivers/thermal/Kconfig\n401\t58\tdrivers/thermal/luofu_tvsensor.c"
+}

@@ -1,0 +1,141 @@
+diff --git a/drivers/net/ethernet/hisilicon/luofu-gmac.c b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+index 936fea405..d5447c2fe 100644
+--- a/drivers/net/ethernet/hisilicon/luofu-gmac.c
++++ b/drivers/net/ethernet/hisilicon/luofu-gmac.c
+@@ -86,6 +86,25 @@
+ #include "luofu-switch.h"
+ 
+ /* MAC port registers (dword-aligned window; see the file header). */
++/*
++ * W9: MAC maximum-frame register.  The vendor MAC driver (hi_kmac.ko) programs
++ * it in hi_mac_hw_mtu@0x38c: it reads register 0x100, replaces the low 14 bits
++ * with (mtu + 4) and writes the word back (the write/read helpers are plain
++ * base+offset accesses, hi_reg_hw_read@0x41b8 / hi_reg_hw_write@0x41c4).  The
++ * vendor's hi_mac_change_mtu@0x428c calls it on MTU changes, and the MAC keeps
++ * rx_overmax_pkt / tx_overmax_pkt statistics, i.e. frames longer than this
++ * limit are counted and dropped in BOTH directions.  Our driver until patch
++ * 038 never wrote this register: after the round-4/5 hardware runs the wire was
++ * still dead in both directions (zero PIE RX polls, no TX frame) while the
++ * link was up - a zero/reset max-frame value would explain exactly that.
++ *
++ * The write set below is the vendor's formula [V]; the field semantics beyond
++ * "low 14 bits = frame length limit" are [U].
++ */
++#define LUOFU_GMAC_MAX_FRAME	0x0100
++#define LUOFU_GMAC_MAX_FRAME_MASK	GENMASK(13, 0)
++#define LUOFU_GMAC_MAX_FRAME_SLACK	4	/* [V] hi_mac_hw_mtu: mtu + 4 */
++
+ #define LUOFU_GMAC_CTRL		0x0000
+ #define LUOFU_GMAC_PORT_MODE	0x0040
+ #define LUOFU_GMAC_MODE_CHANGE_EN	0x01b4
+@@ -144,6 +163,50 @@ static void luofu_gmac_mac_link_down(struct phylink_config *config,
+ 	writel(0, g->base + LUOFU_GMAC_CTRL);
+ }
+ 
++static bool luofu_gmac_hwinit_gate;
++module_param_named(hwinit, luofu_gmac_hwinit_gate, bool, 0444);
++MODULE_PARM_DESC(hwinit, "Attended W9 step: program and verify the MAC maximum-frame register (requires the full attended LSW/PIE chain; default off)");
++
++/*
++ * W9: program the MAC maximum-frame register with the vendor formula
++ * (low 14 bits = mtu + 4, upper bits preserved).  The found value is
++ * snapshotted, the register is read twice and must be stable, the computed
++ * value is written and read back, and the snapshot is restored on a mismatch.
++ * No other MAC register is touched by this stage.
++ */
++static int luofu_gmac_hw_init(struct net_device *ndev)
++{
++	struct luofu_gmac *g = netdev_priv(ndev);
++	u32 pre, want, got;
++	u32 check;
++
++	pre = readl(g->base + LUOFU_GMAC_MAX_FRAME);
++	check = readl(g->base + LUOFU_GMAC_MAX_FRAME);
++	if (pre != check)
++		return dev_err_probe(g->dev, -EIO,
++				     "MAC max-frame register changed between two reads (%#x -> %#x); refusing to write it\n",
++				     pre, check);
++
++	want = (pre & ~LUOFU_GMAC_MAX_FRAME_MASK) |
++	       ((ndev->mtu + LUOFU_GMAC_MAX_FRAME_SLACK) &
++		LUOFU_GMAC_MAX_FRAME_MASK);
++	writel(want, g->base + LUOFU_GMAC_MAX_FRAME);
++	got = readl(g->base + LUOFU_GMAC_MAX_FRAME);
++	if (got != want) {
++		dev_err(g->dev,
++			"MAC max-frame readback mismatch: read %#x, expected %#x (snapshot %#x); restoring the snapshot\n",
++			got, want, pre);
++		writel(pre, g->base + LUOFU_GMAC_MAX_FRAME);
++		return -EIO;
++	}
++
++	dev_info(g->dev,
++		 "W9: MAC maximum-frame register programmed and verified (0x%x = %#x, mtu %u + %u, snapshot %#x)\n",
++		 LUOFU_GMAC_MAX_FRAME, want, ndev->mtu,
++		 LUOFU_GMAC_MAX_FRAME_SLACK, pre);
++	return 0;
++}
++
+ static void luofu_gmac_mac_link_up(struct phylink_config *config,
+ 				   struct phy_device *phy, unsigned int mode,
+ 				   phy_interface_t interface, int speed,
+@@ -243,6 +306,22 @@ static void luofu_gmac_get_stats64(struct net_device *ndev,
+ 	netdev_stats_to_stats64(stats, &ndev->stats);
+ }
+ 
++static int luofu_gmac_change_mtu(struct net_device *ndev, int mtu)
++{
++	int ret;
++
++	if (mtu < 68 || mtu > LUOFU_GMAC_MAX_FRAME_MASK - LUOFU_GMAC_MAX_FRAME_SLACK)
++		return -EINVAL;
++	ndev->mtu = mtu;
++	if (!luofu_gmac_hwinit_gate)
++		return 0;
++	ret = luofu_gmac_hw_init(ndev);
++	if (ret)
++		return ret;
++	netdev_update_features(ndev);
++	return 0;
++}
++
+ static const struct net_device_ops luofu_gmac_netdev_ops = {
+ 	.ndo_open		= luofu_gmac_open,
+ 	.ndo_stop		= luofu_gmac_stop,
+@@ -258,6 +337,7 @@ static const struct net_device_ops luofu_gmac_netdev_ops = {
+ 	 */
+ 	.ndo_set_mac_address	= eth_mac_addr,
+ 	.ndo_validate_addr	= eth_validate_addr,
++	.ndo_change_mtu		= luofu_gmac_change_mtu,
+ };
+ 
+ static void luofu_gmac_get_drvinfo(struct net_device *ndev,
+@@ -433,6 +513,21 @@ static int luofu_gmac_probe(struct platform_device *pdev)
+ 	ndev->netdev_ops = &luofu_gmac_netdev_ops;
+ 	ndev->ethtool_ops = &luofu_gmac_ethtool_ops;
+ 
++	/*
++	 * Fail closed like the switch stages: once the accepted attended path is
++	 * reached (PIE armed, LSW data path complete), a netdev may only register
++	 * with the MAC device init programmed and verified.  Without the
++	 * maximum-frame register the MAC drops every frame as over-max in both
++	 * directions (the round-4/5 symptom: link up, no traffic).
++	 */
++	if (!luofu_gmac_hwinit_gate)
++		return dev_err_probe(dev, -EOPNOTSUPP,
++				     "MAC device init is not armed (set luofu_gmac.hwinit=1): the maximum-frame register is unset, so the MAC would drop every frame; refusing to register a netdev\n");
++
++	ret = luofu_gmac_hw_init(ndev);
++	if (ret)
++		goto err_phylink;
++
+ 	ret = register_netdev(ndev);
+ 	if (ret)
+ 		goto err_phylink;
+@@ -484,5 +579,5 @@ static struct platform_driver luofu_gmac_driver = {
+ };
+ module_platform_driver(luofu_gmac_driver);
+ 
+-MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE)");
++MODULE_DESCRIPTION("HiSilicon Hi5671Y luofu GEMAC (draft phylink front end over PIE; gated W9 MAC max-frame init)");
+ MODULE_LICENSE("GPL");
