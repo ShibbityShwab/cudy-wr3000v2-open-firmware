@@ -1,0 +1,472 @@
+diff -ruN a/hi5622_cfg80211_ops.c b/hi5622_cfg80211_ops.c
+--- a/hi5622_cfg80211_ops.c	2026-11-25 17:07:54.314103705 +0700
++++ b/hi5622_cfg80211_ops.c	2026-11-25 17:35:00.322037235 +0700
+@@ -215,7 +215,9 @@
+ 		 "cfg80211: VAP '%s' added (type %s, addr %pM) - netdev model live; firmware user_add (g0 id7/id8) %s\n",
+ 		 name, hi5622_cfg_iftype_name(iftype), addr,
+ 		 hcc_rc == 0 ? "committed via the frame provider" :
+-		 "pending (no frame provider / payload still [U])");
++		 (hcc_rc == -EAGAIN ?
++		  "deferred to start_ap (vap5g=1 vendor order: the AP VAP add carries the band first)" :
++		  "pending (no frame provider / payload still [U])"));
+ 	return wdev;
+ 
+ free_netdev:
+diff -ruN a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-25 17:26:24.563891924 +0700
++++ b/hi5622_scan.c	2026-11-25 17:37:54.758137783 +0700
+@@ -39,6 +39,7 @@
+ #include "hi5622_stability.h"
+ #include "hi5622_vapscan_map.h"
+ #include "hi5622_band5g.h"
++#include "hi5622_vapmsg5g.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -76,6 +77,23 @@
+ module_param_named(beacon_vap_start, hi5622_beacon_vap_start, uint, 0644);
+ MODULE_PARM_DESC(beacon_vap_start,
+ 		 "beacon_static rung: 1=VAP start after the AP config (default), 0=channel config only");
++/* lane wifi-5ghz-vap-msg (task-174), FAIL-CLOSED default 0.  The vendor's
++ * cfg80211 .add_virtual_intf is a stub (-EOPNOTSUPP): it never posts a g0
++ * id7/id8 user add from interface creation.  Its AP VAP is created with the
++ * band first (VAP-create parameters band id +0x12 / chip +0x13) and its users
++ * follow (hmac_vap_add_multi_user).  On our one-radio/two-band wiphy the band
++ * of a new AP interface is not known at add time (cfg80211 supplies no
++ * chandef there), so with band5g=1 the user add must wait for start_ap, where
++ * the chandef names the band and the structural vap_add has already carried it
++ * into the firmware VAP object.  0 = legacy ordering (bench-validated 2.4 GHz
++ * behaviour, byte-identical frames), 1 = vendor order for an AP on a
++ * multi-band wiphy (defer the interface-creation user add, post it right after
++ * the AP VAP add), >1 = refused at use time (fail closed, never guessed).
++ * One meaning per module load. */
++static unsigned int hi5622_vap5g;
++module_param_named(vap5g, hi5622_vap5g, uint, 0644);
++MODULE_PARM_DESC(vap5g,
++		 "5GHz AP user/VAP message order: 0=legacy ordering (default, fail closed), 1=vendor order (defer the interface-creation user add and post it after the AP vap_add on a multi-band wiphy); >1 refused");
+ 
+ /* scan-complete lane (task-123): the bench measured the firmware returning 6
+  * of the 13 requested per-channel results within the wifi-scan-ap lane's 5 s
+@@ -173,6 +191,27 @@
+ 	return c ? &c->scan : NULL;
+ }
+ 
++/* lane wifi-5ghz-vap-msg (task-174): number of bands installed in the wiphy
++ * (1 normally; 2 for the band5g=1 one-radio/two-band profile).  The vendor
++ * order only applies to a multi-band wiphy: a single-band wiphy keeps the
++ * bench-validated legacy ordering. */
++static unsigned int hi5622_scan_wiphy_bands(const struct wiphy *wiphy)
++{
++	unsigned int band, n = 0;
++
++	if (!wiphy)
++		return 0;
++	for (band = 0; band < (unsigned int)NUM_NL80211_BANDS; band++)
++		if (wiphy->bands[band])
++			n++;
++	return n;
++}
++
++/* lane wifi-5ghz-vap-msg (task-174): forward declaration - the deferred
++ * user add is posted from start_ap, above this definition. */
++static int hi5622_vap_hcc_add_order(struct hi5622_cfg80211 *c, u16 slot,
++				    bool from_start_ap);
++
+ /* Effective bounded-scan window for ONE request/batch (auto unless the
+  * scan_timeout_ms module parameter overrides it).  The auto term uses the
+  * measured per-channel cost, overridable through scan_chan_time_ms. */
+@@ -1608,11 +1647,12 @@
+ 			rc = -EINVAL;
+ 			goto out;
+ 		}
+-		/* Vendor order: user_add first (the AP workers dereference the
+-		 * firmware VAP object), then the channel config.  A base posted in
+-		 * THIS call is required; a PRE-EXISTING latch (a scan or an earlier
+-		 * AP start) is not re-posted, and a host-side stop restart keeps the
+-		 * live firmware VAP (no structural write). */
++		/* Vendor order: the VAP add (the band-bearing VAP create - the
++		 * AP workers dereference the firmware VAP object) first, then the
++		 * channel config.  A base posted in THIS call is required; a
++		 * PRE-EXISTING latch (a scan or an earlier AP start) is not
++		 * re-posted, and a host-side stop restart keeps the live firmware
++		 * VAP (no structural write). */
+ 		if (!base_was_posted && !restart_plain) {
+ 			rc = hi5622_scan_post_vap_add_frame(
+ 				c->ctx, ops, (u8)dev->ieee80211_ptr->iftype,
+@@ -1633,6 +1673,40 @@
+ 				 restart_plain ? "restart after host-side stop"
+ 					       : "VAP base pre-existed this call");
+ 		}
++		/* lane wifi-5ghz-vap-msg (task-174): vendor order.  On the
++		 * one-radio/two-band profile (vap5g=1) the interface-creation
++		 * user add was deferred because no band was known there.  The
++		 * structural VAP add above has now carried the band into the
++		 * firmware VAP object, so post the deferred user add (g0 id7 +
++		 * id8) here, BEFORE the channel/AP frames - the vendor's own
++		 * order is VAP create -> its users -> channel -> SSID -> auth ->
++		 * AP config -> VAP start.  A failure aborts before any AP frame
++		 * (fail closed); the legacy path never reaches this because
++		 * hcc_add_pending was cleared by the interface-creation post. */
++		{
++			unsigned int dslot;
++
++			for (dslot = 0; dslot < HI5622_CFG_MAX_VAPS; dslot++)
++				if (c->vap_dev[dslot] == dev)
++					break;
++			if (dslot < HI5622_CFG_MAX_VAPS &&
++			    c->model.vap[dslot].hcc_add_pending) {
++				int urc;
++
++				dev_info(wdev_dev,
++					 "cfg80211: start_ap vendor order: posting the DEFERRED user_add (g0 id7/id8) after the VAP add (vap5g=1, band=%u vap=%u)\n",
++					 (unsigned)p->band, dslot);
++				urc = hi5622_vap_hcc_add_order(c, (u16)dslot,
++							       true);
++				if (urc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: start_ap vendor order: deferred user_add failed (%d) after the VAP add - sequence aborted, no AP frame sent\n",
++						 urc);
++					rc = urc;
++					goto out;
++				}
++			}
++		}
+ 		/* Read-only readback of module_ctx+0x190.  Bench correction
+ 		 * (task-140 fire, 2026-11-24): the firmware populates that field
+ 		 * asynchronously and it was observed ZERO after 100 ms even on a
+@@ -1924,7 +1998,8 @@
+ 	return found;
+ }
+ 
+-int hi5622_vap_hcc_add(struct hi5622_cfg80211 *c, u16 slot)
++static int hi5622_vap_hcc_add_order(struct hi5622_cfg80211 *c, u16 slot,
++				    bool from_start_ap)
+ {
+ 	struct hi5622_scan *s;
+ 	const struct hi5622_frame_ops *ops;
+@@ -1942,6 +2017,38 @@
+ 	ops = hi5622_frame_ops_get();
+ 	if (!hi5622_vap_model_copy(c, slot, &vm))
+ 		return -ENOENT;
++	/* lane wifi-5ghz-vap-msg (task-174): vendor-order gate.  On the
++	 * one-radio/two-band profile the band of a new AP interface is not
++	 * known here (no chandef at .add_virtual_intf), so vap5g=1 defers this
++	 * user add to start_ap, after the structural vap_add has carried the
++	 * band into the firmware VAP object.  from_start_ap marks that second
++	 * call (never deferred again).  An invalid parameter value fails
++	 * closed - no frame and an error, never a guessed order. */
++	if (!from_start_ap) {
++		struct hi5622_vapmsg5g_plan plan;
++		unsigned int nl_iftype = 0;
++
++		if (c->vap_dev[slot] && c->vap_dev[slot]->ieee80211_ptr)
++			nl_iftype = (unsigned int)
++				c->vap_dev[slot]->ieee80211_ptr->iftype;
++		rc = hi5622_vapmsg5g_iface_plan(hi5622_vap5g,
++						hi5622_scan_wiphy_bands(c->wiphy),
++						nl_iftype, &plan);
++		if (rc) {
++			dev_warn(dev,
++				 "cfg80211: user_add (g0 id7) NOT sent - unknown vap5g=%u (%d), fail closed\n",
++				 hi5622_vap5g, rc);
++			return rc;
++		}
++		if (plan.defer_user_add) {
++			mutex_lock(&c->lock);
++			c->model.vap[slot].hcc_add_pending = true;
++			mutex_unlock(&c->lock);
++			dev_info(dev,
++				 "cfg80211: user_add (g0 id7/id8) DEFERRED - vap5g=1 vendor order: the AP VAP add carries the band first, so the user add is posted after it in start_ap (netdev stays live)\n");
++			return -EAGAIN;
++		}
++	}
+ 	if (!ops || !(ops->caps & HI5622_FRAME_CAP_USER_ADD)) {
+ 		mutex_lock(&c->lock);
+ 		c->model.vap[slot].hcc_add_pending = true;
+@@ -2015,6 +2122,11 @@
+ 	return rc;
+ }
+ 
++int hi5622_vap_hcc_add(struct hi5622_cfg80211 *c, u16 slot)
++{
++	return hi5622_vap_hcc_add_order(c, slot, false);
++}
++
+ int hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr,
+ 		       u8 band, u8 vap_id)
+ {
+diff -ruN a/hi5622_vapmsg5g.c b/hi5622_vapmsg5g.c
+--- a/hi5622_vapmsg5g.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_vapmsg5g.c	2026-11-25 17:34:24.333301443 +0700
+@@ -0,0 +1,134 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_vapmsg5g.c - fail-closed vendor-order planner for the 5 GHz AP's
++ * user/VAP messages.  See hi5622_vapmsg5g.h for the design and ../REPORT.md
++ * for the vendor decode this encodes.
++ *
++ * ORIGINAL clean-room code (lane wifi-5ghz-vap-msg, shared task task-174).
++ */
++#include "hi5622_vapmsg5g.h"
++
++#ifndef __KERNEL__
++#include <stddef.h>
++#endif
++
++const char *hi5622_vapmsg5g_mode_name(unsigned int mode)
++{
++	switch (mode) {
++	case HI5622_VAPMSG5G_MODE_LEGACY:
++		return "legacy";
++	case HI5622_VAPMSG5G_MODE_VENDOR_ORDER:
++		return "vendor-order";
++	default:
++		return "invalid";
++	}
++}
++
++const char *hi5622_vapmsg5g_step_name(u8 step)
++{
++	switch (step) {
++	case HI5622_VAPMSG5G_STEP_VAP_ADD:
++		return "vap_add";
++	case HI5622_VAPMSG5G_STEP_USER_ADD:
++		return "user_add";
++	case HI5622_VAPMSG5G_STEP_USER_ADD_NOTIFY:
++		return "user_add_notify";
++	case HI5622_VAPMSG5G_STEP_CHAN_CFG:
++		return "ap_chan";
++	case HI5622_VAPMSG5G_STEP_SSID:
++		return "ap_ssid";
++	case HI5622_VAPMSG5G_STEP_AUTH:
++		return "ap_auth";
++	case HI5622_VAPMSG5G_STEP_AP_CFG:
++		return "ap_cfg";
++	case HI5622_VAPMSG5G_STEP_VAP_START:
++		return "ap_vap_start";
++	default:
++		return "invalid";
++	}
++}
++
++/* The decoded rule.  Only this one shape changes the order: a multi-band
++ * (one-radio/two-band) wiphy, an AP interface, vendor-order mode.  Everything
++ * else - including an invalid mode - keeps the callers on the legacy path;
++ * mode validation happens in hi5622_vapmsg5g_iface_plan(), and the driver
++ * treats its -EINVAL as fail-closed. */
++static bool hi5622_vapmsg5g_vendor_order(unsigned int mode,
++					 unsigned int wiphy_bands,
++					 unsigned int iftype)
++{
++	return mode == HI5622_VAPMSG5G_MODE_VENDOR_ORDER &&
++	       wiphy_bands > 1u &&
++	       iftype == HI5622_VAPMSG5G_IFTYPE_AP;
++}
++
++int hi5622_vapmsg5g_iface_plan(unsigned int mode, unsigned int wiphy_bands,
++			       unsigned int iftype,
++			       struct hi5622_vapmsg5g_plan *out)
++{
++	bool vendor;
++
++	if (!out)
++		return -EINVAL;
++	out->defer_user_add = false;
++	out->post_user_after_vap_add = false;
++	/* Fail closed on an unknown mode: the caller must not fall back to a
++	 * path it does not understand. */
++	if (mode > HI5622_VAPMSG5G_MODE_VENDOR_ORDER)
++		return -EINVAL;
++	vendor = hi5622_vapmsg5g_vendor_order(mode, wiphy_bands, iftype);
++	out->defer_user_add = vendor;
++	out->post_user_after_vap_add = vendor;
++	return 0;
++}
++
++int hi5622_vapmsg5g_order(unsigned int mode, unsigned int wiphy_bands,
++			  unsigned int iftype, u8 *steps, unsigned int max,
++			  unsigned int *n)
++{
++	u8 legacy[] = {
++		HI5622_VAPMSG5G_STEP_USER_ADD,
++		HI5622_VAPMSG5G_STEP_USER_ADD_NOTIFY,
++		HI5622_VAPMSG5G_STEP_VAP_ADD,
++		HI5622_VAPMSG5G_STEP_CHAN_CFG,
++		HI5622_VAPMSG5G_STEP_SSID,
++		HI5622_VAPMSG5G_STEP_AUTH,
++		HI5622_VAPMSG5G_STEP_AP_CFG,
++		HI5622_VAPMSG5G_STEP_VAP_START,
++	};
++	u8 vendor[] = {
++		HI5622_VAPMSG5G_STEP_VAP_ADD,
++		HI5622_VAPMSG5G_STEP_USER_ADD,
++		HI5622_VAPMSG5G_STEP_USER_ADD_NOTIFY,
++		HI5622_VAPMSG5G_STEP_CHAN_CFG,
++		HI5622_VAPMSG5G_STEP_SSID,
++		HI5622_VAPMSG5G_STEP_AUTH,
++		HI5622_VAPMSG5G_STEP_AP_CFG,
++		HI5622_VAPMSG5G_STEP_VAP_START,
++	};
++	const u8 *src;
++	unsigned int cnt, i;
++	struct hi5622_vapmsg5g_plan plan;
++	int rc;
++
++	if (!steps || !n)
++		return -EINVAL;
++	if (mode > HI5622_VAPMSG5G_MODE_VENDOR_ORDER)
++		return -EINVAL;
++	rc = hi5622_vapmsg5g_iface_plan(mode, wiphy_bands, iftype, &plan);
++	if (rc)
++		return rc;
++	if (plan.defer_user_add) {
++		src = vendor;
++		cnt = (unsigned int)sizeof(vendor);
++	} else {
++		src = legacy;
++		cnt = (unsigned int)sizeof(legacy);
++	}
++	if (max < cnt)
++		return -ENOSPC;
++	for (i = 0; i < cnt; i++)
++		steps[i] = src[i];
++	*n = cnt;
++	return 0;
++}
+diff -ruN a/hi5622_vapmsg5g.h b/hi5622_vapmsg5g.h
+--- a/hi5622_vapmsg5g.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_vapmsg5g.h	2026-11-25 17:34:24.334046509 +0700
+@@ -0,0 +1,120 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_vapmsg5g.h - fail-closed vendor-order planner for the 5 GHz AP's
++ * user/VAP messages (Hi5622V100 clean-room host, Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-5ghz-vap-msg, shared task task-174,
++ * 2026-11-25).  No vendor source, object code, firmware byte, calibration
++ * value or secret is reproduced here.  The derivation (vendor module
++ * disassembly addresses, the wire layouts, the firmware-side reasoning) is in
++ * ../REPORT.md; the evidence tables are ../TABLES.md.
++ *
++ * WHY THIS FILE EXISTS
++ * --------------------
++ * The vendor's cfg80211 .add_virtual_intf is a stub (-EOPNOTSUPP): the vendor
++ * never posts a g0 id7/id8 user add from interface creation.  Its AP VAP is
++ * created (band id at parameter +0x12, chip at +0x13) before its users
++ * (hmac_vap_add_multi_user), and the AP start (start_ap) drives the five
++ * vendor frames with the band taken from the per-band wiphy private area
++ * (*(u8 *)(dev_priv+0x328)).
++ *
++ * Our one-radio/two-band driver (band5g=1) has a single wiphy carrying both
++ * bands, so the band of a newly created AP interface is NOT known at
++ * .add_virtual_intf time (cfg80211 supplies no chandef there).  Posting the
++ * user add at interface creation therefore puts a band-less user message in
++ * front of the band-1 VAP that the firmware resolves it against: on a fresh
++ * chip the 2-band AP's user add wedges (announce not consumed -> h2d_timeout
++ * -> H2D lane closed -> the AP-start vap_add is refused -> firmware exception
++ * mask 0x10).  The 2.4 GHz single-band path with the same bytes is
++ * bench-validated; it tolerates the legacy ordering.
++ *
++ * The fix is an ORDER fix, not a field fix (the g0 id7/id8 bodies our builder
++ * emits are already the vendor bytes for band 0, and the band is carried only
++ * by the VAP-create/channel messages).  This file holds that order as a pure,
++ * host-testable decision so the bench rung can be gated without any frame on
++ * the wire:
++ *
++ *   vap5g=0 (default, fail closed) = legacy ordering, byte-identical to the
++ *   bench-validated module; vap5g=1 = vendor ordering for an AP on a
++ *   multi-band wiphy: defer the interface-creation user add and post it
++ *   AFTER the AP's structural vap_add (band known + firmware VAP exists).
++ *
++ * Anything outside the decoded contract fails closed: an out-of-range mode is
++ * refused (-EINVAL) instead of guessing, a single-band wiphy or a non-AP
++ * interface keeps the legacy path, and a deferred user add that fails aborts
++ * start_ap before any AP frame.
++ *
++ * Pure C99: the same code compiles in the kernel module and in the host
++ * selftest (tools/vapmsg5g_selftest.c).
++ */
++#ifndef HI5622_VAPMSG5G_H
++#define HI5622_VAPMSG5G_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#else
++#include <errno.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef int32_t  s32;
++#endif
++#endif
++
++#define HI5622_VAPMSG5G_MODE_LEGACY		0u
++#define HI5622_VAPMSG5G_MODE_VENDOR_ORDER	1u
++
++/* nl80211 iftype the planner cares about (the only one that has a firmware
++ * VAP create in our start_ap path). */
++#define HI5622_VAPMSG5G_IFTYPE_AP		3u
++
++/* The wire order of one AP start, as the firmware sees it.  The legacy order
++ * starts with the interface-creation user add; the vendor order puts the VAP
++ * create first and the user add after it. */
++enum hi5622_vapmsg5g_step {
++	HI5622_VAPMSG5G_STEP_VAP_ADD = 0,
++	HI5622_VAPMSG5G_STEP_USER_ADD,
++	HI5622_VAPMSG5G_STEP_USER_ADD_NOTIFY,
++	HI5622_VAPMSG5G_STEP_CHAN_CFG,
++	HI5622_VAPMSG5G_STEP_SSID,
++	HI5622_VAPMSG5G_STEP_AUTH,
++	HI5622_VAPMSG5G_STEP_AP_CFG,
++	HI5622_VAPMSG5G_STEP_VAP_START,
++	HI5622_VAPMSG5G_STEP_MAX
++};
++
++/* What the caller must do for one AP interface. */
++struct hi5622_vapmsg5g_plan {
++	bool	defer_user_add;			/* skip the add_interface user add */
++	bool	post_user_after_vap_add;	/* post it after the AP VAP add */
++};
++
++/* Fill *out with the ordering decision.
++ *  - 0 on success; out->defer/out->post are false for the legacy path;
++ *  - -EINVAL for a NULL out or mode > 1 (fail closed, never guess).
++ * A single-band wiphy or a non-AP iftype always keeps the legacy path (the
++ * mode is only meaningful on the one-radio/two-band profile). */
++int hi5622_vapmsg5g_iface_plan(unsigned int mode, unsigned int wiphy_bands,
++			       unsigned int iftype,
++			       struct hi5622_vapmsg5g_plan *out);
++
++/* Fill steps[] with the wire order this mode produces (for host tests and for
++ * the fire recipe's dmesg assertion); *n receives the step count.
++ *  - 0 on success, -EINVAL for bad arguments / mode > 1,
++ *  - -ENOSPC when max is smaller than the produced order. */
++int hi5622_vapmsg5g_order(unsigned int mode, unsigned int wiphy_bands,
++			  unsigned int iftype, u8 *steps, unsigned int max,
++			  unsigned int *n);
++
++/* Stable names for the order steps ("vap_add", "user_add", ...). */
++const char *hi5622_vapmsg5g_step_name(u8 step);
++
++/* "legacy" / "vendor-order" / "invalid". */
++const char *hi5622_vapmsg5g_mode_name(unsigned int mode);
++
++#endif /* HI5622_VAPMSG5G_H */
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-25 17:26:24.562588867 +0700
++++ b/Kbuild	2026-11-25 17:34:49.231306691 +0700
+@@ -33,7 +33,7 @@
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+-		 hi5622_band_cfg.o hi5622_band5g.o hi5622_key_frames.o hi5622_keys.o \
++		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \
+Binary files a/.module-common.o and b/.module-common.o differ

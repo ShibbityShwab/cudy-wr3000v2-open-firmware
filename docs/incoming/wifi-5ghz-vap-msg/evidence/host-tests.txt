@@ -1,0 +1,5 @@
+== 1. portable vendor-order planner (src/)
+PASS: 450 checks, 0 failure(s)
+== 2. band-sensitive wire bytes from the patched driver tree (/tmp/wifi-vapmsg5g-build)
+PASS: 103 checks, 0 failure(s)
+host tests PASS (no device contacted)
