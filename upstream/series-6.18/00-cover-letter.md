@@ -403,6 +403,34 @@ the release series (05-release-line.md section 6).
   `04-validation.md` section 32.  The 2026-11-22 DTS additions are boot-tested as a
   unit (W27b) and patch 0013 is hardware-proven without board-GPIO code.
 
+## 2026-11-29 v4 update (supersedes the GPIO and DTS-0001 paragraphs above)
+
+- **Endpoint reset lines are DT data now (0013 fold).**  The 2026-11-22 paragraph
+  above is superseded twice: the `wifi-pcie-hog` was retired on 2026-11-24
+  (GP1: a hog releases the endpoint reset before the driver's own pulse) and the
+  endpoint reset pulse was then carried by a separate bench patch (013a) with
+  hardcoded GPIO0 register writes.  v4 folds that pulse into patch 0013 as the
+  optional `reset-gpios` + `reset-assert-us`/`reset-deassert-us` properties: the
+  driver asserts the board lines, holds the reset, releases them and settles
+  before enabling the root-complex clock and starting the LTSSM; the board DTS
+  RC0 node describes the R116 lines (`<&porta 20/21/28 GPIO_ACTIVE_LOW>`,
+  20 ms hold / 100 ms settle).  The pulse semantics are hardware-validated
+  (GP1 2026-11-24: the endpoint mask ROM runs and the handshake page comes up);
+  the devicetree-property form itself is an active-DTS change and **has not been
+  boot-tested yet** - one attended boot remains before the hardware claim is
+  extended to it.  The driver is therefore not "without board GPIO code" any
+  more: it consumes board data, which is the upstream shape.
+- **DTS-0001 v4 numbers:** single-source DTS 715 lines sha256 `6774221e...`;
+  DTS-0001 sha256 `6fa1c690...` (716 lines, 703-line filtered payload); target
+  DTB 12,848 B sha256 `1c200daf...`; DTS-0001 DTB 12,680 B sha256 `2a5eb334...`
+  (both 8-byte aligned in the 2026-11-29 host-dtc run).  Release line is 55
+  include (013a folded into 013), validator PASS 55/55; L2 form re-validated
+  26/26, checkpatch 0 errors / 73 warnings.  `dt_binding_check` was not re-run
+  (dtschema unavailable this session); the binding YAML parses and documents the
+  new properties.
+- Exact remaining v2 work is itemised in
+  `../../docs/incoming/upstream-v4/V2-REVIEW-FORM-STATUS.md`.
+
 The 2026-11-21 update below is kept as history apart from the DTS-0001 numbers
 called out above.
 

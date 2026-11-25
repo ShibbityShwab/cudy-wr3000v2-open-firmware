@@ -15,6 +15,18 @@ hardware-tested patch.  The previous aggressive cleanup record is superseded.
 - no active DTS change may be accepted from host checks alone: **the image must
   be boot-tested on the unit after every active-DTS change.**
 
+> **v4 2026-11-29 status note (newest wins over the dated sections below).**  The
+> `wifi-pcie-hog` described in section 8 was retired on 2026-11-24 (the GP1 line,
+> because a hog releases the endpoint reset before the driver's own pulse) and it is
+> no longer in the single source.  The lead-bearing endpoint lines (GPIO0 20/21/28)
+> are now described by the RC0 node's `reset-gpios` property with
+> `reset-assert-us`/`reset-deassert-us` timings, consumed by the folded PCIe driver
+> in patch 0013 (the 013a fold).  The single-source DTS is now **715 lines**; the
+> board DTB compiles (host dtc) to **12,848 B** sha256 `1c200daf...` and DTS-0001 v4
+> payload to **12,680 B** sha256 `2a5eb334...`.  That fold is an active-DTS change:
+> it needs one attended boot before it is hardware-validated.  Sections 1-9 remain
+> as the 2026-11-21/22 historical record and section 8's hog decision is superseded.
+
 ## 1. Hardware regression: the active-DTS cleanup did not boot
 
 The first cleaned DTS (submodule commit `538377c`) changed active

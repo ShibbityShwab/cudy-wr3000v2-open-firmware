@@ -443,17 +443,30 @@ read (a userspace read of 0x10161000 panicked the board), and sub-word
 or misaligned accesses fault.  The gate clock and the four active-low
 resets per root complex come from the CRG.
 
+The board reset lines of the endpoint(s) behind a root complex are taken
+from the optional reset-gpios property: when present, the driver asserts
+all lines, holds the reset for reset-assert-us, then releases them and
+waits reset-deassert-us before enabling the root-complex clock and
+starting the LTSSM.  On the R116 board the Wi-Fi endpoints' reset and
+power-enable inputs are SoC GPIO0 pins 20, 21 and 28; without the pulse
+the endpoint's mask ROM never runs its startup state and the link never
+trains.  The lines, their polarity and the timings are board data and
+live in the board devicetree (see the companion DTS entry), not in this
+driver.
+
 Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22
 (bench images W25d, W26a and W27b): with the complete recorded register
 program the link trains on both root complexes (LTSSM L0, the measured
 vendor steady-state and link-capability values read back byte-identically),
 and both Wi-Fi endpoints behind the root complexes enumerate
-(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  W27b
-additionally proves the patch with no board-GPIO code at all: the
-devicetree gpio hog alone brings both links up, because the board wires
-the Wi-Fi endpoint's power/reset controls to GPIO0 pins 20, 21 and 28,
-which must be outputs driven high before training.  The pins are board
-data, so this driver does not touch them.
+(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  The
+endpoint reset pulse is hardware-verified on the same board on
+2026-11-24 (GP1 image): with the pulse on GPIO0 pins 20/21/28 before the
+RC0 clock and LTSSM the endpoint mask ROM runs and the handshake page
+comes up.  That image drove the lines from board code; this patch
+carries the same pulse as devicetree data.  The devicetree-property form
+is host-validated only and awaits its own attended boot before the
+hardware claim is extended to it.
 
 This remains an RFC: the driver has no MSI/INTx support (the endpoint
 interrupt route is not documented), the configuration window serves only
@@ -462,7 +475,8 @@ a bring-up workaround rather than a modelled power domain.  The Wi-Fi
 endpoint has no mainline driver and is out of scope for this patch.
 
 Host-side: the patch applies to linux-6.18.60 and passes checkpatch with
-no errors; the binding passes dt_binding_check (dtschema 2026.9).
+no errors; the binding documents reset-gpios, reset-assert-us and
+reset-deassert-us.  The host validation record is in the v4 lane notes.
 
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 ~~~
@@ -1255,7 +1269,7 @@ Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 | 10 | bfdcedfd920d64c0eccad29436cf1b3b9e589c4f10ba0d415929106a1e5ca2f8 | 3fbfaaeed7f3038eeb0c56701e4cc52ccdc082e693a04b990336b188c2d25095 |
 | 11 | 872cc563004e20c18266f5f34979cb6e6880e6a2da84fcf436bfc5ffa3179a39 | 700bba855492352afc88dfaeca618c5f3a351bfec1734cdc294f54427fad7442 |
 | 12 | 131ed955ee95e7e513e701337b99a890e57b1bf27f1c9e15db6f9c22622075ea | 3c42f8e6a08ea159b5c3a074890ff64d8c1476f3cbc16bc7c92780b89c7edb5f |
-| 13 | 45c47afd6fd83e5d8b5c5861f0715ec82a135c46c5058907668fb33ab53ada34 | beedd07b4f63346c451554ff99a62eac2d029b9c41835a99831ecb1c5c83ccd7 |
+| 13 | 875d4b08d66c0e037e77828e8836a6da8bfc68edcc0186ac2e5fbe0d39481630 | 96c91d71abe74aa3ada428324b91ab08532efc39eb1d9708e1814f618247db32 |
 | 14 | 8a8fba5b9f04e61c759d77a160caf31c32206ed882b97bf51c8882865f93e7eb | 739700c0ee0a85f969acbfde33d462fc0d501c1a1df3bff5ef223cdf53949227 |
 | 15 | 152161c15017c515d4532c62ae244c28f3c56ec97d95accaea58e9be4107b663 | fac5ab382964c4696ba1a305ec4401068edded8372980f0af25bd62ed01446d2 |
 | 16 | f2872d6410f96350681297f6512b86e25f3d6062f127bcf5772d62d9855d4e28 | c15aba7c52b671211334423b919d5ca209906a53b339ff0ccef5259f22a0b68a |

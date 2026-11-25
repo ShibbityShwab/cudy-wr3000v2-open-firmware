@@ -18,8 +18,8 @@ release line is the target patch stack that built and booted the verified image.
 
 | layer | what it is | size |
 | --- | --- | --- |
-| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 67 patch files (001-060 + 062-067 plus `013a`; no duplicate numbers) |
-| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries.  **v3 2026-11-29: 013a (the load-bearing GP1 endpoint-reset pulse) is included, so L1 is 56** (section 13) | **56 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
+| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 66 patch files (001-060 + 062-067; no duplicate numbers; **v4 2026-11-29: `013a` folded into 013**, section 14) |
+| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries.  **v4 2026-11-29: the GP1 endpoint-reset pulse is in 013 as DT `reset-gpios`, so L1 is 55 again** (section 14); v3 had 56 with the separate `013a` (section 13) | **55 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
 | **L2 upstream review form** | the kernel-only submission form in `series/` plus `00-06` docs | 26 patches (001-026), grouped merge-intent / RFC / do-not-merge |
 | **L3 DTS series entry (DTS-0001)** | the companion DTS patch the kernel-only form cannot carry: the board DTS with the two loader hand-off nodes required by 0018 | 1 patch, `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` (section 2, `06-dts-series-dependency.md`) |
 
@@ -568,3 +568,62 @@ v1 and the planned 30-patch v2 is still not generated: the only remaining
 content decision is the `013a` -> DT `reset-gpios` fold in patch 0013 (+ PCIe
 binding + DTS + one attended boot).  Nothing was sent anywhere.
 
+
+## 14. v4 update (2026-11-29): 013a folded into 013 as DT reset-gpios; L1 back to 55
+
+**This section supersedes sections 1 and 13 where they disagree; the older dated
+records stay as history.**  v3 carried the load-bearing GP1 endpoint reset pulse
+as the separate patch `013a`, which poked GPIO0 pins 20/21/28 directly.  A
+hardcoded board GPIO access is not upstreamable: the board lines must be
+devicetree data.  v4 executes the fold:
+
+- `013-arm-pci-luofu-host.patch` (sha256
+  `96c91d71abe74aa3ada428324b91ab08532efc39eb1d9708e1814f618247db32`): the
+  driver grows optional `reset-gpios` / `reset-assert-us` /
+  `reset-deassert-us` handling (`devm_gpiod_get_array_optional()`, asserted ->
+  hold -> released -> settle, before the RC clock and LTSSM start) and the
+  binding documents the three properties.  The stale header comments that
+  described the retired `wifi-pcie-hog` are updated; behaviour on a board
+  without the property is unchanged by construction.
+- `target-skeleton/dts/luofu-r116.dts` (715 lines, sha256
+  `6774221ef49b10888bfb277f2c7620858a798a3cf228b1660cb483df50e6b062`): the RC0
+  node carries `reset-gpios = <&porta 20 GPIO_ACTIVE_LOW>, <&porta 21
+  GPIO_ACTIVE_LOW>, <&porta 28 GPIO_ACTIVE_LOW>` with `reset-assert-us =
+  <20000>` and `reset-deassert-us = <100000>`; the gpio0 port comment now
+  points there.  This is an **ACTIVE devicetree change**: it needs one attended
+  boot before the image is trusted; GP1 (2026-11-24) stays the
+  hardware-validated line until then.
+- `013a-arm-pci-luofu-endpoint-reset-pulse.patch` is deleted from L0 (66
+  files: 001-060 + 062-067); its pulse content lives in 013 and the board DTS.
+- release line: 55 include / 11 exclude; manifest sha256
+  `e077544b548b46c24f1b0992ea1d02f1ae126feeb148e778fdf643c0fa0bb060`,
+  INCLUDED sha256
+  `cd7ae90c8791700661bf017742f7f46b3c66d12865fdadb05a7b9fab89351b2e`.
+
+**Validation (host-only, 2026-11-29):** `check-release-line.sh` on pristine
+linux-6.18.60 **PASS**: 55/55 patch(1) RC=0, 152 file events, 3 offset hunks,
+0 fuzz, 0 rejects; strict `git apply` all 55 without fuzz; board DTB 12,848 B
+sha256 `1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8`
+(8-byte aligned in this dtc run, so the pad step was not needed); DTS-0001
+sha256 `6fa1c6901d40bc6788c7170fd99e13e4c6f1ecd07e552f3cd8ba093a78b95b01`
+(716 lines, 703-line filtered payload) applies RC=0, is byte-identical to the
+filtered target DTS, compiles to 12,680 B sha256
+`2a5eb334a6f551005e641a297bcc71e52ef74b7038ed5d7288b253b1de0fc89a`
+(aligned), passes the hand-off contract checks, no W23 leak.  The L2 review
+form was regenerated from the new source patches (new 0013 message) and
+re-validated: 26/26 patch(1) and `git am`, identical trees, 3 offset hunks,
+0 fuzz, checkpatch **0 errors / 73 warnings**; `gen-series.py --check` clean.
+The folded driver compiles **RC=0** with `W=1` using the OpenWrt GCC 14.4.0
+toolchain on a reflink copy of the target kernel build tree.  `dt_binding_check`
+was **not** re-run (dtschema is not installed in this session; the updated YAML
+parses and the new properties are documented in it; the last recorded
+`dt_binding_check` pass for this binding is the 2026-11-22 one).
+
+Logs: `validation/release-line-v4/`; the L2 logs and the compile log are
+delivered with the lane report in
+`../../docs/incoming/upstream-v4/validation/`.  Nothing was sent anywhere.
+
+**The 30-patch v2 review form is NOT generated by this fold alone:** the other
+16 content folds and the attended-boot gate remain; they are itemised with the
+exact remaining work in
+`../../docs/incoming/upstream-v4/V2-REVIEW-FORM-STATUS.md`.

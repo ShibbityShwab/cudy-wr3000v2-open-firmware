@@ -17,17 +17,30 @@ read (a userspace read of 0x10161000 panicked the board), and sub-word
 or misaligned accesses fault.  The gate clock and the four active-low
 resets per root complex come from the CRG.
 
+The board reset lines of the endpoint(s) behind a root complex are taken
+from the optional reset-gpios property: when present, the driver asserts
+all lines, holds the reset for reset-assert-us, then releases them and
+waits reset-deassert-us before enabling the root-complex clock and
+starting the LTSSM.  On the R116 board the Wi-Fi endpoints' reset and
+power-enable inputs are SoC GPIO0 pins 20, 21 and 28; without the pulse
+the endpoint's mask ROM never runs its startup state and the link never
+trains.  The lines, their polarity and the timings are board data and
+live in the board devicetree (see the companion DTS entry), not in this
+driver.
+
 Hardware-verified on the Cudy WR3000 v2.0 (luofu R116) on 2026-11-22
 (bench images W25d, W26a and W27b): with the complete recorded register
 program the link trains on both root complexes (LTSSM L0, the measured
 vendor steady-state and link-capability values read back byte-identically),
 and both Wi-Fi endpoints behind the root complexes enumerate
-(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  W27b
-additionally proves the patch with no board-GPIO code at all: the
-devicetree gpio hog alone brings both links up, because the board wires
-the Wi-Fi endpoint's power/reset controls to GPIO0 pins 20, 21 and 28,
-which must be outputs driven high before training.  The pins are board
-data, so this driver does not touch them.
+(vendor/device 59e7:0005 at bus 0/dev 0/fn 0 of each domain).  The
+endpoint reset pulse is hardware-verified on the same board on
+2026-11-24 (GP1 image): with the pulse on GPIO0 pins 20/21/28 before the
+RC0 clock and LTSSM the endpoint mask ROM runs and the handshake page
+comes up.  That image drove the lines from board code; this patch
+carries the same pulse as devicetree data.  The devicetree-property form
+is host-validated only and awaits its own attended boot before the
+hardware claim is extended to it.
 
 This remains an RFC: the driver has no MSI/INTx support (the endpoint
 interrupt route is not documented), the configuration window serves only
@@ -36,16 +49,17 @@ a bring-up workaround rather than a modelled power domain.  The Wi-Fi
 endpoint has no mainline driver and is out of scope for this patch.
 
 Host-side: the patch applies to linux-6.18.60 and passes checkpatch with
-no errors; the binding passes dt_binding_check (dtschema 2026.9).
+no errors; the binding documents reset-gpios, reset-assert-us and
+reset-deassert-us.  The host validation record is in the v4 lane notes.
 
 Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
 
 ---
  drivers/pci/controller/dwc/Kconfig                 |   15 
  drivers/pci/controller/dwc/Makefile                |    1 
- drivers/pci/controller/dwc/pcie-luofu.c            |  653 ++++++++++++++++++++
- .../bindings/pci/hisilicon,luofu-pcie.yaml         |  140 ++++
- 4 files changed, 809 insertions(+)
+ drivers/pci/controller/dwc/pcie-luofu.c            |  722 ++++++++++++++++++++
+ .../bindings/pci/hisilicon,luofu-pcie.yaml         |  173 +++++
+ 4 files changed, 911 insertions(+)
 
 diff --git a/drivers/pci/controller/dwc/Kconfig	2026-11-22 10:39:27.168990308 +0700 b/drivers/pci/controller/dwc/Kconfig	2026-11-22 10:39:27.168990308 +0700
 --- a/drivers/pci/controller/dwc/Kconfig	2026-10-30 19:06:41.000000000 +0700
@@ -85,7 +99,7 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
  obj-$(CONFIG_PCIE_UNIPHIER) += pcie-uniphier.o
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
 +++ b/drivers/pci/controller/dwc/pcie-luofu.c	2026-11-22 18:29:01.244016785 +0700
-@@ -0,0 +1,653 @@
+@@ -0,0 +1,722 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HiSilicon Hi5671Y "luofu" PCIe root complex driver
@@ -99,11 +113,12 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * outbound iATU (CFG0 type) into that window, as the vendor driver does.
 + *
 + * This driver is reconstructed from the recorded vendor evidence and has
-+ * been brought up on the board: the required board GPIO state is described by
-+ * the devicetree gpio hog (GPIO0 pins 20/21/28 are outputs driven high before
-+ * training), after which the link trains and both Wi-Fi endpoints enumerate
-+ * (hardware-verified 2026-11-22).  The board devicetree enables both root
-+ * complexes.
++ * been brought up on the board: the Wi-Fi endpoints behind the root complexes
++ * need their board reset lines pulsed (asserted, then released) before the
++ * root-complex clock is enabled and the LTSSM starts, after which the links
++ * train and both endpoints enumerate.  The lines are board data: the board
++ * devicetree describes them as active-low resets and this driver only runs
++ * the pulse (hardware-verified 2026-11-24 on the R116 board).
 + *
 + * Recorded facts this driver relies on:
 + *
@@ -148,11 +163,6 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + *
 + * What it deliberately does NOT do (each is a TODO with its reason):
 + *
-+ *   - DT-driven endpoint power/reset GPIO sequencing: the board requires
-+ *     GPIO0 pins 20/21/28 to be outputs driven high before the link can train
-+ *     (hardware-verified 2026-11-22: with the devicetree gpio hog alone the
-+ *     link trains on both root complexes).  The pins are owned by the board
-+ *     DTS (wifi-pcie-hog on &porta); this driver does not touch them;
 + *   - the radm/linkdown interrupts: their status/clear registers are in the
 + *     read-forbidden misc window (misc+0x28/+0x2c), so no safe handler can
 + *     be written yet and link state is polled through the DBI instead;
@@ -179,14 +189,15 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * are SET while the lines are released.  The first revision of the CRG driver
 + * (patches-6.18/004) had that polarity inverted; patch 014 corrects it (assert
 + * clears the bit, deassert sets it).  This driver uses only the reset API and
-+ * relies on the corrected provider.  The board devicetree enables both root
-+ * complexes; training additionally depends on the board GPIO state provided by
-+ * the devicetree gpio hog described above.
++ * relies on the corrected provider.  Board training additionally depends on
++ * the endpoint reset pulse described above, which is driven from the board
++ * devicetree reset-gpios property before the root-complex clock is enabled.
 + */
 +
 +#include <linux/build_bug.h>
 +#include <linux/clk.h>
 +#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
 +#include <linux/io.h>
 +#include <linux/kernel.h>
 +#include <linux/module.h>
@@ -222,6 +233,16 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +
 +/* Inter-step delay of the reset deassert sequence: the vendor value is [U]. */
 +#define LUOFU_PCIE_RESET_DELAY_US	1000
++
++/*
++ * Default endpoint reset pulse timings, overridable from the board devicetree
++ * (reset-assert-us/reset-deassert-us).  The defaults are the timings the R116
++ * board was brought up with: the vendor wrapper asserts the endpoint reset for
++ * 5 ms and waits 50 ms after releasing it, and the bench-proven line uses a
++ * longer, conservative hold (2026-11-24).
++ */
++#define LUOFU_PCIE_EP_RESET_ASSERT_US	20000
++#define LUOFU_PCIE_EP_RESET_DEASSERT_US	100000
 +
 +/*
 + * The measured topology: exactly one endpoint function per root complex,
@@ -389,11 +410,11 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
 +	struct luofu_pcie *lpc = to_luofu_pcie(pci);
 +
-+	/* The Wi-Fi endpoint power/reset controls (GPIO0 pins 20/21/28,
-+	 * driven as outputs HIGH) are owned by the board DTS via a gpio-hog
-+	 * (wifi-pcie-hog on &porta).  Hardware-verified 2026-11-22 (W27b):
-+	 * with the hog alone the link trains on both root complexes, so no
-+	 * board GPIO poking belongs in this driver. */
++	/*
++	 * The endpoint reset pulse already ran in probe: the board reset
++	 * lines were asserted and then released, so the endpoint's mask ROM
++	 * runs its startup state before the LTSSM is enabled here.
++	 */
 +
 +	/* Let the endpoint finish its power-on/reset sequence before the RC
 +	 * starts training (the vendor driver runs as a module ~11 s after
@@ -454,8 +475,8 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 + * (misc+0x1c bit 13) is asserted and then leaves the steady state with LTSSM
 + * enabled and the gate clear (0x02200800); the values this function writes
 + * were read back byte-identical on the live vendor system.  The register
-+ * program alone does not train the link - the required board GPIO state is
-+ * provided by the devicetree gpio hog (see host_init).
++ * program alone does not train the link - the board endpoint reset pulse in
++ * probe releases the endpoint first (see luofu_pcie_ep_reset()).
 + */
 +static int luofu_pcie_start_link(struct dw_pcie *pci)
 +{
@@ -594,6 +615,62 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +	.msi_init = luofu_pcie_msi_init,
 +};
 +
++/*
++ * Pulse the board endpoint reset lines, when the board devicetree describes
++ * them.  On the R116 board the Wi-Fi endpoints behind the root complexes are
++ * held in reset by SoC GPIO0 pins 20, 21 and 28; the vendor wrapper drives
++ * them low (assert), waits the reset duration, then drives them high (release)
++ * and waits the post-release delay, all before the root-complex clock and the
++ * LTSSM start.  Without the pulse the endpoint's mask ROM never runs its
++ * startup state and the link never trains (measured 2026-11-24).  The lines
++ * and the timings are board data, so this driver only sequences what the
++ * devicetree describes; a board without the property is left untouched.
++ */
++static int luofu_pcie_ep_reset(struct device *dev)
++{
++	struct gpio_descs *reset_gpios;
++	u32 assert_us = LUOFU_PCIE_EP_RESET_ASSERT_US;
++	u32 deassert_us = LUOFU_PCIE_EP_RESET_DEASSERT_US;
++	int i, ret;
++
++	reset_gpios = devm_gpiod_get_array_optional(dev, "reset", GPIOD_ASIS);
++	if (IS_ERR(reset_gpios))
++		return dev_err_probe(dev, PTR_ERR(reset_gpios),
++				     "failed to get the endpoint reset lines\n");
++	if (!reset_gpios)
++		return 0;
++
++	of_property_read_u32(dev->of_node, "reset-assert-us", &assert_us);
++	of_property_read_u32(dev->of_node, "reset-deassert-us", &deassert_us);
++
++	/*
++	 * Assert all lines together, hold, release them, then let the
++	 * endpoint settle before the clock is enabled.
++	 */
++	for (i = 0; i < reset_gpios->ndescs; i++) {
++		ret = gpiod_direction_output(reset_gpios->desc[i], 1);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to assert endpoint reset line %d\n",
++					     i);
++	}
++	fsleep(assert_us);
++
++	for (i = 0; i < reset_gpios->ndescs; i++) {
++		ret = gpiod_direction_output(reset_gpios->desc[i], 0);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to release endpoint reset line %d\n",
++					     i);
++	}
++	fsleep(deassert_us);
++
++	dev_info(dev,
++		 "endpoint reset pulse on %d board line(s): %u us asserted, %u us settled\n",
++		 reset_gpios->ndescs, assert_us, deassert_us);
++	return 0;
++}
++
 +static int luofu_pcie_probe(struct platform_device *pdev)
 +{
 +	struct device *dev = &pdev->dev;
@@ -652,6 +729,12 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +			}
 +		}
 +	}
++	/* The endpoint reset pulse must complete before the root-complex clock
++	 * is enabled and the LTSSM starts (vendor order; 2026-11-24). */
++	ret = luofu_pcie_ep_reset(dev);
++	if (ret)
++		return ret;
++
 +	ret = clk_prepare_enable(lpc->clk);
 +	if (ret)
 +		return dev_err_probe(dev, ret, "failed to enable the PCIe clock\n");
@@ -741,7 +824,7 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +MODULE_LICENSE("GPL");
 --- /dev/null	2026-11-15 18:31:59.320674763 +0700
 +++ b/Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml	2026-11-22 10:39:27.169302708 +0700
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,173 @@
 +# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +%YAML 1.2
 +---
@@ -773,6 +856,15 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +
 +  The two root complexes are independent: each has its own clock gate, its own
 +  four reset lines, and its own PCI domain.
++
++  A board may describe the reset lines of the endpoint(s) behind a root
++  complex with the optional reset-gpios property.  When present, the driver
++  asserts all listed lines before enabling the root-complex clock and starting
++  link training, holds them asserted for reset-assert-us, then releases them
++  and waits reset-deassert-us.  On the Cudy WR3000 v2.0 (luofu R116) board the
++  Wi-Fi endpoint reset/power-enable inputs are SoC GPIO0 pins 20, 21 and 28
++  behind RC0; they must be pulsed before the RC0 LTSSM starts or the endpoint
++  never leaves reset.
 +
 +allOf:
 +  - $ref: /schemas/pci/pci-host-bridge.yaml#
@@ -816,6 +908,30 @@ diff --git a/drivers/pci/controller/dwc/Makefile	2026-11-22 10:39:27.169040764 +
 +      - const: pcs
 +      - const: phy
 +      - const: ctrl
++
++  reset-gpios:
++    description: |
++      Optional board GPIO lines that control the reset (and power enable) of
++      the endpoint(s) behind this root complex.  The driver asserts all of
++      them, holds the reset for reset-assert-us, then releases them and waits
++      reset-deassert-us before the root-complex clock is enabled and link
++      training starts.  The lines are board data; on the R116 board the Wi-Fi
++      endpoint reset inputs are the active-low resets of SoC GPIO0 pins 20,
++      21 and 28.
++    minItems: 1
++
++  reset-assert-us:
++    description: |
++      Time in microseconds to hold the endpoint reset lines asserted before
++      releasing them.  Only meaningful together with reset-gpios.
++    default: 20000
++
++  reset-deassert-us:
++    description: |
++      Time in microseconds to wait after releasing the endpoint reset lines
++      before the root-complex clock is enabled and link training starts.  Only
++      meaningful together with reset-gpios.
++    default: 100000
 +
 +  acp-gate:
 +    description: |

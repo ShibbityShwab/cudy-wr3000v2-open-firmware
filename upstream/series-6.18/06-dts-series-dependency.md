@@ -14,10 +14,10 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `1fd1d10ac39fad233e8e2dfa682bc84446536a39c8221e44394563e8d16c0117` (**v3, current 2026-11-29**: the 2026-11-21 board DTS content above **plus** the 2026-11-22 enabled-PCIe/`dma-ranges` additions, with the retired 2026-11-22 `wifi-pcie-hog` gone since the 2026-11-24 GP1 line and the release-line-only W23 thermal delta removed by `tools/dts-upstream-filter.py`; the previous 2026-11-22 v2 entry was `33956380...` and still carried the retired hog; before that `886f3ad0...`/`c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
+| sha256 | `6fa1c6901d40bc6788c7170fd99e13e4c6f1ecd07e552f3cd8ba093a78b95b01` (**v4, current 2026-11-29**: the v4 board DTS adds the RC0 `reset-gpios` endpoint reset lines (+timings) consumed by the folded PCIe driver; 716 lines, **703-line** filtered payload; the previous **v3** entry was `1fd1d10a...` (**v3, 2026-11-29**: the 2026-11-21 board DTS content above **plus** the 2026-11-22 enabled-PCIe/`dma-ranges` additions, with the retired 2026-11-22 `wifi-pcie-hog` gone since the 2026-11-24 GP1 line and the release-line-only W23 thermal delta removed by `tools/dts-upstream-filter.py`; the previous 2026-11-22 v2 entry was `33956380...` and still carried the retired hog; before that `886f3ad0...`/`c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**690 lines**, byte-identical to the current single-source target DTS (702 lines) after the release-line W23 filter: 2026-11-21 board features + buttons/LEDs + loader hand-off contract + the 2026-11-22 enabled-PCIe/`dma-ranges` additions, with the retired 2026-11-22 `wifi-pcie-hog` gone since the 2026-11-24 GP1 line) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
-| status | **DRAFT DTS SERIES ENTRY** - the board DTS is hardware-verified: the conservative prose-only step compiled byte-identically to the known-good DTB, and all five active deltas were individually boot-tested (images f6685b80, c3ef2a50 and 6e9c54d0; the 6e9c54d0 boot-test closed the flashinfo loader binding).  **Zero upstream blockers remain**; the remaining in-series driver/YAML review items are normal RFC submission content.  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**703 lines** after the release-line W23 filter; the single-source target DTS is 715 lines as of v4) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile`.  Content: the 2026-11-21 board features + buttons/LEDs + loader hand-off contract, the 2026-11-22 enabled-PCIe/`dma-ranges` additions, and the **v4 2026-11-29 RC0 `reset-gpios` endpoint reset lines** (`<&porta 20/21/28 GPIO_ACTIVE_LOW>` plus `reset-assert-us`/`reset-deassert-us`); the retired `wifi-pcie-hog` is absent |
+| status | **DRAFT DTS SERIES ENTRY**.  The loader hand-off contract and the 2026-11-21/22 board deltas are hardware-verified (images f6685b80, c3ef2a50 and 6e9c54d0; the 6e9c54d0 boot-test closed the flashinfo loader binding; SMP root cause in SMP-RE.md section 24).  The **v4 RC0 `reset-gpios` addition is an ACTIVE change that has NOT been boot-tested yet**: one attended boot (recovery armed) is required before DTS-0001 v4 replaces the GP1 line as the hardware-validated board state.  **Zero upstream blockers remain**; the remaining in-series driver/YAML review items are normal RFC submission content |
 
 The two nodes that make this entry release-critical for SMP:
 
@@ -145,6 +145,28 @@ the same check: if the compiled DTB is unaligned it runs `pad-dtb.py` on a
 copy, verifies the padded size is aligned and that the loader hand-off contract
 is unchanged, and records the requirement in its summary.
 
+### 3.2 v4 board-DTS delta (2026-11-29): RC0 endpoint reset lines
+
+The v4 change is the `013a` -> devicetree fold: the board lines that hold the
+Wi-Fi endpoints in reset are now DT data on the RC0 node instead of hardcoded
+GPIO0 register writes in the driver.  The single-source DTS grows from 702 to
+**715 lines**: the `pcie@10160000` node gains
+
+    reset-gpios = <&porta 20 GPIO_ACTIVE_LOW>,
+                  <&porta 21 GPIO_ACTIVE_LOW>,
+                  <&porta 28 GPIO_ACTIVE_LOW>;
+    reset-assert-us = <20000>;
+    reset-deassert-us = <100000>;
+
+and the `gpio0` port comment now points to that property.  The pulse semantics
+are those of the hardware-validated GP1 line (assert the lines, hold the reset,
+release, settle, all before the root-complex clock and LTSSM start); the
+devicetree-property *form* is new and is an **active devicetree change**: it
+needs one attended boot on the unit before DTS-0001 v4 can be called
+hardware-validated.  The release-line filter needs no change (the W23
+thermal block is untouched); DTS-0001 is regenerated with the same command as
+above and its payload is again byte-identical to the filtered single source.
+
 ## 4. Validation (part of `tools/check-release-line.sh`)
 
 The validator now performs the DTS-0001 checks after the release-line and
@@ -160,7 +182,23 @@ target-DTS checks:
    `reg = 80600000 4000`, `atag-offset = 1000`,
    `enable-method = "hisilicon,luofu-smp"`.
 
-**2026-11-29 v3 result (current):** L1 release line **56/56** patch(1) RC=0
+**2026-11-29 v4 result (current):** L1 release line **55/55** patch(1) RC=0
+(55 include / 11 exclude; 152 file events; 3 offset hunks, 0 fuzz, 0 rejects;
+strict `git apply` all 55); the board DTS now carries the RC0 `reset-gpios`
+endpoint reset lines and compiled to **12,848 B** sha256 `1c200daf...` (8-byte
+aligned in this host-dtc run).  **DTS-0001 v4** sha256 `6fa1c690...` (716
+lines, 703-line filtered payload) applies RC=0, is byte-identical to the
+filtered target DTS, compiles to **12,680 B** sha256 `2a5eb334...`
+(8-byte aligned), passes the hand-off contract and the leak check; release-line
+manifest sha256 `e077544b...`, INCLUDED sha256 `cd7ae90c...`.  The L2 form was
+regenerated with the folded 0013 and re-validated 26/26 (patch(1) and git am,
+identical trees, 3 offsets, 0 fuzz, checkpatch 0 errors / 73 warnings).  The
+v4 board DTS is an **active devicetree change**: one attended boot (recovery
+armed) is still owed before it replaces GP1 as the hardware-validated line.
+Logs: `validation/release-line-v4/` and
+`../../docs/incoming/upstream-v4/validation/`.
+
+**2026-11-29 v3 result (historical):** L1 release line **56/56** patch(1) RC=0
 (56 include / 11 exclude; 153 file events; 5 offset hunks, 0 fuzz, 0 rejects;
 strict `git apply` **all 56 without fuzz**), logs `validation/release-line-v3/`;
 DTS-0001 sha256 `1fd1d10a...` (703 lines, **690-line** filtered payload) applies

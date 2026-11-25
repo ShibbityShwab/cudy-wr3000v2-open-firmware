@@ -8,6 +8,23 @@ commit messages, a cover letter, a MAINTAINERS proposal, a tree/order
 rationale, and a repeatable host-only validation, plus a commit-ready
 (format-patch style) copy of the same 26 patches.
 
+> **v4 update (2026-11-29, host-only; nothing was sent).**  The `013a`
+> endpoint-reset pulse is folded into patch 0013 as devicetree data: the driver
+> consumes the RC0 node's optional `reset-gpios` (with
+> `reset-assert-us`/`reset-deassert-us` timing) from the board DTS, the binding
+> documents the three properties, and `013a` is gone from L0/L1 (L1 is 55
+> again).  DTS-0001 was regenerated from the new 715-line single source.  Both
+> host validators re-ran **PASS** (L2: 26/26 patch(1)+git am, identical trees,
+> checkpatch 0 errors / 73 warnings; L1: 55/55 patch(1), 0 fuzz, DTS + DTS-0001
+> contracts OK) and the folded driver compiles RC=0 at W=1.  Details and logs:
+> `../../docs/incoming/upstream-v4/`.  The 30-patch v2 form is **still not
+> generated**: this fold was its last content *decision*, but the other 16
+> content folds (list in the v4 status) and one attended boot of the
+> active-DTS change remain.  See
+> `../../docs/incoming/upstream-v4/V2-REVIEW-FORM-STATUS.md`.  Older
+> "26 patches unchanged / v1 frozen" statements below are superseded for patch
+> 0013 content and the DTS.
+
 Status: **upstream review form; the target image built from this patch
 stack is bench-verified, but the series itself has had no upstream review
 and most drivers remain draft/RFC.**  Sequential application to pristine

@@ -11,7 +11,6 @@
 011-pinctrl-luofu.patch
 012-arm-thermal-luofu-tvsensor.patch
 013-arm-pci-luofu-host.patch
-013a-arm-pci-luofu-endpoint-reset-pulse.patch
 014-arm-crg-reset-polarity.patch
 015-net-pie-luofu.patch
 016-net-lsw-luofu.patch

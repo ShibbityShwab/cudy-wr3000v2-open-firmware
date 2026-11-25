@@ -1,0 +1,3 @@
+/home/shibbityshwab/uv4-val/val-l1/tree-patch/drivers/net/ethernet/hisilicon/Kconfig.orig
+/home/shibbityshwab/uv4-val/val-l1/tree-patch/drivers/net/phy/Kconfig.orig
+/home/shibbityshwab/uv4-val/val-l1/tree-patch/drivers/net/phy/Makefile.orig
