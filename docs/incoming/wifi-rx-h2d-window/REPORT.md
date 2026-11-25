@@ -7,7 +7,11 @@
 device contact. Addresses and decoded text only; no vendor binary/firmware bytes.
 
 Grades: **[V]** = proven by code path/constant/live dump quoted here; **[I]** = inferred;
-**[U]** = unmeasured. The one on-device confirmation this lane could not run is named in §6.
+**[U]** = unmeasured. The one on-device confirmation this lane could not run is named in §7.
+
+**Path convention:** `phaseNN/...` = `opensource/docs/phaseNN/...`; `wifi-rx-h2d-trace/...` =
+`opensource/docs/incoming/...`; kernel-source paths are under the gitignored vendor tree
+`build/linux-kbuild/linux-5.10.201/`; `build/wifi-rx-h2d-trace/` holds the local decode artifacts.
 
 ---
 

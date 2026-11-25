@@ -29,6 +29,7 @@ The retry therefore needs a **v2 sampler with mmap() register access** (delivere
 | [RUNBOOK-DELTA.md](RUNBOOK-DELTA.md) | the exact delta to `docs/incoming/wifi-rx-h2d-trace/RUNBOOK.md` (new T2.5 window gate, T4 arguments, PASS/FAIL, STOP rules) |
 | [tools/omo_h2dsampler-mmap.c](tools/omo_h2dsampler-mmap.c) | v2 sampler: mmap() for the ETE window, pread() kept for DRAM nodes, ring-register validation, `-p` read-only probe mode, error logging |
 | [tools/build-sampler-mmap.sh](tools/build-sampler-mmap.sh) | cross-build of v2 (static ARM/musl, same toolchain as v1) |
+| [tools/run-host-tests.sh](tools/run-host-tests.sh) | host-side tests of v2 (native build, `--selftest`, fake-window mmap path, ring-detection positive/negative) |
 | [evidence/](evidence/) | host build/test output, the UART-log timeline extraction, the kernel-source citations, the v1-v2 diff |
 
 ## Status (what is proven vs. inferred)
