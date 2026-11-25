@@ -1,0 +1,26 @@
+ALG config text plane: g0-id1 key 0x0128 -> table B row 28 -> worker CA 0x8313C
+frame body = {u8 n; u8 offset[n]; NUL-separated tokens}, body+8 = token area
+len gate: r1 >= 8 (CA 0x83148 cmp r3,#8; bcc fail)
+token[0] is compared against the module name table CA 0x104FC0:
+  id 0: 'sch'
+  id 1: 'cmn'
+  id 2: 'err_name'
+handler dispatch: CBH + 4*(0xD2 + id), CBH = CA 0x1747C4
+  id 0 handler slot CPU 0x174B0C (read-only probe; value [U])
+  id 1 handler slot CPU 0x174B10 (read-only probe; value [U])
+  id 2 handler slot CPU 0x174B14 (read-only probe; value [U])
+
+host sender hmac_config_alg (ko 0x58E18): len>8, splits tokens at
+0x20, token[0]=='sch' + token[1]=='usr_bw' is the one host-side
+special case (per-STA bandwidth), then g0-id1 key 0x0128 carries
+the raw text body.
+
+firmware side [I]: the 'sch' handler reads the OFDMA/sounding/SR
+algorithm parameters, which is why the module carries the
+alg_*_ofdma_*, alg_*_sounding_* and alg_*_sr_* parameter names.
+The handler address is runtime-installed (probe P6); the token
+grammar for ofdma/sounding is not statically decodable.
+
+validated sample body for module 'sch':
+  0400040b1d000000736368007573725f62770030303a31313a32323a33333a34343a3535003100
+  count=4 tokens=['sch', 'usr_bw', '00:11:22:33:44:55', '1']

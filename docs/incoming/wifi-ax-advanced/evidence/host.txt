@@ -1,0 +1,32 @@
+vendor host builders (module .text, link-time offsets)
+
+addr      builder                                  key        body/effect
+0x753B0   hmac_config_set_he_gi                    0x006F     body[0] in {1,2,4}; VAP+0x1A7.bit7 / +0x1A8.bit5 / +0x831
+0x61330   hmac_config_ext_twt_ie_switch            0x00E9     raw body (u32 0/1) -> VAP+0x3DE
+0x15E8E8  hmac_config_twt_enable                   0x035D     body[0].bit0/bit1; host mirror +0xD2 bits 6/7
+0x75E40   hmac_config_set_trig_su_bf_fb            0x032E     body[0] -> VAP+0x1A6.bit7
+0x75F0C   hmac_config_set_bfee_support             0x0335     body[0] -> VAP+0x364/+0x366, +0x1A4.bit1
+0x75FCC   hmac_config_set_bfer_support             0x04C8     body[0] 0..3 -> VAP+0x365/+0x367, +0x1A4 bits 0/2
+0x161258  hmac_config_set_cyc_sche_switch          0x0353     raw body -> firmware scheduler re-arm
+0x0C6D3C  hmac_config_multiap_sr_enable            0x04B6     body[0]&1; host +0xE6 -> firmware ctx+0xEE
+0x0C3F20  hmac_config_multiap_tool                 0x04B4     text body -> 4-entry firmware tool table
+0x76250   hmac_config_set_wmm_mu_edca_params       0x5B..0x5F 12-B body {u16 sel;u16 pad;u32 ac;u32 value}
+0x58E18   hmac_config_alg                          0x0128     ALG text body (see --alg)
+
+TWT user path: wal_hipriv_twt_enable (0x131634) takes one int arg,
+valid {1,3}, and posts WAL cfg event {u8 value; u16 0x035D;
+u16 4; u8 value} - the same key the g0-id1 carrier dispatches.
+
+HE Operation / BSS color (vendor host IE builders, NOT the beacon
+path - beacons are firmware mode-10 output):
+  mac_set_he_operation_params 0x25588:
+    out[0..2] = LE(4 | ((u16(MIB+0x1BA) >> 6) << 4))
+    on-air 0x003FF4 => Default PE Duration 4, TXOP RTS 1023
+  mac_set_bss_color_info 0x25604:
+    out[0] = u8(obj+0xCC) & 0x7F  (6-bit color + partial bit)
+  hmac_alg_sr_config_param 0x963CC: ALG param id 0xCE5 ->
+    hmac_sr_cfg_param_bss_color 0x961D4 (writes the color field
+    of the matching station objects)
+  the two host-side color writers are hmac_sr_* (no g0-id1 key):
+    the vendor host has no BSS-color config event; the on-air
+    color is a firmware-side default until a worker is decoded

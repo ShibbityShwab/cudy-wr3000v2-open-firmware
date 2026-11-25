@@ -1,0 +1,41 @@
+AX config-event workers (firmware; r0=ctx, r1=len, r2=body)
+
+TWT enable 0x035D -> CA 0x41E5A
+  body[0].bit0 -> *(u8)(ctx+0xDA).bit6   (TWT enable)
+  body[0].bit1 -> *(u8)(ctx+0xDA).bit7   (TWT required)
+  host validator (wal_hipriv_twt_enable) accepts only {1,3}
+
+ext TWT IE switch 0x00E9 -> CA 0x44484
+  VAP = *(u32)(ctx+0x190); VAP+0x3DE = (u32(body) != 0)
+
+HE GI 0x006F -> CA 0x81C44
+  VAP = *(u32)(ctx+0x190); VAP+0x831 = body[0]
+  body[0]==1 -> VAP+0x1A7.bit7 = 1, VAP+0x1A8.bit5 = 1;
+  otherwise bit5 cleared (host accepts body[0] in {1,2,4})
+
+trigger SU BF feedback 0x032E -> CA 0x818DC
+  VAP+0x1A6.bit7 = body[0]
+
+BFEE support 0x0335 -> CA 0x81890
+  VAP+0x364 = VAP+0x366 = body[0]; VAP+0x1A4.bit1 = body[0]
+
+BFER support 0x04C8 -> CA 0x817CC
+  body[0] 0..3 (tbb): writes VAP+0x365/+0x367 and VAP+0x1A4
+  bits 0/2; >3 -> log, no write
+
+cyclic-scheme switch 0x0353 -> CA 0x43BD4
+  body[0] 0/1 -> O = band object; O+0x1A08: 1 -> CA 0xC6034,
+  0 -> CA 0xC52B4 (band scheduler re-arm); other -> log
+
+multi-AP SR enable 0x04B6 -> CA 0x49ACA
+  ctx+0xEE = body[0] & 1   (per-module spatial-reuse enable)
+
+multi-AP tool 0x04B4 -> CA 0x4A864
+  text body -> one parsed arg -> 4-entry table CA 0x104520
+  {name ptr; handler ptr}; handler called as (ctx, r1, out)
+
+MU EDCA params 0x005B..0x005F -> CA 0x8128C..0x813BC
+  body = {u16 sel; u16 pad; u32 ac 0..3; u32 value}
+  VAP[+0x1D4 + 4*(sel-0x5B) + 24*ac] = value
+  (0x5F is the u8 field, 0x5B..0x5E are u32 fields)
+  then ctx+0xD3 = (ctx+0xD3 + 1) & 0xF (sequence counter)

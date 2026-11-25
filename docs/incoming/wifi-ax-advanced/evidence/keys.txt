@@ -1,0 +1,18 @@
+g0-id1 config-event dispatcher CA 0x43D58: table A 0x10C23C (217), table B 0x103BF8 (88)
+
+tbl key    row   worker     what
+A   0x006F 106   0x81C44    HE GI
+A   0x00E9 184   0x44484    ext TWT IE switch
+A   0x035D 89    0x41E5A    TWT enable
+A   0x005B 65    0x813BC    MU EDCA param 0x5B
+A   0x005C 66    0x81370    MU EDCA param 0x5C
+A   0x005D 67    0x81324    MU EDCA param 0x5D
+A   0x005E 68    0x812D8    MU EDCA param 0x5E
+A   0x005F 69    0x8128C    MU EDCA param 0x5F
+A   0x04C8 15    0x817CC    BFER support
+A   0x0335 14    0x81890    BFEE support
+A   0x032E 12    0x818DC    trigger SU BF feedback
+A   0x0353 165   0x43BD4    cyclic-scheme switch
+A   0x04B6 190   0x49ACA    multi-AP SR enable
+A   0x04B4 189   0x4A864    multi-AP tool (text)
+B   0x0128 28    0x8313C    ALG config text plane

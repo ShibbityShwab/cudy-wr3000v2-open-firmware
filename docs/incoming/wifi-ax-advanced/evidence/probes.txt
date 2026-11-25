@@ -1,0 +1,34 @@
+READ-ONLY probe pack (no write, one boot).  Firmware RAM phys =
+0x40000000 + CPU + 0x6B8000.  Read with the committed read-only
+helper.  VAP-relative probes are the second step: chase the
+pointer from 0x1198E8 and add the VAP offset.
+
+sz   CPU       phys       VAP off     what / expected
+u32  0x0171458 0x40829458 -           context slot table[0] = context[0] ptr | 0x00119758
+u16  0x0171504 0x40829504 -           context base offset (add to every pointer) | 0x0000 [I]
+u32  0x01198E8 0x407D18E8 -           ctx0+0x190 = VAP object pointer (AP ladder) | nonzero; chase
+u8   0x0119832 0x407D1832 -           ctx0+0xDA TWT bits 6/7 | 0 before TWT enable
+u8   0x0119846 0x407D1846 -           ctx0+0xEE multi-AP SR enable bit0 | 0 default
+u32  0x0174B0C 0x4082CB0C -           ALG handler slot module 'sch' | nonzero [U]
+u32  0x0174B10 0x4082CB10 -           ALG handler slot module 'cmn' | nonzero [U]
+u32  0x0174B14 0x4082CB14 -           ALG handler slot module 'err_name' | nonzero [U]
+u32  0x0174B34 0x4082CB34 -           hook CBH+0x370 (MAC start) | 0 in this image
+u32  0x0174B38 0x4082CB38 -           hook CBH+0x374 (beacon start) | 0x00057639
+u32  0x015E408 0x40816408 -           band0 published per-link | 0x00174BF0
+u8   0x015D90C 0x4081590C -           band0 RF mode byte | 3 after a 0x01F7
+u32  0x015FF70 0x40817F70 -           band1 published per-link | 0x00175A18
+u8   0x015F474 0x40817474 -           band1 RF mode byte | 3 after F2
+
+VAP-relative probes (VAP = u32(0x1198E8) + u16(0x171504)):
+  VAP+0x1A4 u8  capability flags: bit0 BFER, bit1 BFEE, bit2 = BF mode
+  VAP+0x1A6 u8  bit7 trigger SU BF feedback
+  VAP+0x1A7 u8  bit7 HE GI enable
+  VAP+0x1A8 u8  bit5 HE GI (second copy)
+  VAP+0x1D4 u32 per-AC MU EDCA slot 0x5B (+24*ac)
+  VAP+0x1D8 u32 per-AC MU EDCA slot 0x5C (+24*ac)
+  VAP+0x1DC u32 per-AC MU EDCA slot 0x5D (+24*ac)
+  VAP+0x1E0 u32 per-AC MU EDCA slot 0x5E (+24*ac)
+  VAP+0x1E4 u8  per-AC MU EDCA slot 0x5F (+24*ac)
+  VAP+0x364 u8  BFEE enable copy / 0x365 BFER, 0x366/0x367 copies
+  VAP+0x3DE u8  ext TWT IE enable
+  VAP+0x831 u8  HE GI copy
