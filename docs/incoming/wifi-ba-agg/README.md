@@ -31,7 +31,8 @@ rung is written to be evaluable on the current healthy chip with zero peer.
 | --- | --- |
 | `REPORT.md` | the decode: architecture, session structs, window/scoreboard, the six message classes, the two-direction setup sequence, the minimal implementation, limits |
 | `TABLES.md` | T1-T10 evidence tables: symbol map, structs, message field maps, firmware dispatch, frame byte maps, fail-closed contract |
-| `FIRE-RECIPE.md` | rungs B0-B7 with exact PASS/FAIL gates (the Lead fires) |
+| `FIRE-RECIPE.md` | rungs B0-B7 with exact PASS/FAIL gates (the Lead fires; B1/B2 evaluable now, B3+ blocked on RX) |
+| `BUILD-NOTES.md` | the pinned build chain, the 58-param artifact contract, host/static test commands |
 | `patches/0001-ba-skeleton.patch` | fail-closed skeleton against the 5 GHz ready base tree: new `hi5622_ba.[ch]` + Kbuild line; inert unless `ba_enable=1` |
 | `src/hi5622_ba.{c,h}` | portable, host-testable BA core: frame builders/parsers, payload builders, per-TID session state machine, callback plumbing |
 | `src/ba_selftest.c` | host selftest (compiles `src/hi5622_ba.c` standalone; no device) |
@@ -56,7 +57,17 @@ rung is written to be evaluable on the current healthy chip with zero peer.
 
 ## Status
 
-Decode, report, tables, skeleton patch, host tests and fire recipe are DONE.
+Decode, report, tables, skeleton patch, host tests, static evidence and fire
+recipe are DONE and committed.
+
+* host selftest: **183 checks, 0 failures** (`evidence/host-tests.txt`);
+* static evidence: **147 checks, 0 failed** against the pinned local vendor
+  module + firmware (`evidence/static-checks.txt`);
+* skeleton module: builds clean against linux-6.18.60, **58 params**
+  (`ba_enable=0` default), debug-stripped 359,992 B sha256
+  `78460841...cc33de02`, and is **provably unwired** (no object outside
+  `hi5622_ba.o` references a `hi5622_ba_*` symbol) - see BUILD-NOTES.
+
 The patch is a **skeleton**: it compiles into the module and is inert by
 default, but it is not yet wired into the TX/RX data path - the hook points are
 listed in REPORT.md section 9 and are the next rung after the RX gate. The fire

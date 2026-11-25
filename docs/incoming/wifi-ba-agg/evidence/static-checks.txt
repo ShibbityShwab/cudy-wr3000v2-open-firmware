@@ -1,0 +1,154 @@
+# ba_decode_check - lane wifi-ba-agg (task-178)
+# host module: hi5622v100_wifi.ko (3581748 B)
+# firmware:    FIRMWARE.bin
+# objdump:     /home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-objdump
+
+ok   symbol hmac_ba_rx_init                        .text 0xdb580 size 0x58
+ok   symbol hmac_ba_rx_win_init                    .text 0xdb440 size 0x140
+ok   symbol hmac_ba_rx_add                         .text 0xdb6e0 size 0x208
+ok   symbol hmac_ba_rx_del                         .text 0xdb5d8 size 0x108
+ok   symbol hmac_ba_rx_buffered_data_software_check .text 0xdbcb8 size 0x308
+ok   symbol hmac_ba_timeout_fn                     .text 0xdb208 size 0x170
+ok   symbol hmac_ba_timeout_proc                   .text 0xdca80 size 0x6b4
+ok   symbol hmac_ba_tx_init                        .text 0xdb8e8 size 0x60
+ok   symbol hmac_ba_tx_add                         .text 0xdb948 size 0x78
+ok   symbol hmac_ba_tx_del                         .text 0xdba4c size 0x84
+ok   symbol hdpp_user_rx_init                      .text 0x01d64 size 0xdc
+ok   symbol hdpp_tx_tid_init                       .text 0x13ca4 size 0x38
+ok   symbol hmac_tx_ba_setup                       .text 0xaf180 size 0x104
+ok   symbol hmac_tx_ba_session_process             .text 0x16cf0 size 0x340
+ok   symbol hmac_tx_ba_notify                      .text 0x16b90 size 0x160
+ok   symbol hmac_create_ba_event                   .text 0x3ece4 size 0x1c4
+ok   symbol hmac_del_ba_event                      .text 0x3eea8 size 0x244
+ok   symbol hmac_mgmt_rx_delba_event               .text 0x49220 size 0x208
+ok   symbol hmac_ba_action_msg_process             .text 0xaf284 size 0x278
+ok   symbol hmac_mgmt_rx_addba_req                 .text 0x45588 size 0x2b8
+ok   symbol hmac_mgmt_rx_addba_rsp                 .text 0x45a84 size 0x2f4
+ok   symbol hmac_mgmt_rx_addba_rsp_verify          .text 0x45888 size 0x1fc
+ok   symbol hmac_mgmt_rx_delba                     .text 0x45d78 size 0x34c
+ok   symbol hmac_mgmt_tx_addba_req                 .text 0x44734 size 0x278
+ok   symbol hmac_mgmt_tx_addba_rsp                 .text 0x44a70 size 0x328
+ok   symbol hmac_mgmt_tx_delba                     .text 0x44f30 size 0x248
+ok   symbol hmac_mgmt_encap_addba_req              .text 0x43e50 size 0x198
+ok   symbol hmac_mgmt_encap_addba_rsp              .text 0x43fe8 size 0x19c
+ok   symbol hmac_mgmt_encap_delba                  .text 0x44184 size 0x16c
+ok   symbol hmac_mgmt_tx_action                    .text 0x490e4 size 0x13c
+ok   symbol hmac_mgmt_tx_ampdu_start               .text 0x4626c size 0x1c8
+ok   symbol hmac_mgmt_tx_ampdu_end                 .text 0x46434 size 0x184
+ok   symbol hmac_mgmt_tx_priv_req                  .text 0x48ef0 size 0xc8
+ok   symbol hmac_update_user_tx_addba_req          .text 0x44454 size 0x21c
+ok   symbol hmac_set_addba_req_para_sync           .text 0x44670 size 0xc4
+ok   symbol hmac_config_addba_req                  .text 0x5b6fc size 0x210
+ok   symbol hmac_config_delba_req                  .text 0x5c4cc size 0x254
+ok   symbol hmac_config_set_baw_size               .text 0x5ac3c size 0x150
+ok   symbol hmac_config_send_bar                   .text 0x57f98 size 0x84
+ok   symbol hmac_config_dump_ba_bitmap             .text 0x57cb8 size 0x90
+ok   symbol hmac_config_set_ampdu_aggr_num         .text 0x579d8 size 0x5c
+ok   symbol hmac_config_ampdu_start                .text 0x56318 size 0x8
+ok   symbol hmac_config_ampdu_end                  .text 0x5b070 size 0x1b0
+ok   symbol hdpp_user_sync_write                   .text 0x02a18 size 0x154
+ok   symbol wal_config_addba_req                   .text 0x1620ac size 0x4
+ok   symbol wal_config_delba_req                   .text 0x1620a8 size 0x4
+ok   symbol wal_config_set_baw_size                .text 0x1620a4 size 0x4
+ok   D2H dispatch row hmac_create_ba_event         id 0x02
+ok   D2H dispatch row hmac_del_ba_event            id 0x03
+ok   D2H dispatch row hmac_mgmt_rx_delba_event     id 0x0f
+ok   D2H dispatch row hmac_ba_action_msg_process   id 0x1d
+ok   WAL config row wal_config_addba_req         cmd 0x0ba
+ok   WAL config row wal_config_delba_req         cmd 0x324
+ok   WAL config row wal_config_set_baw_size      cmd 0x32c
+ok   encap req: FC 0x00d0 immediate
+ok   encap req: FC stored at frame[0]
+ok   encap req: category at frame[24]
+ok   encap req: category 3
+ok   encap req: action at frame[25]
+ok   encap req: total 33 bytes
+ok   encap req: BA param high byte at 28
+ok   encap req: peer MAC source user+0xa7e (DA)
+ok   encap req: own SA via +0x1134 pointer
+ok   encap req: BSSID source +0xf68
+ok   encap req: dialog token source
+ok   encap rsp: action at frame[25]
+ok   encap rsp: action 1
+ok   encap rsp: total 33 bytes
+ok   encap rsp: status at frame[27]
+ok   encap delba: FC 0x00d0 immediate
+ok   encap delba: reason at frame[28]
+ok   encap delba: param byte at frame[27]
+ok   encap delba: total 30 bytes
+ok   relay rsp: 0x0103 type/subtype
+ok   relay rsp: HCC id 0x0a
+ok   relay rsp: hdr[6] = id
+ok   relay rsp: payload+0 type/subtype
+ok   relay rsp: payload+2 user index
+ok   relay rsp: payload+7 TID
+ok   relay rsp: payload+9 status
+ok   relay rsp: payload+0x0c BAW u16
+ok   relay rsp: payload+0x14 dialog
+ok   relay rsp: payload+0x15 policy
+ok   relay rsp: BAW clamp user+0xf44
+ok   relay rsp: BAW clamp user+0xf46
+ok   relay rsp: allocator (32-byte payload)
+ok   relay rsp: hcc_msg_alloc(32)
+ok   relay delba: 0x0203 type/subtype
+ok   relay delba: HCC id 0x0a
+ok   relay delba: payload+7 TID
+ok   relay delba: payload+8 initiator
+ok   ampdu start: HCC id 0x0b
+ok   ampdu start: hdr[6] = id
+ok   ampdu start: payload+2 seq
+ok   ampdu start: payload+4 user key
+ok   ampdu start: payload+6 flow flag
+ok   ampdu end: HCC id 0x0b
+ok   ampdu end: payload+0 = 1
+ok   ampdu end: payload+4 user key
+ok   tx notify: HCC id 0x1c
+ok   tx notify: hdr[6] = id
+ok   tx notify: payload+0 uid u16
+ok   tx notify: payload+3 value
+ok   ba timeout: core msg id 8
+ok   ba timeout: hdr[6] = 8
+ok   ba timeout: hcc_msg_alloc(4) cookie
+ok   ba timeout: hcc_msg_tx_to_core
+ok   rx add: window alloc 0x1824
+ok   rx add: window memset 0x1824
+ok   rx add: window state +0x15 = 2
+ok   win init: start seq +0
+ok   win init: BAW +0x0a
+ok   win init: pending count +0x16
+ok   win init: 24-byte reorder slots
+ok   rx init: user+0x670 base
+ok   rx init: 0x80 RX session stride
+ok   rx init: 8x hmac_ba_rx_init
+ok   tx init: user+0x610 base
+ok   tx init: 12-byte TX session stride
+ok   tx init: 8x hmac_ba_tx_init
+ok   d2h 0x1d: action at hdr[15]
+ok   d2h 0x1d: TID at hdr[14]
+ok   d2h 0x1d action 0: TX setup
+ok   d2h 0x1d action 1: ADDBA rsp relay
+ok   d2h 0x1d action 1: frame at hdr+20
+ok   d2h 2: TID at hdr[14]
+ok   d2h 2: peer index at hdr[15]
+ok   d2h 2: TX BA setup
+ok   d2h 3: TX session state user+tid*0x88+0x84
+ok   wal ampdu_start: NOP returns 0
+ok   wal ampdu_start: plain return
+ok   wal addba_req: category-3 TX dispatcher
+ok   wal set_baw: user+0xf44
+ok   wal set_baw: user+0xf46
+ok   fw: pinned length 928920
+ok   fw: pinned sha256
+ok   fw: g0 table present
+ok   fw g0 id 0x0a -> CA 0x5ff64
+ok   fw g0 id 0x0b -> CA 0x5e2f4
+ok   fw g0 id 0x1c -> CA 0x5dfa0
+ok   fw id 0x0b handler: module lookup 0x961ae
+ok   fw id 0x0b handler: aggregation ctx 0x95188
+ok   fw id 0x0b handler: object lookup 0xd6a1e
+ok   fw id 0x0b handler: subtype at hdr[12]
+ok   fw id 0x0b handler: subtype 0/1
+ok   fw id 0x1c handler: builds follow-up id 0x0b
+ok   fw id 0x1c handler: hdr[6] = id
+
+SUMMARY: 147 checks, 0 failed

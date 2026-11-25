@@ -259,9 +259,16 @@ would need too, and it is the one that depends on the RX gate.
    the request, state = 2, timer with the per-TID vendor timeout.
 3. host -> peer: **ADDBA response** action frame (33 B, status 0, negotiated
    param).
-4. host -> fw: **g0 0x0A subtype 1** with the same negotiated parameters
-   (this is what programs the firmware RX BA context; the firmware then
-   accepts A-MPDUs for that TID and passes MPDUs up).
+4. host -> fw: the per-TID RX BA state sync. **Correction to the obvious
+   guess:** the vendor does *not* send g0 0x0A on this path - the received
+   ADDBA request path (`hmac_mgmt_rx_addba_req` ->
+   `hmac_mgmt_rx_addba_req_process` -> `hmac_ba_reset_rx_handle`) talks to
+   the firmware through the generic **user-sync writer** (item 7 with the
+   TID byte, item 8 with the RX start-seq record); the g0 0x0A subtype-1
+   relay is the *TX-direction* configuration (host received the ADDBA
+   response). The user-sync writer's wire encoding is [U] in this lane (see
+   sec. 11.3), which is one more reason the minimal BA-1 cut is the TX
+   direction.
 5. RX data: the host software scoreboard (256-slot ring, 12-bit seq window)
    releases in-order MPDUs and flushes gaps on timeout
    (`hmac_ba_rx_buffered_data_software_check`, `hmac_ba_timeout_proc`).
@@ -323,10 +330,16 @@ and any vendor WAL command emulation.
   frame byte, every relay payload byte, parser rejects, the state machine,
   the D2H actions, fail-closed behaviour. The selftest compiles
   `src/hi5622_ba.c` standalone; it needs no kernel, no vendor artifact, no
-  device.
+  device. **183 checks, 0 failures** (`evidence/host-tests.txt`).
+* **Skeleton build** (`tools/build-ba-skeleton.sh`): builds clean against
+  linux-6.18.60, 58 params, `ba_enable=0` default, debug-strip keeps .text
+  identical, and the module is provably inert (no external `hi5622_ba_*`
+  reference). Artifact: 359,992 B sha256 `78460841...cc33de02`
+  (`evidence/build-artifact.txt`; BUILD-NOTES.md).
 * **Static evidence** (`tools/ba_decode_check.py`): regenerates every address
   and byte-map anchor from the local vendor artifacts and prints PASS/FAIL;
-  the committed evidence transcripts are the tool's output.
+  **147 checks, 0 failed** against the pinned module + firmware
+  (`evidence/static-checks.txt`).
 * **Bench**: `FIRE-RECIPE.md`. The gate is RX; only rung B0 (the no-peer BA
   smoke) is evaluable on the current healthy chip. The BA session rungs must
   wait for a client association - BA-1 cannot be proven earlier, and a fire
@@ -339,11 +352,18 @@ and any vendor WAL command emulation.
    exact fw aggregation policy (and the g0 0x1C follow-up) is [U].
 2. The RX software scoreboard is decoded structurally [V offsets] but the
    slot-base/flag relation is [I]; it is not needed for BA-1's minimal cut.
-3. The user-sync writer's wire encoding (item 4 per-TID BA state, item 8 RX
-   seq) is [U]. The vendor sends it in addition to g0 0x0A. Our skeleton
-   leaves the hook but does not encode it; if the fw turns out to require it
-   for the first aggregation, it is the next decode target (32-byte descriptor
-   builder at 0x44670 is the TX-para sync, a good starting point).
+3. The user-sync writer's wire encoding is [U]: the vendor uses it for the
+   per-TID TX BA state (item 4: {tid, state(0/1/2), policy}, called from
+   `hmac_update_user_tx_addba_req`, `hmac_mgmt_rx_addba_rsp`,
+   `hmac_mgmt_rx_delba`), for the RX session add/remove (item 7, the TID
+   byte, `hmac_ba_reset_rx_handle`) and for the RX ADDBA start-seq record
+   (item 8, 6 bytes, `hmac_mgmt_rx_addba_req_process`). It is a *second*
+   channel next to g0 0x0A; the TX-direction relay (g0 0x0A) is decoded and
+   sufficient for the minimal BA-1 cut, so our skeleton leaves the sync hook
+   unimplemented. If the firmware turns out to require the item-4 state sync
+   before the first aggregation, it is the next decode target (the
+   `hdpp_user_sync_write` dispatch table at 0x2a18 and the
+   `hmac_user_sync_add` registration at 0x8e5d0 are the entry points).
 4. The D2H 0x1D message carries the received ADDBA response frame at hdr+20;
    the exact min length the fw sends is 9 bytes + the rest of the frame
    [V: the host handler passes 9 to the validator, and reads frame[0..8]].

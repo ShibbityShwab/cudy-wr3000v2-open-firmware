@@ -1,0 +1,12 @@
+== 1. base tree staged: 85 files
+== 2. apply the BA skeleton patch
+== 3. build the module (linux-6.18.60, armv7 musl)
+== build clean (0 warnings, 0 errors)
+== debug-strip keeps .text identical
+== 4. artifact contract
+module: 359992 B debug-stripped, sha256 784608410b4dd8e4c74be9b923d62465d4c397d12e84ee2ce58710efcc33de02, 58 params (unstripped 1377860 B)
+ba_enable: ba_enable: (uint)
+inert check: no external object references hi5622_ba_* (skeleton unwired)
+linked: hi5622_ba_check_enabled and the BA core are in the module
+
+ARTIFACT: /tmp/wifi-ba-skeleton-artifact/hi5622_wifi.ko

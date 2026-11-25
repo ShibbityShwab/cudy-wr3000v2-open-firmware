@@ -166,6 +166,8 @@ user-sync writer is out of scope - see T7 note]:
 - DELBA: buf = {tid, 0, 0, 0}, len 4, item 4.
 - ADDBA req process: len 6, item 8 (RX start-seq record).
 - TX ADDBA request update: buf = {tid, tx_state, policy, 0}, len 3/4, item 4.
+- RX BA session add/remove: buf = {tid}, len 1, item 7
+  (`hmac_ba_reset_rx_handle`).
 
 ## T4. H2D group 0, id **0x0B** - A-MPDU TX start/end [V]
 
