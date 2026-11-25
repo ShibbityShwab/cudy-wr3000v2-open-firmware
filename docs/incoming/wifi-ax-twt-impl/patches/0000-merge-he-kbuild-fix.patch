@@ -1,0 +1,11 @@
+--- a/Kbuild	2026-11-25 22:58:17.534725602 +0700
++++ b/Kbuild	2026-11-25 22:58:17.533625861 +0700
+@@ -34,7 +34,7 @@
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
+-		 hi5622_desc_table.o hi5622_dfs_mode.o \
++		 hi5622_desc_table.o hi5622_dfs_mode.o hi5622_he_caps.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
