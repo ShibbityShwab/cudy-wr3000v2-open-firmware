@@ -97,8 +97,7 @@ sudden_good_delta_gdpt_ratio=0, sudden_bad_delta_gdpt_ratio=1, descend_protocol_
 
 ### gi_time_ax_tbl (g_ast_alg_cfg_gi_time_ax_tbl)
 
-0.8us=0, 1.6us=1, 3.2us=2, 7DFR: deinit ok.
-=0
+0.8us=0, 1.6us=1, 3.2us=2,  7DFR: deinit ok. =0
 
 ### gi_time_nonax_tbl (g_ast_alg_cfg_gi_time_nonax_tbl)
 

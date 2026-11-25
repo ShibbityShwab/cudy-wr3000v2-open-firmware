@@ -174,13 +174,26 @@ def sym_u32_value(elf, name):
     return struct.unpack("<I", elf.d[sec["offset"] + s["value"]:][:4])[0]
 
 
+def _printable(text):
+    """Make a decoded rodata string safe for committed markdown/JSON: replace
+    every non-printable byte (the tables can point past their real end)."""
+    out = []
+    for ch in text:
+        c = ord(ch)
+        out.append(ch if 32 <= c < 127 else " ")
+    return "".join(out)
+
+
 def ro_str(elf, off):
     s = elf.by_name[".rodata.str1.4"]
     d = elf.d
     o = s["offset"] + off
     if o >= len(d):
         return "?"
-    return d[o:d.index(b"\x00", o)].decode("utf-8", "replace")
+    end = d.find(b"\x00", o)
+    if end < 0:
+        return "?"
+    return _printable(d[o:end].decode("utf-8", "replace"))
 
 
 def link_addend(elf, off):
