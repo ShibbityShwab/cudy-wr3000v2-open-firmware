@@ -19,7 +19,7 @@ Deliverables:
 | --- | --- |
 | [REPORT.md](REPORT.md) | the two AX control planes, the ten config-event keys, the ALG text plane, the BSS-color finding, the implementation path, the limits |
 | [TABLES.md](TABLES.md) | T1-T12: every address, table row, worker instruction, body layout, probe address, frame byte |
-| [FIRE-RECIPE.md](FIRE-RECIPE.md) | the read-only probe pack (R0) and the AX-event rung (R1), the zero-rebuild BSS-color observation (R2), PASS/FAIL and abort rules |
+| [FIRE-RECIPE.md](FIRE-RECIPE.md) | the read-only probe pack (R0), the zero-rebuild BSS-color differential (R1), the AX-event post rung (R2), PASS/FAIL and abort rules |
 | [tools/fw_ax_advanced_re.py](tools/fw_ax_advanced_re.py) | re-derives every claim from the pinned artifacts (`--selftest` 210/210 PASS) |
 | `src/hi5622_ax_events.{c,h}` | the portable host frame model for the nine AX config events + the ALG text body (kernel/host compile the same code, fail-closed) |
 | `src/ax_events_selftest.c` | host selftest: 31 checks incl. the exact T12 frame bytes and every refusal path |
@@ -63,7 +63,7 @@ Bottom line (details in REPORT.md):
    for it** and the firmware beacon path never reads the host IE builders:
    the observed Color 25 is firmware-side state.  Changing it needs either a
    firmware worker that reads a host message (not found) or a firmware patch;
-   R2 is the zero-rebuild differential that classifies the source.
+   R1 is the zero-rebuild differential that classifies the source.
 5. **Not testable on the current AP:** DL/UL OFDMA transmission (needs an
    associated AX client and the RX gate), MU-MIMO sounding (same), and the
    MU EDCA element on air (needs a client or a firmware beacon builder that

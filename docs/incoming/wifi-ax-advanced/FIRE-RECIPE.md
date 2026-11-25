@@ -27,8 +27,11 @@ three runtime ALG handler addresses.  Run on the live 2.4 GHz HE AP before
 any rebuild.
 
 1. **Context**: `u32 0x171458` (expect 0x00119758), `u16 0x171504` (the
-   base offset to add to every pointer; expect 0).  Then `u32 0x1198E8`
-   = `ctx0+0x190` = the AP's VAP pointer (expect nonzero; chase it).
+   base offset to add to every pointer; expect 0).  Correction to the sibling
+   recipe: ../wifi-fw-beacon-tx prints `0x172504`; the boot init stores at
+   G+0x6DC = CA 0x4923A = **0x171504** (re-verified this lane).  Then
+   `u32 0x1198E8` = `ctx0+0x190` = the AP's VAP pointer (expect nonzero;
+   chase it).
 2. **TWT/SR module bytes**: `u8 0x119832` (ctx0+0xDA; expect 0 before any
    enable), `u8 0x119846` (ctx0+0xEE; expect 0).
 3. **ALG handler slots** (the decisive part):

@@ -37,7 +37,7 @@ contexts at CA 0x119758 + k*0xB40), key = `u16 hdr+20`, len = **one byte**
 `worker(r0=ctx, r1=len, r2=body)`.  (Lane ../wifi-fw-dfs-worker decoded the
 dispatcher; this lane re-asserts it and adds the AX keys.)
 
-## T2. The ten AX config-event keys [V]
+## T2. The AX config-event keys [V] (10 feature controls, 15 keys with the five MU EDCA selectors)
 
 Row/table from the pinned tables; `worker` is the table value (Thumb bit
 set), the code address is `worker & ~1`.
@@ -228,9 +228,9 @@ firmware beacon builder is shown to consume it; today it is not.
 | --- | --- | --- |
 | HE Capabilities IE | on air (rich firmware caps, not the sparse vendor wiphy caps) | scan once (R0) |
 | HE Operation params | on air 0x003FF4, Default PE 4, TXOP RTS 1023 | scan once (R0) |
-| BSS Color | 25 | R2 differential: change hostapd `he_bss_color`/SSID/channel, restart, scan; a fixed color = a firmware constant |
-| MU EDCA element | **[U]** whether the firmware mode-10 builder emits one | R1: post MU EDCA selectors, then scan/diff |
-| TWT element / ext-TWT IE | **[U]** | R1: post 0x00E9 + 0x035D, then scan/diff |
+| BSS Color | 25 | R1 differential: change hostapd `he_bss_color`/SSID/channel, restart, scan; a fixed color = a firmware constant |
+| MU EDCA element | **[U]** whether the firmware mode-10 builder emits one | R2: post MU EDCA selectors, then scan/diff |
+| TWT element / ext-TWT IE | **[U]** | R2: post 0x00E9 + 0x035D, then scan/diff |
 | OFDMA triggers / MU-MIMO sounding / TWT agreements | blocked by the RX gate (association) | not in this lane |
 
 ## T11. Read-only probe pack (no writes, one boot) [V addresses]
@@ -241,7 +241,7 @@ read-only helper (O_RDONLY on the PCIe resource0).  Static addresses:
 | size | CPU | what | expected |
 | --- | ---: | --- | --- |
 | u32 | 0x171458 | context slot table[0] = context[0] pointer | 0x00119758 |
-| u16 | 0x171504 | context base offset (add to every pointer) | 0x0000 [I] |
+| u16 | 0x171504 | context base offset (add to every pointer) | 0x0000 [I]; note ../wifi-fw-beacon-tx FIRE-RECIPE prints 0x172504 - the boot init stores at G+0x6DC = CA 0x4923A = **0x171504** (this lane's value) |
 | u32 | 0x1198E8 | ctx0+0x190 = VAP pointer | nonzero; chase |
 | u8 | 0x119832 | ctx0+0xDA TWT bits 6/7 | 0 before an enable |
 | u8 | 0x119846 | ctx0+0xEE multi-AP SR enable | 0 default |

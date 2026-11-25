@@ -42,7 +42,7 @@ host-side entry points (`wal_config_alg_cfg_param_host_entry`,
 `alg_sr_config_param_output_entry`, ...) are all in the module .symtab
 (TABLES T8).
 
-**F2 [V] Ten AX config keys and their workers are decoded to the field.**
+**F2 [V] The AX config keys and their workers are decoded to the field (10 feature controls, 15 keys with the five MU EDCA selectors).**
 HE GI `0x006F`, ext-TWT IE `0x00E9`, TWT enable `0x035D`, MU EDCA
 selectors `0x005B..0x005F`, BFER `0x04C8`, BFEE `0x0335`, trigger SU
 BF feedback `0x032E`, cyclic-scheme `0x0353`, multi-AP SR `0x04B6`,
@@ -78,7 +78,7 @@ g0-id1 key carries the color and the firmware beacon never reads host IEs
 (../wifi-ax-he-caps certified negative).  The live beacon nevertheless shows
 Color **25** [L] - so the color is firmware-side state.  This lane's honest
 conclusion: without a firmware worker or a firmware patch we cannot *set*
-the BSS color; R2 classifies whether it is a constant or derived (and
+the BSS color; R1 classifies whether it is a constant or derived (and
 whether any host config knob has an effect at all).
 
 **F6 [V] The ALG text plane is fully decoded except the handler bodies.**
@@ -121,10 +121,10 @@ the ALG text body, with fail-closed validation:
 What can be fired on the current 2.4 GHz HE AP: the TWT enable frame and the
 ext-TWT IE frame, the MU EDCA selector frames and the BF/cyclic/SR enable
 frames, each followed by a read-back of the decoded firmware fields
-(FIRE-RECIPE R1).  What cannot: any effect that requires an associated AX
+(FIRE-RECIPE R2).  What cannot: any effect that requires an associated AX
 client (OFDMA trigger/TB PPDU, MU-MIMO NDPA/NDP, TWT agreements) or an
 on-air MU EDCA/TWT element - unless the firmware beacon builder is shown to
-read the decoded VAP state, which R1's scan-diff settles empirically.
+read the decoded VAP state, which R2's scan-diff settles empirically.
 
 ## 4. What a PASS proves, what a FAIL falsifies
 
