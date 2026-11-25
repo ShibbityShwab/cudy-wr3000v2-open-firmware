@@ -1,0 +1,36 @@
+== the corrected object chain ==
+perlink = u32(ctx+0x4B0)            ; bench 0x00175A18
+P       = u32(perlink+0xE20)         ; CA 0x84228: ldr.w r1, [r7, #3616] @ 0xe20
+O       = u32(P+0x1A00)             ; CA 0xA2FA8: add.w r3, r0, #6656 @ 0x1a00
+R       = u32(O+0x2D8) = u32(perlink+0x2D8)
+
+== who writes O (bandobj+0x1A00) ==
+  CA 0x48A68: add.w r3, r4, #6656 @ 0x1a00
+  CA 0x48A6C: str.w sl, [r3]
+  value = CA 0xB1EE4(bank) context (the published per-link)
+
+== who arms the RF programme's mode gate (P+0xF04 == 3) ==
+  only writer CA 0xB5D1C: strb.w r5, [r4, #3844] @ 0xf04
+  enclosing worker CA 0xB5B9C = g0-id1 config event key 0x1F7
+  table A entries are 8 B {u16 key; u16 pad; u32 worker|thumb}:
+    CA 0x10C51C key 0x00f7 worker CA 0x45A30  (desc table 0x00F7)
+    CA 0x10C524 key 0x01f7 worker CA 0xB5B9C  (RF mode    0x01F7)
+    CA 0x10C52C key 0x07e7 worker CA 0xB58FC  (CAC state  0x07E7)
+    CA 0x10C534 key 0x0136 worker CA 0xB5F3C  (sibling    0x0136)
+    CA 0x10C53C key 0x07e8 worker CA 0x429B0  (sibling    0x07E8)
+  worker CA 0xB5B9C: r5 = body[0]; modes 1..5 via tbb; writes the
+  build-stored mode byte at strb.w r5, [r4, #3844] @ 0xf04
+  and the RF register image R+0x3A8..R+0x418 (R = *(perlink+0x2D8))
+  (CA 0xB5BF0 stores R+0x3A8.. ; CA 0xB5C90 stores R+0x418 etc.)
+
+== host-side emitters (hi5622v100_wifi.ko, read in place) ==
+  key 0x01F7: hmac_config_set_country_for_dfs (.text+0x5762C) -> hmac_config_send_event; WAL command 'set_country_for_dfs' calls wal_config_set_country_for_dfs.
+  key 0x07E7: hmac_config_cac_sync_state / hmac_dfs_cac_start / _stop / _timeout_fn (6 MOVW sites) -- CAC state, not mode.
+  module .text = file+0x38, 0x16285C B
+
+== negative census ==
+  stores to perlink+0xE20 (P): 0 (none in Thumb-2 or ARM)
+  loads  of perlink+0xE20 (P): 50
+  stores to the +0x2D8 field family: 1
+  => P and R are established outside the pinned image code
+     (boot-prelude/ROM/host patch); the probe must read them.

@@ -1,0 +1,22 @@
+Corrected read-only probe pack (CPU -> BAR0 -> phys = 0x40000000 + CPU + 0x6B8000)
+object                       CPU        BAR0       phys         note
+module-table slot0           0x00171458 0x00829458 0x40829458   expect 0x00119758
+module-table base u16        0x00172504 0x0082a504 0x4082a504   expect 0 -> ctx0 = slot0 + base
+ctx0                         0x00119758 0x007d1758 0x407d1758   computed: slot0[0] + base
+u32(ctx0+0x4B0) = perlink    0x00119c08 0x007d1c08 0x407d1c08   expect 0x00175A18
+u32(ctx0+0x4B8) = bandobj    0x00119c10 0x007d1c10 0x407d1c10   expect 0x0015E570
+P = u32(perlink+0xE20)       0x00176838 0x0082e838 0x4082e838   THE MISSING READ: expect the band object 0x0015E570; if 0 the RF programme logs id 2999 and skips
+P+0x1A00 = O (bandobj+0x1A00) 0x0015ff70 0x00817f70 0x40817f70   bench: == perlink (published by CA 0x48A68)
+P+0xF04 = RF mode byte       0x0015f474 0x00817474 0x40817474   expect 3 after an H2D 0x01F7 mode-3 event; 0 = mode setter never ran
+P+0xF87 = channel-range flag 0x0015f4f7 0x008174f7 0x408174f7   0 ch36-64 / 1 ch100+
+P+0xD70 = band attach flag   0x0015f2e0 0x008172e0 0x408172e0   expected 1; CA 0xB5B9C requires it
+P+0xD6C = band/bank ids      0x0015f2dc 0x008172dc 0x408172dc   reference
+R = u32(O+0x2D8)             0x00175cf0 0x0082dcf0 0x4082dcf0   expect nonzero block pointer (0x4004xxxx or a RAM shadow); the programme does NOT null-check it
+R+0x3a8                      (after R)  -          -            step 3: R+0x3a8, expect 0x1800060
+R+0x3ac                      (after R)  -          -            step 3: R+0x3ac, expect 0x3e6138a
+R+0x3b4                      (after R)  -          -            step 3: R+0x3b4, expect 0x26f138a
+R+0x3cc                      (after R)  -          -            step 3: R+0x3cc, expect -
+R+0x3d8                      (after R)  -          -            step 3: R+0x3d8, expect 0xc14580b0
+R+0x410                      (after R)  -          -            step 3: R+0x410, expect -
+R+0x414                      (after R)  -          -            step 3: R+0x414, expect -
+R+0x418                      (after R)  -          -            step 3: R+0x418, expect -

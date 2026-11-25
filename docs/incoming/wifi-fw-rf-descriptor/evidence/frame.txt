@@ -1,0 +1,14 @@
+H2D g0-id1 config event, key 0x01F7 (RF mode + register image)
+  wire (same family as the working 0x0064/0x0124/0x0127 ladder)
+  header 12 B | 8 B prologue (msg id 1, tag 0x5A5A) | key u16 | len u16 | body | 4 B inherited tail
+  key    = 0x01F7  (firmware worker CA 0xB5B9C)
+  len    = 1
+  body[0]= mode  (firmware reads it at CA 0xB5BE2: ldrb r5,[r2,#0])
+  mode values: 1..5 accepted (tbb at CA 0xB5D72); the 5 GHz RF programme CA 0xA2FA2 requires mode == 3
+  required firmware state before sending: u32(bandobj+0x1A00) != 0
+  (published per-link) and u8(bandobj+0xD70) == 1 (band attached)
+  host-side stock emitter: hmac_config_set_country_for_dfs
+  (wifi.ko .text+0x5762C; WAL command name 'set_country_for_dfs');
+  the chain is userspace WAL -> wal ops slot .data+0x890C ->
+  wal_config_set_country_for_dfs -> hmac_config_set_country_for_dfs
+  -> hmac_config_send_event(key 0x01F7, len, data).

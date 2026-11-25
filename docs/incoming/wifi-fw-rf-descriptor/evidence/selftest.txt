@@ -1,0 +1,65 @@
+PASS  firmware identity: 928920 B sha256 7fc87e2051e8...
+decoded 342693 instructions (928920 B)
+PASS  @0x84228 = ldr.w r1, [r7, #3616] @ 0xe20  [got: ldr.w r1, [r7, #3616] @ 0xe20]
+PASS  @0x406ba = ldr.w r4, [r5, #3616] @ 0xe20  [got: ldr.w r4, [r5, #3616] @ 0xe20]
+PASS  @0xa2fa2 = push {r4, r5, r6, lr}  [got: push {r4, r5, r6, lr}]
+PASS  @0xa2fa8 = add.w r3, r0, #6656 @ 0x1a00  [got: add.w r3, r0, #6656 @ 0x1a00]
+PASS  @0xa2fac = ldr r6, [r3, #0]  [got: ldr r6, [r3, #0]]
+PASS  @0xa2fb2 = ldmia.w sp!, {r4, r5, r6, lr}  [got: ldmia.w sp!, {r4, r5, r6, lr}]
+PASS  @0xa2fb6 = movw r1, #2999 @ 0xbb7  [got: movw r1, #2999 @ 0xbb7]
+PASS  @0xa2fc0 = ldrb.w r2, [r0, #3844] @ 0xf04  [got: ldrb.w r2, [r0, #3844] @ 0xf04]
+PASS  @0xa2fc4 = cmp r2, #3  [got: cmp r2, #3]
+PASS  @0xa2fd4 = ldr.w r4, [r6, #728] @ 0x2d8  [got: ldr.w r4, [r6, #728] @ 0x2d8]
+PASS  @0x89840 = ldr.w r2, [r0, #728] @ 0x2d8  [got: ldr.w r2, [r0, #728] @ 0x2d8]
+PASS  @0x89844 = ldr.w r3, [r2, #1040] @ 0x410  [got: ldr.w r3, [r2, #1040] @ 0x410]
+PASS  @0x8984c = str.w r3, [r2, #1040] @ 0x410  [got: str.w r3, [r2, #1040] @ 0x410]
+PASS  @0x89924 = push {r3, r4, r5, lr}  [got: push {r3, r4, r5, lr}]
+PASS  @0x89928 = ldr.w r4, [r0, #728] @ 0x2d8  [got: ldr.w r4, [r0, #728] @ 0x2d8]
+PASS  @0x48a68 = add.w r3, r4, #6656 @ 0x1a00  [got: add.w r3, r4, #6656 @ 0x1a00]
+PASS  @0x48a6c = str.w sl, [r3]  [got: str.w sl, [r3]]
+PASS  @0x48a78 = cmp r3, #2  [got: cmp r3, #2]
+PASS  @0xa4fe2 = movw r1, #7016 @ 0x1b68  [got: movw r1, #7016 @ 0x1b68]
+PASS  band-0 object literal 0x0015CA08 at CA 0x48674
+PASS  band-1 object literal 0x0015E570 at CA 0x7628C
+PASS  @0xb5d1c = strb.w r5, [r4, #3844] @ 0xf04  [got: strb.w r5, [r4, #3844] @ 0xf04]
+PASS  CA 0xB5D1C is the ONLY strb to +0xF04  [writers: 0xb5d1c]
+PASS  table A entry 93 = {key 0x01F7, worker 0xB5B9D} at CA 0x10C524  [key 0x1f7 worker 0xb5b9d]
+PASS  preceding entry = {key 0x00F7, worker 0x45A31} (desc table)
+PASS  sibling entry = {key 0x07E7, worker 0xB58FD} (CAC state)
+PASS  sibling entry = {key 0x0136, worker 0xB5F3D}
+PASS  sibling entry = {key 0x07E8, worker 0x429B1}
+PASS  @0xb5d6a = subs r3, r5, #1  [got: subs r3, r5, #1]
+PASS  @0xb5d6e = bhi.w 0xb5ea4  [got: bhi.w 0xb5ea4]
+PASS  @0xb5d72 = tbb [pc, r3]  [got: tbb [pc, r3]]
+PASS  @0xb5b9e = ldr.w r4, [r0, #1208] @ 0x4b8  [got: ldr.w r4, [r0, #1208] @ 0x4b8]
+PASS  @0xb5ba6 = add.w r6, r4, #6656 @ 0x1a00  [got: add.w r6, r4, #6656 @ 0x1a00]
+PASS  @0xb5baa = ldr r0, [r6, #0]  [got: ldr r0, [r6, #0]]
+PASS  @0xb5bc8 = ldrb.w r1, [r4, #3440] @ 0xd70  [got: ldrb.w r1, [r4, #3440] @ 0xd70]
+PASS  @0xb5be8 = ldr.w r3, [r0, #728] @ 0x2d8  [got: ldr.w r3, [r0, #728] @ 0x2d8]
+PASS  @0xb5bf0 = str.w r2, [r3, #936] @ 0x3a8  [got: str.w r2, [r3, #936] @ 0x3a8]
+PASS  @0xb5be2 = ldrb r5, [r2, #0]  [got: ldrb r5, [r2, #0]]
+PASS  CA 0x40684 callers = {0x420B4, 0x83AEA, 0x8422E}  [0x420b4 0x83aea 0x8422e]
+PASS  CA 0xA2FA2 callers = {0x406AA, 0x617FA}  [0x406aa 0x617fa]
+PASS  CA 0x89924 callers = {0xA3108, 0xB5E7C}  [0xa3108 0xb5e7c]
+PASS  no Thumb-2 word store to +0xE20  [count=0]
+PASS  no Thumb-2 byte/half store to +0xE20  [count=0]
+PASS  no ARM store to +0xE20  [count=0]
+PASS  50 Thumb-2 loads of [x,#0xE20] (the only accesses)  [count=50]
+PASS  no add/movw/str immediate 0xE20 anywhere
+PASS  no LE32 literal 0x00000E20 in the image
+PASS  no LE32 literal 0x00002820 in the image
+PASS  exactly one store to the +0x2D8 field family (R+0x2D8, CA 0xF39E8)  [count=1]
+PASS  @0x4854a = strh.w r6, [r5, #3436] @ 0xd6c  [got: strh.w r6, [r5, #3436] @ 0xd6c]
+PASS  @0x48a7e = strb.w r3, [r4, #3440] @ 0xd70  [got: strb.w r3, [r4, #3440] @ 0xd70]
+PASS  @0xb1d90 = mov r2, r0  [got: mov r2, r0]
+PASS  @0xb1d92 = mov.w r3, #7264 @ 0x1c60  [got: mov.w r3, #7264 @ 0x1c60]
+PASS  @0xd4710 = movw r3, #7272 @ 0x1c68  [got: movw r3, #7272 @ 0x1c68]
+PASS  boot prelude init CA 0xD1B68 zeroes CA 0x174BE0, 0x1C68 bytes
+PASS  hi5622v100_wifi.ko ELF .text section found
+PASS  MOVW r1,#0x01F7 at .text+0x5763C (hmac_config_set_country_for_dfs)  [word=0xe30011f7]
+PASS  exactly 2 MOVW r1,#0x01F7 sites in the module  [count=2]
+PASS  WAL command name 'set_country_for_dfs' present in the module
+PASS  WAL thunk name 'wal_config_set_country_for_dfs' present
+PASS  MOVW r1,#0x07E7 (CAC-state senders) present in the module  [count=6]
+
+62 checks PASS, 0 FAIL
