@@ -1,0 +1,41 @@
+PASS parse.scan.bss_count got 2
+PASS parse.scan.target_found 
+PASS parse.scan.target_freq 2437.0
+PASS parse.scan.target_rssi -63.0
+PASS parse.scan.target_psk ['PSK']
+PASS parse.scan.target_ccmp ['CCMP']
+PASS assess.wpa2_pass PASS
+PASS assess.weak_fail FAIL
+PASS assess.absent_fail 
+PASS assess.open_pass PASS
+PASS assess.wpa3_pass PASS
+PASS assess.wpa3_mfp_required 16-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00cc)
+PASS assess.profile_mismatch_warn WARN
+PASS classify.complete.wpa2 COMPLETED != COMPLETED
+PASS classify.complete.wpa2.complete True
+PASS classify.auth-timeout.wpa2 AUTH-TIMEOUT != AUTH-TIMEOUT
+PASS classify.auth-timeout.wpa2.complete False
+PASS classify.assoc-timeout.wpa2 ASSOC-TIMEOUT != ASSOC-TIMEOUT
+PASS classify.assoc-timeout.wpa2.complete False
+PASS classify.4way-failed.wpa2 FOURWAY-FAILED != FOURWAY-FAILED
+PASS classify.4way-failed.wpa2.complete False
+PASS classify.auth-timeout.wpa3 SAE-AUTH-TIMEOUT != SAE-AUTH-TIMEOUT
+PASS classify.auth-timeout.wpa3.complete False
+PASS classify.net-not-found NETWORK-NOT-FOUND != NETWORK-NOT-FOUND
+PASS classify.net-not-found.complete False
+PASS classify.driver-error DRIVER-ERROR != DRIVER-ERROR
+PASS classify.driver-error.complete False
+PASS config.template.open.present 
+PASS config.template.open.substituted 
+PASS redact.open 
+PASS config.template.wpa2.present 
+PASS config.template.wpa2.substituted 
+PASS redact.wpa2 
+PASS config.template.wpa3.present 
+PASS config.template.wpa3.substituted 
+PASS redact.wpa3 
+PASS secrets.lane_scan 
+PASS profiles.count ['open', 'wpa2', 'wpa3']
+PASS profiles.open.ssid 
+PASS profiles.wpa2.ssid 
+PASS profiles.wpa3.ssid 

@@ -1,0 +1,19 @@
+== corrected association module verifier (host-only, read-only)
+artifact : /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+tree     : /tmp/sibling-mgmt-fix
+assoc    : /tmp/wifi-assoc-build/integ
+PASS  artifact.present  found
+PASS  artifact.size  size=344372 expected=344372
+PASS  artifact.sha256  sha256=ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+PASS  artifact.params  params=56 expected=56
+PASS  feature  mgmt_tx op reached
+PASS  feature  set_default_mgmt_key posted
+PASS  feature  sta_ops: STA %pM added
+PASS  feature  data-tx tx: posts=
+PASS  feature  DP rx_arm
+PASS  feature  did not re-arm the scan context
+PASS  carrier.corrected  old WAL 0x01F2 carrier absent (g0 id6 carrier)
+PASS  carrier.g0id6_builder  himg_build_hcc_mgmt_tx in the artifact
+PASS  provenance.patch_applies  sibling carrier patch applies to the association tree
+PASS  provenance.files_match  0 of 5 patched files differ
+RESULT: PASS - this is the corrected association module (ab9e18a4 chain)

@@ -1,0 +1,5 @@
+# Live-run evidence is written to the parent repo's gitignored build/ tree
+# (build/wifi-assoc-e2e/). This fallback dir stays local-only.
+local-evidence/
+__pycache__/
+*.pyc

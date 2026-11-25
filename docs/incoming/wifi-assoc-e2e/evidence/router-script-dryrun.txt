@@ -1,0 +1,67 @@
+
+=== check (read-only) ===
+device dir : /sys/bus/pci/devices/0000:00:00.0
+log dir    : /tmp/assoc-e2e
+profile    : wpa2   (PSK from ASSOC_PSK / lab default; never logged)
+DRY: required attrs: prepare upload verify seed hcc_arm hcc_loop release hcc_ready h2d_ctx_create h2d_txq_sync72 dp_probe dp_setup h2d_txq_addr_sync dp_rx_arm dp_rx_drain dp_tx_status cfg80211_status data_tx_status boot hcc_status
+DRY: firmware files /lib/firmware/hi_wifi/FIRMWARE.PD4.bin and wifi_block.bin must pre-exist (policy: pushed by hand, never packaged)
+DRY: CHECK PASS (dry-run)
+
+=== load corrected association module ===
+artifact : /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+DRY: insmod /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko fw_path=hi_wifi/FIRMWARE.PD4.bin wifi_block_path=hi_wifi/wifi_block.bin allow_frames=32 frame_gap_ms=100 h2d_send_budget=10 vap_start_first=1 vap_start_mode=1 vap_start_module=0 hcc_poll_ms=5 hcc_trace=1 stop_ap_mode=0 mgmt_diag=0 rx_enable=1 beacon_static=1 beacon_vap_start=1 wpa_keys=1 wpa_key_module=0 sta_join=0 ht_mode=0 vht_cap=0 band_vendor=0 scan_band_cfg=0 mgmt_tx=1 mgmt_rx=1 sta_ops=1 eapol_rx=1 sta_user_del=0 data_tx=1 data_tx_peer=1 data_tx_protect=0 data_tx_timeout_ms=200
+
+=== boot ladder ===
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/prepare
+prepare = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/upload
+upload = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/verify
+verify = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/seed
+seed = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/hcc_arm
+hcc_arm = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/hcc_loop
+hcc_loop = 1
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/release
+release = 1
+DRY: poll hcc_ready for id1_seen=1 id2_seen=1
+hcc_ready: (dry-run)
+DRY: golden check (page 0x86807fef/7/2/0xabcd, state 1, mask 0, staging 0)
+
+=== C2 (h2d_ctx_create + h2d_txq_sync72) ===
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/h2d_ctx_create
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/h2d_txq_sync72
+h2d_status: (dry-run)
+DRY: golden check (page 0x86807fef/7/2/0xabcd, state 1, mask 0, staging 0)
+
+=== AP start (vendor 5-message order), profile=wpa2 ===
+hostapd conf: /etc/hi5622/hostapd-wpa2.conf
+DRY: copy /etc/hi5622/hostapd-wpa2.conf to /tmp/assoc-e2e/hostapd.conf; substitute wpa_passphrase only if the placeholder is present
+DRY: iw phy PHY interface add wlan0 type __ap; ip link set wlan0 up
+DRY: hostapd -B -t -P /tmp/assoc-e2e/hostapd.pid -i wlan0 /tmp/assoc-e2e/hostapd.conf > /tmp/assoc-e2e/hostapd.log 2>&1
+DRY: expect dmesg: plan (5 steps): vap_add ap_chan ap_ssid ap_cfg ap_vap_start -> vendor AP-start order complete -> wlan0: AP-ENABLED
+
+=== data plane: AP-first order (dp_probe -> dp_setup -> txq_addr_sync -> dp_rx_arm) ===
+dp_probe: (dry-run)
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/dp_setup
+dp_status: (dry-run)
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/h2d_txq_addr_sync
+dp_tx_status: (dry-run)
+DRY: echo 1 > /sys/bus/pci/devices/0000:00:00.0/dp_rx_arm
+dp_rx_arm store done; live-bank verdict is in dmesg (expect status=0x00000182 mask=0xfffffcc1 norm/small rptr=0x0020)
+DRY: golden check (page 0x86807fef/7/2/0xabcd, state 1, mask 0, staging 0)
+DP PASS
+
+=== RX drain loop (bounded, 1 s cadence) ===
+DRY: background loop: while :; do echo 1 > /sys/bus/pci/devices/0000:00:00.0/dp_rx_drain; sleep 1; done
+
+=== evidence snapshot ===
+DRY: dump boot / hcc_status / dp_status / cfg80211_status / data_tx_status / hostapd log / dmesg markers
+
+FULL STAGE COMPLETE - now run the HOST client rung:
+  ./scripts/assoc_e2e.py reset && ./scripts/assoc_e2e.py scan --profile wpa2
+  ./scripts/assoc_e2e.py assoc --profile wpa2
+then capture router evidence: sh scripts/router/assoc-router-fire.sh --stage snapshot
+STAGE DONE: full
