@@ -115,7 +115,7 @@ strip_artifact() { # $1 = dir, $2 = output
 }
 
 rm -rf "$BASEWORK" "$PWORK" "$HWORK" "$ART" "$ARTWORK"
-mkdir -p "$ARTWORK"
+mkdir -p "$ARTWORK" "$(dirname "$HWORK")"
 
 echo "== stack 1: proven combined module (hardware-validated identity)"
 stage_proven "$BASEWORK"

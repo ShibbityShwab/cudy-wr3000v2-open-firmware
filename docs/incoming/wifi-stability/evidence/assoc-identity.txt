@@ -1,0 +1,18 @@
+FINAL ASSOCIATION module (host-built, NOT fired)
+chain: all-patch 5b587949 (44c6cc12 -> d145a205 -> 175a4617 -> scan R4 ->
+       stability b5dfb883 -> rx/beacon/wpa/sta static) + wpa3-sae + ap-mgmt +
+       sta-ops + data-tx
+artifact: /tmp/wifi-assoc-artifact/hi5622_wifi.ko
+stripped:   344472 B sha256 251d08f0c0a579f27cc3a3fb9f96df99c851a3315fa40f1fe2c7df267419d98b
+unstripped: 1323608 B sha256 1d470e614ef2e2ecae88ffeb2a8116b7f31ba651e775880f84ad59754db77011
+vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8
+depends: cfg80211
+params: 56
+warnings: 0; strip leaves .text byte-identical
+cfg80211 symvers: 12 lines; imports cfg80211_bss_iter,
+  cfg80211_mgmt_tx_status_ext, cfg80211_rx_mgmt_ext; no undefined symbols
+new params: mgmt_tx/mgmt_rx/sta_ops/eapol_rx/sta_user_del/data_tx/
+  data_tx_peer/data_tx_protect/data_tx_timeout_ms (all fail-closed defaults)
+conflicts: Kbuild (object union), hi5622_cfg80211.c (teardown-hook union);
+  mgmt_stypes owned by wpa3-sae (AP tx=0x3c2a)
+fire recipe: ASSOCIATION-INTEGRATION.md section 4

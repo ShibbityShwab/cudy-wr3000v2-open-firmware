@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Out-of-tree build of the Hi5622V100 clean-room Wi-Fi transport driver
+# against the luofu 6.18.60 kernel tree (M0-M2 cfg80211 full-MAC layer +
+# MAC host-interface data plane: E1 rings/table + first TX/RX actions;
+# wifi-dp-air merge of wifi-dp-txrx into the mode-1 provider).
+#
+# Build line (see tools/build.sh, which also reports size/sha256/vermagic):
+#   export KDIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60
+#   export STAGING_DIR=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir
+#   make ARCH=arm CROSS_COMPILE=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi- \
+#        -C $KDIR M=$(pwd) modules
+#
+# cfg80211 note: this luofu tree builds with CONFIG_CFG80211 unset (OpenWrt
+# ships cfg80211 as the kmod-cfg80211 package), so the six cfg80211 symbols
+# this module imports are declared for modpost in cfg80211-provider.symvers
+# (same technique as wifi-wal-glue/glue/).  Every symbol listed there is a
+# real EXPORT_SYMBOL in the project tree's net/wireless/*.c - checked by
+# tools/gen_cfg80211_symvers.py --check.  The *target* kernel must set
+# CONFIG_CFG80211=m (see ../cfg80211.config); the running kernel then
+# provides the symbols and the module's modinfo depends=cfg80211.
+
+obj-m := hi5622_wifi.o
+hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+		 hcc_core.o hcc_core_kernel.o \
+		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+		 hi5622_rx_live.o \
+		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+		 hi5622_cfg80211_ops.o \
+		 hi5622_scan_logic.o hi5622_frames_provider.o \
+		 hi5622_frame_post.o hi5622_scan.o \
+		 vapscan_frames.o hi5622_vapscan_map.o \
+		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+		 vapstart_frames.o hi5622_ap_frames.o \
+		 hi5622_band_cfg.o hi5622_key_frames.o hi5622_keys.o \
+		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+		 hi5622_mgmt_logic.o hi5622_mgmt.o \
+		 hi5622_data_tx_logic.o hi5622_data_tx.o
+
+ccflags-y += -I$(src)
+
+# modpost provider declarations for the cfg80211 module (not built in-tree).
+KBUILD_EXTRA_SYMBOLS += $(src)/cfg80211-provider.symvers
