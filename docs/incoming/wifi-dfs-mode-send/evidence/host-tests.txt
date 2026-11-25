@@ -1,0 +1,14 @@
+== 1. portable 0x01F7 DFS-mode model (src/)
+frame:000100041d00010000005a5a0000000001000000f701010003ffffffff
+54 checks, 0 failed
+== 2. ordering contract on the patched driver tree (/tmp/dfsmode-build)
+-- 2a. the frame passes the REAL frame_post validator (h2d_frames.c)
+15 checks, 0 failed
+-- 2b. the ordering contract (hi5622_scan_logic.c)
+14 checks, 0 failed
+derived frame (29 B): 000100041d00010000005a5a0000000001000000f701010003ffffffff
+C builder frame  (29 B): 000100041d00010000005a5a0000000001000000f701010003ffffffff
+50 checks, 0 failed
+== 3. built artifact contract (/tmp/dfsmode-artifact/hi5622_wifi.ko)
+artifact 364192 B sha256 f540856776e77c00ff1a526582466763bac9a3e63834264099faf3a3a10266ac params 61
+host tests PASS (no device contacted)

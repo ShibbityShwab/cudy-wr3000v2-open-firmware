@@ -1,0 +1,1 @@
+f540856776e77c00ff1a526582466763bac9a3e63834264099faf3a3a10266ac  /tmp/dfsmode-artifact/hi5622_wifi.ko

@@ -50,6 +50,12 @@ if [ -n "$TREE" ] && [ -f "$TREE/hi5622_scan.c" ]; then
 			FAIL=1
 		fi
 	done
+	echo '-- 2a. the frame passes the REAL frame_post validator (h2d_frames.c)'
+	$CC -std=c99 -Wall -Wextra -pedantic -Werror -O2 -I"$TREE" \
+		"$LANE/tools/validate_frame_test.c" "$TREE/h2d_frames.c" \
+		-o "$WORK/validate_frame_test"
+	"$WORK/validate_frame_test" | tee "$WORK/part2-validate.txt"
+	echo '-- 2b. the ordering contract (hi5622_scan_logic.c)'
 	$CC -std=c99 -Wall -Wextra -pedantic -Werror -O2 -I"$TREE" \
 		"$LANE/tools/order_test.c" "$TREE/hi5622_scan_logic.c" \
 		-o "$WORK/order_test"
