@@ -1,4 +1,4 @@
-# wifi-f1-from-capture - decode the stock H2D trace into the missing RX/FF1 message
+# wifi-f1-from-capture - decode the stock H2D trace into the missing RX (F1) message
 
 **Lane:** `fw-f1-capture` (shared task **task-198**), 2026-11-28. **Host-only**: decode of the
 successful stock H2D capture + static decode of the local vendor modules/firmware. No device
@@ -7,7 +7,8 @@ contact. No vendor binary, firmware byte or raw capture is committed.
 Companions: [REPORT.md](REPORT.md) (the decode and the F1 ranking),
 [TABLES-families.md](TABLES-families.md) (the corrected family table with the builder/firmware
 evidence), [FIRE-RECIPE.md](FIRE-RECIPE.md) (implementation path + bench ladder),
-[tools/decode_f1_capture.py](tools/decode_f1_capture.py), [evidence/](evidence/).
+[tools/decode_f1_capture.py](tools/decode_f1_capture.py) (stdlib decoder, `--selftest` 5/5; run
+`tools/run-host-tests.sh /tmp/h2d-capture.log`), [evidence/](evidence/).
 
 ## One-line result
 
@@ -19,7 +20,7 @@ bytes). The **HEARTBEAT (g4 id4) is a device->host message**, byte-identical to 
 builder at CA `0xC6BB2` (payload copied from the `HEARTBEAT` literal at CA `0x106328`) - it is
 never a host send, so our driver's `heartbeat off` is not the RX bug. The second big "unmatched"
 family, `g2 id29`, is the **plat.ko HCC timer message** (payload = the timer's host context
-pointer); it is not an RX enable either. **No stock H2D message carries an RX-ring/TXR enable**, so
+pointer); it is not an RX enable either. **No stock H2D message carries an RX-ring/TRX enable**, so
 the capture's strongest F1 result is a negative: F1 is not a missing H2D frame. The only
 datapath-class stock message our driver never sends is the EDCA timeout - already built in our
 driver (`edca`) - and the [FIRE-RECIPE.md](FIRE-RECIPE.md) fires it as the last host-side

@@ -259,10 +259,11 @@ def main(argv):
     if "--selftest" in argv:
         selftest()
         return 0
-    if len(argv) < 2:
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    if not args:
         print(__doc__)
         return 2
-    report(parse(argv[1]), as_json="--json" in argv)
+    report(parse(args[0]), as_json="--json" in argv)
     return 0
 
 

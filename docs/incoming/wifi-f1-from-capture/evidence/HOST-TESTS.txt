@@ -1,0 +1,19 @@
+# HOST-TESTS - fw-f1-capture (host-only)
+
+$ sh tools/run-host-tests.sh /tmp/h2d-capture.log
+== decode_f1_capture.py --selftest
+selftest: 5/5 PASS
+
+== decode_f1_capture.py on a local capture (optional; skipped if absent)
+records 1716 ; valid H2D 604 ; torn 1112 (unreadable 250)
+
+VALID H2D families (node_len == frame total, aliases resolved):
+  g0 id29                      n= 329
+  g0 id1 key 0x00d8            n= 104
+  g0 id1 key 0x000b            n=  57
+  g0 id1 key 0x0127            n=  38
+  g0 id1 key 0x07e8            n=  17
+  g0 id1 key 0x07d9            n=   7
+  g0 id1 key 0x0069            n=   7
+  g0 id1 key 0x0005            n=   5
+  g0 id1 key 0x0052            n=   5
