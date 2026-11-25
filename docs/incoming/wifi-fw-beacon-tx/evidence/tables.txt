@@ -1,0 +1,61 @@
+=== T1. H2D g0-id1 table A rows used by the beacon path ===
+  key 0x0064  row   1  worker CA 0x0449E5  VAP add (band bind)
+  key 0x0065  row   2  worker CA 0x046395  VAP start (beacon state create)
+  key 0x0066  row   3  worker CA 0x04455B  VAP cmd 0x0066
+  key 0x0067  row   4  worker CA 0x045F75  VAP stop/teardown
+  key 0x0124  row 108  worker CA 0x0841B9  channel worker (RF programme)
+  key 0x0127  row 110  worker CA 0x084DA5  AP config
+  key 0x00F7  row  92  worker CA 0x045A31  descriptor table
+  key 0x01F7  row  93  worker CA 0x0B5B9D  RF mode (F2)
+
+=== T2. band objects (CA 0x15CA08 + 0x1B68*band) ===
+  band 0: CA 0x15CA08  +0x1A00 published per-link (RAM)
+  band 1: CA 0x15E570  +0x1A00 published per-link (RAM)
+
+=== T3. per-link beacon state (first VAP start on that band) ===
+  perlink+0x6B8  u32  beacon buffer pointer (280 B alloc)
+  perlink+0x6BC  u32  aux object pointer (CA 0xEE394 result)
+  perlink+0x6C0  u32  descriptor pointer (92 B alloc)
+  perlink+0x6C4  u16  beacon length/queue count
+  perlink+0x6C6  u8  beacon state enable
+
+=== T4. per-band init tables (23 x {u16 off,u16 val}) ===
+  base: band0 = 0x40110000, band1 = 0x40114000
+  #  off  band0  band1 
+  0  0x550  0x0003  0x0003
+  1  0x564  0x0003  0x0003
+  2  0x588  0x0033  0x0035   <-- band1 differs
+  3  0x588  0x0022  0x0024   <-- band1 differs
+  4  0x548  0x0000  0x6000   <-- band1 differs
+  5  0x548  0x0001  0x6001   <-- band1 differs
+  6  0x554  0x0002  0x0002
+  7  0x548  0x0101  0x6101   <-- band1 differs
+  8  0x55C  0x0000  0x0000
+  9  0x55C  0x0001  0x0001
+  10 0x568  0x0002  0x0002
+  11 0x55C  0x0101  0x0101
+  12 0x594  0x0033  0x0035   <-- band1 differs
+  13 0x594  0x0022  0x0024   <-- band1 differs
+  14 0x54C  0x0000  0x6000   <-- band1 differs
+  15 0x54C  0x0001  0x6001   <-- band1 differs
+  16 0x554  0x0000  0x0000
+  17 0x54C  0x0101  0x6101   <-- band1 differs
+  18 0x560  0x0000  0x0000
+  19 0x560  0x0001  0x0001
+  20 0x568  0x0000  0x0000
+  21 0x560  0x0101  0x0101
+  22 0x5BC  0x0001  0x0001
+
+=== T5. per-band register writes in CA 0x4AF0C ===
+  band1: 0x40114500 = 0x55 then 0xFF; read 0x4011451C/0x40114520
+  band0: 0x40110500 = 0x55 then 0xFF; read 0x4011051C/0x40110520
+  both : 0x4010C220 |= 1|8|0x20|0x1000 ; 0x40101220 = band ? 1 : 2
+
+=== T6. PT_ / RF anchors (unchanged from the RF lane) ===
+  band1 R = CA 0x400B2000 (device) ; R+0x3A8 = 0x01800060 ; R+0x3AC = 0x03E6138A
+  u8(P+0xF04) = RF mode (3 after 0x01F7)
+
+=== T7. ISR name blob (names only) ===
+  CA 0x12266C..0x122BA4 ; contains:
+    smac_tbtt_5g_isr
+    smac_tbtt_2g_isr

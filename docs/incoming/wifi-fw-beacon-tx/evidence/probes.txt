@@ -1,0 +1,98 @@
+=== R0 probe pack (read-only) ===
+RAM : BAR0 = CA + 0x6B8000 ; bar0read phys = 0x40000000 + CPU + 0x6B8000
+IO  : BAR0 = 0x3B8000 + (CA - 0x40000000) ; phys = 0x40000000 + BAR0
+
+object                             CA         BAR0       phys       len  expected
+----------------------------------------------------------------------------------------------------------------
+module-table slot0                 0x00171458 0x00829458 0x40829458 4    0x00119758
+module-table base u16              0x00172504 0x0082A504 0x4082A504 4    0
+ctx0                               0x00119758 0x007D1758 0x407D1758 4    computed
+ctx0+0x4B0 perlink                 0x00119C08 0x007D1C08 0x407D1C08 4    0x00175A18
+ctx0+0x4B4 bank ctx                0x00119C0C 0x007D1C0C 0x407D1C0C 4    nonzero
+ctx0+0x4B8 bandobj                 0x00119C10 0x007D1C10 0x407D1C10 4    0x0015E570 (band1/5G)
+band0 obj                          0x0015CA08 0x00814A08 0x40814A08 4    band object base
+band1 obj                          0x0015E570 0x00816570 0x40816570 4    band object base / bench P
+band0 published per-link           0x0015E408 0x00816408 0x40816408 4    nonzero
+band1 published per-link           0x0015FF70 0x00817F70 0x40817F70 4    0x00175A18
+ctx0+0x190 VAP                     0x001198E8 0x007D18E8 0x407D18E8 4    nonzero after VAP add
+G head                             0x001747C4 0x0082C7C4 0x4082C7C4 4    nonzero when started
+G+0x370 MAC start cb               0x00174B34 0x0082CB34 0x4082CB34 4    nonzero
+G+0x374 beacon start cb            0x00174B38 0x0082CB38 0x4082CB38 4    nonzero
+per-band ops table head            0x00173800 0x0082B800 0x4082B800 4    nonzero (band0 base)
+
+=== per-module context scan (field B / hdr[3] = 0..18) ===
+slot k: ptr = u32(0x171458 + 4*k); ctx_k = ptr + u16(0x172504)
+        then read ctx_k+0x4B0 (perlink) / +0x4B4 / +0x4B8 (bandobj) / +0x190 (VAP)
+        and perlink+0x6B8 / +0x6BC / +0x6C0 / +0x6C4 / +0x6C6
+        band object 0x15CA08 + 0x1B68*band identifies band0/band1
+slot   ptr CA     ctx+0x4B8 CA ctx+0x190 CA
+0      0x00171458 0x00119C10 0x001198E8
+1      0x0017145C 0x0011A750 0x0011A428
+2      0x00171460 0x0011B290 0x0011AF68
+3      0x00171464 0x0011BDD0 0x0011BAA8
+4      0x00171468 0x0011C910 0x0011C5E8
+5      0x0017146C 0x0011D450 0x0011D128
+6      0x00171470 0x0011DF90 0x0011DC68
+7      0x00171474 0x0011EAD0 0x0011E7A8
+8      0x00171478 0x0011F610 0x0011F2E8
+9      0x0017147C 0x00120150 0x0011FE28
+10     0x00171480 0x00120C90 0x00120968
+11     0x00171484 0x001217D0 0x001214A8
+12     0x00171488 0x00122310 0x00121FE8
+13     0x0017148C 0x00122E50 0x00122B28
+14     0x00171490 0x00123990 0x00123668
+15     0x00171494 0x001244D0 0x001241A8
+16     0x00171498 0x00125010 0x00124CE8
+17     0x0017149C 0x00125B50 0x00125828
+18     0x001714A0 0x00126690 0x00126368
+
+two-step RAM probes (resolve the pointer first, then add):
+  band_b obj      = 0x15CA08 + 0x1B68 * band
+  band_b perlink  = u32(band_b obj + 0x1A00)
+  beacon state    = perlink + 0x6B8 / 0x6BC / 0x6C0 / 0x6C4 / 0x6C6
+  P               = u32(perlink + 0xE20); R = u32(P + 0x1A00 + 0x2D8)
+  VAP             = u32(ctx0 + 0x190); VAP+0x10/+0x14/+0x138/+0x13A
+
+=== R0 probe pack (device IO CA) ===
+object                             CA         BAR0       phys       len 
+------------------------------------------------------------------------------
+band0 +0x500 reset/status          0x40110500 0x004C8500 0x404C8500 4   
+band0 +0x51C status                0x4011051C 0x004C851C 0x404C851C 4   
+band0 +0x520 status                0x40110520 0x004C8520 0x404C8520 4   
+band0 +0x548 mode                  0x40110548 0x004C8548 0x404C8548 4   
+band0 +0x54C mode                  0x4011054C 0x004C854C 0x404C854C 4   
+band0 +0x550                       0x40110550 0x004C8550 0x404C8550 4   
+band0 +0x554                       0x40110554 0x004C8554 0x404C8554 4   
+band0 +0x55C                       0x4011055C 0x004C855C 0x404C855C 4   
+band0 +0x560                       0x40110560 0x004C8560 0x404C8560 4   
+band0 +0x564                       0x40110564 0x004C8564 0x404C8564 4   
+band0 +0x568                       0x40110568 0x004C8568 0x404C8568 4   
+band0 +0x588                       0x40110588 0x004C8588 0x404C8588 4   
+band0 +0x594                       0x40110594 0x004C8594 0x404C8594 4   
+band0 +0x5BC band id               0x401105BC 0x004C85BC 0x404C85BC 4   
+band1 +0x500 reset/status          0x40114500 0x004CC500 0x404CC500 4   
+band1 +0x51C status                0x4011451C 0x004CC51C 0x404CC51C 4   
+band1 +0x520 status                0x40114520 0x004CC520 0x404CC520 4   
+band1 +0x548 mode                  0x40114548 0x004CC548 0x404CC548 4   
+band1 +0x54C mode                  0x4011454C 0x004CC54C 0x404CC54C 4   
+band1 +0x550                       0x40114550 0x004CC550 0x404CC550 4   
+band1 +0x554                       0x40114554 0x004CC554 0x404CC554 4   
+band1 +0x55C                       0x4011455C 0x004CC55C 0x404CC55C 4   
+band1 +0x560                       0x40114560 0x004CC560 0x404CC560 4   
+band1 +0x564                       0x40114564 0x004CC564 0x404CC564 4   
+band1 +0x568                       0x40114568 0x004CC568 0x404CC568 4   
+band1 +0x588                       0x40114588 0x004CC588 0x404CC588 4   
+band1 +0x594                       0x40114594 0x004CC594 0x404CC594 4   
+band1 +0x5BC band id               0x401145BC 0x004CC5BC 0x404CC5BC 4   
+                                   0x4010C200 0x004C4200 0x404C4200 4   
+                                   0x4010C220 0x004C4220 0x404C4220 4   
+                                   0x40101220 0x004B9220 0x404B9220 4   
+                                   0x4010E150 0x004C6150 0x404C6150 4   
+                                   0x4010E154 0x004C6154 0x404C6154 4   
+                                   0x4010820C 0x004C020C 0x404C020C 4   
+                                   0x40108214 0x004C0214 0x404C0214 4   
+                                   0x40002264 0x003BA264 0x403BA264 4   
+                                   0x40002268 0x003BA268 0x403BA268 4   
+                                   0x4000226C 0x003BA26C 0x403BA26C 4   
+
+forbidden: RC misc window 0x10160000..0x1016FFFF

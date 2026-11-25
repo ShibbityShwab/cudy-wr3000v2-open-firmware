@@ -1,0 +1,136 @@
+=== selftest: image identity ===
+PASS   1  firmware length == 928920
+PASS   2  firmware sha256 == 7fc87e20...311b
+
+=== selftest: dispatch and H2D keys ===
+PASS   3  g0-id1 dispatch CA 0x43D58 is a push
+PASS   4  ctx lookup CA 0xFE578 callable
+
+=== selftest: field-B per-module context model ===
+PASS   5  dispatcher reads field B = hdr[3]
+PASS   6  dispatcher calls ctx lookup(0, field B)
+PASS   7  worker pointer loaded from table entry+4
+PASS   8  body = hdr+24, len = 1 byte hdr+22, worker(ctx,len,body)
+PASS   9  field B is bounded to 0..0x12 (19 contexts)
+PASS  10  slot address = table + 4*(0x18C + field B)
+PASS  11  ctx = slot pointer + u16 common bias
+PASS  12  19 ctx bodies: 0x119758 + k*0xB40, last body 0x1261D8
+PASS  13  bench ctx0 == first context body
+PASS  14  table A key 0x0064 -> VAP add worker CA 0x449E4
+PASS  15  table A key 0x0065 -> VAP start worker CA 0x46394
+PASS  16  table A key 0x0067 -> VAP stop worker CA 0x45F74
+PASS  17  table A key 0x0124 -> channel worker CA 0x841B8
+PASS  18  table A key 0x0127 -> AP config worker CA 0x84DA4
+PASS  19  table A key 0x01F7 -> RF mode worker CA 0xB5B9C
+
+=== selftest: band binding (0x0064 -> 0xA4FC8 -> CA 0x44BBC) ===
+PASS  20  worker 0x449E4 reads body[1] for the ctx lookup
+PASS  21  worker 0x449E4 calls ctx lookup CA 0xFE578
+PASS  22  band = body[0x12]
+PASS  23  band lookup CA 0xA4FC8 called with ctx+2
+PASS  24  band object published per-link must be nonzero
+PASS  25  ctx+0x4B0 = perlink
+PASS  26  ctx+0x4B8 = band object
+PASS  27  ctx+0x4B4 = bank context
+PASS  28  band object array stride = 0x1B68
+PASS  29  band object array base = 0x15CA08 (literal CA 0xA4FF4)
+PASS  30  band1 object = base + stride = 0x15E570
+
+=== selftest: channel worker (0x0124) band-1 RF predicate ===
+PASS  31  channel worker perlink = ctx+0x4B0
+PASS  32  channel worker loads P = *(perlink+0xE20)
+PASS  33  channel worker calls RF branch CA 0x40684
+
+=== selftest: AP config key 0x0127 ===
+PASS  34  hidden_ssid <- body[0x89]
+PASS  35  beacon_interval u32 <- body[0]
+PASS  36  dtim -> VAP+0x14 at 0x84F3C
+PASS  37  beacon_interval -> VAP+0x10 at 0x84F4A
+PASS  38  MD present <- body[0x96]
+PASS  39  MD cap b0 <- body[0x97]
+PASS  40  MDID u16 <- body[0x94] at 0x84E96
+PASS  41  MDID -> VAP+0x13A
+PASS  42  HT/VHT hint body[0x8B] -> CA 0xFDDF8
+PASS  43  wireless mode body[0x8E] -> CA 0xD4048
+
+=== selftest: VAP start key 0x0065 - beacon state ===
+PASS  44  bandobj = *(ctx+0x4B8)
+PASS  45  perlink = *(ctx+0x4B0)
+PASS  46  first-start test reads perlink+0x6C6
+PASS  47  perlink+0x6C4 = 16 (u16)
+PASS  48  perlink+0x6C0 = descriptor pointer
+PASS  49  perlink+0x6B8 = beacon buffer pointer
+PASS  50  perlink+0x6C6 = 1 (beacon enable)
+PASS  51  VAP start calls band start CA 0x971D8
+
+=== selftest: band start CA 0x971D8 - the G hooks ===
+PASS  52  G = CA 0x1747C4 (literal CA 0x9745C)
+PASS  53  if (*G != 0)
+PASS  54  load G+0x370 (MAC start)
+PASS  55  call hook with ctx
+PASS  56  load G+0x374 (beacon start)
+PASS  57  call hook with ctx
+
+=== selftest: beacon TX descriptor refresh CA 0x7E5CC ===
+PASS  58  descriptor builder called from 0x72184
+PASS  59  VAP+0x138 -> desc+0x25E
+PASS  60  VAP+0x13A -> desc+0x260
+
+=== selftest: per-band MAC init tables ===
+PASS  61  band0 table literal CA 0x9F494 -> 0x105714
+PASS  62  band1 table literal CA 0x9F964 -> 0x105770
+PASS  63  both tables 23 pairs
+PASS  64  exactly 10 band1-differing pairs (2/3/4/5/7/12/13/14/15/17)
+PASS  65  pair 4: 0x548 0x0000 (band0) vs 0x6000 (band1)
+PASS  66  pair 14: 0x54C 0x0000 (band0) vs 0x6000 (band1)
+PASS  67  pair 12: 0x594 0x0033 (band0) vs 0x0035 (band1)
+PASS  68  pair 13: 0x594 0x0022 (band0) vs 0x0024 (band1)
+PASS  69  pair 22: 0x5BC = 1 (band-id write)
+PASS  70  pair 7: 0x548 0x0101 (band0) vs 0x6101 (band1)
+PASS  71  pair 17: 0x54C 0x0101 (band0) vs 0x6101 (band1)
+PASS  72  pair 2: 0x588 0x0033 (band0) vs 0x0035 (band1)
+PASS  73  band0 loop base = 0x40000000 + 0x110000
+PASS  74  band0 loop base low half 0x110000
+PASS  75  band1 loop base = 0x40004000 + 0x110000
+PASS  76  band1 writes band-id 0 to 0x401145BC
+PASS  77  band0 writes band index to 0x401105BC
+
+=== selftest: per-band reset/start CA 0x4AF0C ===
+PASS  78  band from u8(perlink+0x11D)
+PASS  79  band1 register base literal CA 0x4B118 = 0x40114500
+PASS  80  band0 register base literal CA 0x4B11C = 0x40110500
+PASS  81  reset value 0x55 stored to band base
+PASS  82  reset value 0xFF stored to band base
+PASS  83  band0 branch repeats 0x55 then 0xFF
+PASS  84  MAC interrupt enable CA 0x4010C220 (literal CA 0x4B0FC)
+PASS  85  MAC interrupt mask CA 0x4010C220 bits 1|8|0x20|0x1000
+PASS  86  global IRQ enable CA 0x40101220 (literal CA 0x4B104)
+PASS  87  band1 -> value 1, band0 -> value 2 written to 0x40101220
+
+=== selftest: enable-TRX worker CA 0xE8520 ===
+PASS  88  band byte = u8(msg+0xA)
+PASS  89  band1 branch test
+PASS  90  band1 setup helper CA 0xD97BC
+PASS  91  band1 reg 0x4010E150 (literal CA 0xE8660)
+PASS  92  band1 reg 0x4010E154 (literal CA 0xE8664)
+PASS  93  band0 regs 0x4010820C/0x40108214 (literals CA 0xE8638/C)
+PASS  94  SMAC IRQ status/enable 0x4010C200/0x4010C220
+PASS  95  SoC INTC 0x40002264/68/6C
+
+=== selftest: RF lane cross-checks ===
+PASS  96  RF programme CA 0xA2FA2 present
+PASS  97  band1 R device base 0x400B2000 is the RF device block
+PASS  98  bench band1 mode byte CA 0x15F474 == band1obj+0xF04
+PASS  99  bench band1 P == band1 object
+
+=== selftest: TBTT ISR name blob ===
+PASS 100  smac_tbtt_5g_isr present in the name blob
+PASS 101  smac_tbtt_2g_isr present in the name blob
+PASS 102  name blob carries no code pointer (no reference to its base)
+
+=== selftest: probe pack sanity ===
+PASS 103  RAM probe count >= 20
+PASS 104  IO probe count >= 30
+PASS 105  no probe falls into the forbidden RC misc window
+
+RESULT: 105 checks, 0 failed

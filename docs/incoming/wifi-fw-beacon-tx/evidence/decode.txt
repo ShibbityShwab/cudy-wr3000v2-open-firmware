@@ -1,0 +1,64 @@
+=== 5 GHz beacon TX path - decode ===
+
+[1] band binding (H2D g0-id1 key 0x0064 VAP add, worker CA 0x449E4)
+    @0449EC  ldrb    r1, [r2, #1]
+    @044B6C  ldrb    r1, [r7, #18]   (band = body[0x12])
+    @0A4FC8  push    {r3, lr}   (band object = CA 0x15CA08 + 0x1B68*band)
+    @044BBC  str.w   r3, [r4, #1200]   -> ctx+0x4B0
+    @044BC2  str.w   r0, [r4, #1208]   -> ctx+0x4B8 (band object)
+
+[2] per-band RF programme (key 0x0124 channel worker CA 0x841B8)
+    @0841BC  ldr.w   r7, [r0, #1200]   (perlink = ctx+0x4B0)
+    @084228  ldr.w   r1, [r7, #3616]   (P = *(perlink+0xE20))
+    @08422E  bl      0x40684   (CA 0xA2FA2: RF image when u8(P+0xF04)==3)
+
+[3] AP config (key 0x0127 worker CA 0x84DA4)
+    @084DBC  ldrb.w  r2, [r5, #137]               hidden_ssid  <- body[0x89] -> ctx+0x18D.b0
+    @084E96  ldrh.w  r2, [r5, #148]               beacon_interval u32 <- body[0x00]
+    @084F4A  str     r3, [r2, #16]                  -> VAP+0x10
+    @084F3C  str     r3, [r2, #20]                dtim u32 <- body[0x04] -> VAP+0x14
+    @084ECE  ldrb.w  r1, [r5, #150]               MD present  <- body[0x96] -> VAP+0x138.b0
+    @084EA6  ldrb.w  r1, [r5, #151]               MD cap b0   <- body[0x97] -> VAP+0x138.b1
+    @084E9E  strh.w  r2, [r3, #314]               MDID u16    <- body[0x94] -> VAP+0x13A
+
+[4] VAP start (key 0x0065 worker CA 0x46394) - beacon state
+    @0463D4  ldr.w   sl, [r4, #1208]              bandobj = *(ctx+0x4B8)
+    @046450  ldr.w   r6, [r8, #1200]              perlink = *(ctx+0x4B0)
+    @0464F2  ldrb.w  r3, [r6, #1734]              first start? load perlink+0x6C6 (beacon enable)
+    @046588  strh.w  r3, [r6, #1732]              perlink+0x6C4 = 16 (u16)
+    @046590  str.w   r7, [r6, #1728]              perlink+0x6C0 = 92 B descriptor buffer
+    @046596  str.w   r9, [r6, #1720]              perlink+0x6B8 = 280 B beacon buffer
+    @04659A  strb.w  r3, [r6, #1734]              perlink+0x6C6 = 1 (beacon state enabled)
+    @0464A6  mov     r0, r8                       0x5E95C(ctx)
+    @0464B0  bl      0x971d8                      CA 0x971D8(bandobj, ctx) - band start
+
+[5] band start CA 0x971D8 - the G hooks
+    G = CA 0x1747C4 (literal @CA 0x9745C)
+    @09735C  ldr     r3, [r7, #0]                 if (*G != 0)
+    @097360  ldr.w   r3, [r7, #880]               r3 = *(G+0x370) MAC-start hook
+    @097366  mov     r0, r4                       call hook(ctx)
+    @09736A  ldr.w   r3, [r7, #884]               r3 = *(G+0x374) beacon-start hook
+    @097370  mov     r0, r4                       call hook(ctx)
+
+[6] beacon TX descriptor refresh CA 0x7E5CC
+    @07E634  ldrh.w  r3, [r5, #312]   (VAP+0x138 -> desc+0x25E)
+    @07E63C  ldrh.w  r3, [r5, #314]   (VAP+0x13A -> desc+0x260)
+
+[7] per-band MAC blocks (device CA)
+    band0 = 0x40110000   band1 = 0x40114000 (delta 0x4000)
+    init tables: band0 CA 0x105714, band1 CA 0x105770 (23 pairs)
+    applier CA 0x9F2C6: band0 loop @0x9F3CA -> base 0x40110000; band1 loop @0x9F912 -> base 0x40114000
+
+[8] per-band reset/start CA 0x4AF0C (band from u8(perlink+0x11D))
+    @04AF5C  ldrb.w  r3, [r6, #285]
+    band1 = 0x401145xx (lit @0x4B118), band0 = 0x401105xx (lit @0x4B11C)
+    writes 0x55 then 0xFF to base+0x500; sets CA 0x4010C220 bits 1|8|0x20|0x1000; CA 0x40101220 = 1 (band1) / 2 (band0)
+
+[9] enable-TRX worker CA 0xE8520
+    band1: CA 0x4010E150 / 0x4010E154
+    band0: CA 0x4010820C / 0x40108214
+    both: CA 0x4010C200 / 0x4010C220 + SoC INTC 0x40002264/68/6C
+
+[10] TBTT ISR codes
+    name smac_tbtt_5g_isr   at CA 0x1229E8 (name blob 0x12266C..0x122BA4; no code pointer, no code reference -> handler address [U])
+    name smac_tbtt_2g_isr   at CA 0x1229FC (name blob 0x12266C..0x122BA4; no code pointer, no code reference -> handler address [U])

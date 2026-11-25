@@ -1,0 +1,37 @@
+=== H2D frame specs (quoted protocol spec; no vendor bytes) ===
+
+vap_add (g0 id1 key 0x0064)
+  carrier: g0 id1: 12 B HCC hdr (group 0; hdr[3] = module/chip id), 8 B prologue, u16 key at +0x14, u16 len at +0x16, body at +0x18
+  body   : +0x00 create type (2 = AP); +0x01 parent module idx; +0x04 module/VAP idx; +0x06 flag; +0x08 bit0; +0x12 BAND SELECTOR 0 (2.4G) / 1 (5G)  <-- binds ctx 4B0/4B4/4B8
+  role   : must be posted for the target band BEFORE that band's 0x0127/0x0065
+
+ap_cfg (g0 id1 key 0x0127, body 156)
+  carrier: same g0 id1 carrier
+  body   : +0x00 u32 beacon_interval -> VAP+0x10; +0x04 u32 dtim -> VAP+0x14; +0x08 RSN present; +0x09 RSN IE (64 B); +0x49 vendor IE (64 B); +0x89 hidden_ssid -> ctx+0x18D.b0; +0x8A HT cap b5 -> VAP+0x34C.b3; +0x8B HT cap b6; +0x8C VHT cap b5 -> VAP+0x360.b2; +0x8D VHT cap b6 -> VAP+0x360.b3; +0x8E wireless mode; +0x93 start flag; +0x94 u16 MDID -> VAP+0x13A; +0x96..98 MD caps -> VAP+0x138.b0..b2
+  role   : no band field, no beacon-enable field; it only stages VAP state
+
+vap_start (g0 id1 key 0x0065, body 12)
+  carrier: same g0 id1 carrier
+  body   : +0 channel arg; +1 state byte; +2 cfg byte; +3 cfg byte; +4 u32 cookie (-> VAP+0x444)
+  role   : first start of a VAP on the currently bound band allocates the per-link beacon state (perlink+0x6B8..+0x6C6) and calls the band-start hooks
+
+channel (g0 id1 key 0x0124)
+  carrier: same g0 id1 carrier
+  body   : body[0]/body[2] channel pair validated by CA 0x10172C; stored into ctx+16/+17/+18/+19; then CA 0x40684(ctx, P=*(perlink+0xE20), perlink) writes the RF image when u8(P+0xF04)==3
+  role   : per-band RF programme only; does not touch the beacon state
+
+rf_mode (g0 id1 key 0x01F7)
+  carrier: g0 id1; hdr[3] selects the module ctx (bench: hdr[3]=0 = ctx0 = band1)
+  body   : len 1, body[0] = RF mode 1..5 (3 = band1 ch36-64 image)
+  role   : the F2 fire; enables CA 0xA2FA2 on the next channel worker
+
+Band-1 beacon TX order that the decode implies (each posted while the
+module ctx is bound to band 1):
+  1. g0 id1 0x0064 VAP add, body[0x12] = 1   (binds ctx 4B0/4B4/4B8)
+  2. g0 id1 0x0124 channel, band=1 ch36     (RF programme)
+  3. g0 id1 0x01F7 len 1 body {3}           (RF mode = 3, F2)
+  4. g0 id1 0x0124 channel again            (writes the R image)
+  5. g0 id1 0x0127 AP config (156 B)        (stages VAP beacon params)
+  6. g0 id1 0x0065 VAP start (12 B)         (allocates per-link beacon
+     state + calls G+0x370 / G+0x374)
+  then read-only: perlink+0x6B8/+0x6C0/+0x6C6 and the band1 MAC block.
