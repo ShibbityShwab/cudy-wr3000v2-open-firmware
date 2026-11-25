@@ -121,3 +121,13 @@ the same 3 auth frames.  Record: page/golden, vector mask, staging, dmesg
 
 Every rung: one load per boot, attended, recovery door armed; STOP on any
 golden-page deviation and power-cycle physically.
+
+---
+
+## 6. Follow-up 2 (2026-11-25): F4 forwarding decode + pre-RX request negative
+
+Full decode and implementation spec: REPORT section 11.
+
+**F4 (implement next, safe half):** the vendor host-MAC ISR forwards status bit 0/1 as an HCC **group 0 / id 0** message (12-byte header, 4-byte payload {u32 dev}, tag/len by the carrier; firmware handler is the payload-free stub) and W1Cs the served bit. Bits 5/7/8/9 go out as **group 0 / id 7** (16-byte payload {u32 dev, u8 3, u32 status-word}; firmware handler reads the payload - not emulated yet). Our 0x182 boot status has bit 1 and bit 8 active: a rx_status_forward=1 one-shot rung would send the g0 id0 message for bit 1, then W1C bits 0/1 to config +0x44, read back and verify; expected observable change: the status word loses bit 1 on read-back and no page deviation.
+
+**Pre-RX request - negative result (do not chase a missing H2D message):** firmware Table A (g0-id1 key table) has only 8 live keys (0x0004, 0x64, 0x65, 0x66, 0x67, 0x69, 0xd8, 0x320), none trx/ring-reset; the smac_msg_proc_enable_trx_req / rx_ring_reset_req names are a debug-string blob with no ID table and are firmware-internal; the vendor rootfs has no userspace sender (only module load + calibration iwpriv). Next static target: the vendor **plat** module's init-time bal_msg_send/hcc_msg_tx messages (PCIe/device boot side). Stock-control run (SC-1) is still the decisive experiment; with F4 implemented it also has the forwarding difference to watch.

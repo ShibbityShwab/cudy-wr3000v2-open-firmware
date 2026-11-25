@@ -573,3 +573,53 @@ Lead's direction once the R2b data showed the header write never happens; the
 plan-correction evidence above (10.1) supersedes it.  Nothing in this
 follow-up changes the shipped lane artifacts: the committed deliverables are
 still the 0001 patch, the model/tests and the contract in sections 1-9.
+
+---
+
+## 11. Follow-up 2 (2026-11-25): F4 status-forwarding decoded; the pre-RX request is NOT a host message
+
+Inputs: the full local vendor module set (/home/shibbityshwab/recovery-extract/lib/hisilicon/ko/, 58 modules, all symbol-bearing) and the vendor rootfs (rootfs-2.4.15 / rootfs-2.5.24). Host-only; no device contact; no vendor code bytes reproduced.
+
+### 11.1 F4 decoded exactly: the vendor's status-forward messages
+
+Two static helpers in hi5622v100_wifi.ko are the whole forwarding path (called from the host-MAC ISR shuangta_irq_host_mac_isr 0x39a1c status walk; helper bodies at 0x39558 and 0x3920c inside the shuangta_always_rx_output_format region):
+
+**Helper 0x39558 - status bits 0 and 1 (vendor-observable class)**
+
+1. shuangta_clear_host_mac_int_status(dev, bit) - W1C the served bit first;
+2. hcc_msg_alloc(4, 0) -> a 12-byte HCC header + 4-byte payload message;
+3. header written in place (msg data at +0x118): group low nibble 0, alloc nibble 1 in hdr[1] bits0-3, dst nibble = dev->byte0 in hdr[1] bits4-7, hdr[2] = dev->byte2, hdr[3] = 0x12, hdr[6..7] = **id 0** (u16), hdr[8] = 0; payload[0..3] = (u32)dev;
+4. hcc_msg_tx_to_core(msg) (the HCC layer fills len + tag and posts). Firmware handler: **group 0 id 0 is the payload-free stub handler** (file 0x41695, logs and returns; it reads no payload) - so this message is safe to emulate: the payload contents are ignored.
+
+**Helper 0x3920c - status bits 5, 7, 8 and 9 (error/warning class)**
+
+0. if (status & 0x3a0) == 0 the helper refuses (only forwards that class);
+1. hcc_msg_alloc(16, 0); shuangta_clear_host_mac_int_status(dev, bits); a log/record helper 0x3918c(dev, bits, 1) runs;
+2. header: group low nibble 0, alloc nibble 1, dst nibble = dev->byte0, hdr[2] = **dev->byte3**, hdr[3] = 0x12, hdr[6..7] = **id 7**, hdr[8] = 0;
+3. 16-byte payload: +0x00 = (u32)dev, +0x04 = u8 3, +0x08 = (u32)<word packed from the status/field snapshot>;
+4. send; the firmware group-0 id-7 handler *reads* the payload (struct access), so this message needs the per-bit payload word decoded before it can be emulated safely. Invocation in the ISR walk: bit 5 -> helper directly; bits 7, 8, 9 -> their per-bit handlers fall into the same helper with the status word; bit 10 (rx_ppdu_desc) is only logged + W1C, never forwarded.
+
+**What this means for our bench:** the boot status **0x182 has bit 1 and bit 8 active**, i.e. the vendor would (a) send the safe g0 id0 stub message and W1C bit 1, and (b) send g0 id7 for bit 8. Our driver currently sends neither. Because the g0 id0 shape is fully decoded and its handler is payload-free, it is the one host->firmware write our lane can implement with low risk; the g0 id7 payload word is still [U].
+
+**Implementation spec (fail-closed, for the next patch):**
+
+* new module param rx_status_forward (uint, default **0**); one-shot per load, like the other one-shot actions; requires the dp_setup + TXQ write gate and the bound endpoint.
+* read live status + mask; forward = (status & ~mask) & 0x0003 (bits 0/1 only - the fully decoded class); if zero, log and return with no write.
+* build the g0 id0 message exactly as helper 0x39558 does (12-byte header above + 4-byte payload; tag/len filled by the carrier layer), using the same raw-HCC/SR carrier machinery as the corrected mgmt-TX patch (himg_build_hcc_mgmt_tx is the template; this message has no inline frame, only the 4-byte payload), with the band/dst from our band-0 context;
+* only after a successful post: W1C bits 0/1 to config +0x44 (shuangta_clear_host_mac_int_status semantics), read back, and require the observed status to have lost the forwarded bits; any mismatch closes the lane and logs. Contrary to the vendor (clear-then-send) we send-then-clear so a failed send cannot destroy status evidence.
+* do **not** emulate g0 id7 yet: its payload word (payload+0x08) is built from the ISR field snapshot and the firmware handler reads it; sending a wrong word into a struct-reading firmware handler is the same crash class we are fighting.
+
+### 11.2 The pre-RX request is NOT a host H2D message we are missing
+
+Decoded evidence against the missing-pre-RX-host-request hypothesis:
+
+1. **Firmware g0-id1 key table (Table A) has only 8 live keys in this firmware build.** Re-ran the committed extractor (.provision-venv/bin/python ../wifi-ctx-create/tools/ctx_create_re.py --fw FIRMWARE.bin --tables; key table A = CA 0x10C23C, 217 x 8 B): keys 0x0004, 0x0064, 0x0065, 0x0066, 0x0067, 0x0069, 0x00D8, 0x0320 - all context/TXQ/config keys already understood, **none** is a trx-enable or RX-ring-reset key. So the firmware's smac_msg_proc_enable_trx_req / ..._rx_ring_reset_req handlers are not reachable through the host-facing g0 id1 config surface of this build.
+2. **The 13 smac_msg_proc_* names are a plain debug-string blob** (file 0xE2824 onward: NUL-separated names, no {id,name} table adjacent and no pointer array before/after them). They are most consistent with **firmware-internal SMAC messages** (DMAC<->SMAC/plat control), not with a host H2D request - the host would need an ID table, and the only ID table (Table A) does not contain them.
+3. **No userspace sender.** Scanned the vendor rootfs (rootfs-2.4.15 / rootfs-2.5.24): the luofu bring-up path is just insmod hi5622v100_plat.ko + insmod hi5622v100_wifi.ko + hi5622v100_cal_init.sh; the only userspace->driver traffic in the stock boot is the **calibration** iwpriv Hisilicon0 alg set_* family (power/RSSI/XO calibration, via wifi_debug.ko / alg config). There is no userspace RX- or TRX-enable request to emulate: whatever pre-RX configuration exists is inside the two vendor kernel modules themselves.
+4. Caveat / next decode: the decoded FIRMWARE.bin is the 2.4.15 image; the device modules were 2.5.24. Re-running the Table A extractor on the 2.5.24 firmware (and on the firmware actually baked in our image) is the cheap next step to confirm the key set above; a differing trx/ring-reset key there would reopen F1.
+
+### 11.3 Where that leaves the fault (updated ranking)
+
+* **F4 (status forwarding) is now the concrete, evidence-backed host gap:** the vendor host *does* send g0 id0 (bits 0/1) and g0 id7 (bits 5/7/8/9) and W1Cs the served bits; our driver sends nothing and leaves 0x182's bit 1 latched forever. This is a host->firmware notification class we are missing on every boot - implement the safe g0 id0 half first (spec 11.1).
+* **F1 (dangling firmware RX state) weakens as a missing-host-message story** per 11.2, but stays alive in the weaker form: the vendor **plat** module (not the wifi module) owns the PCIe/device-boot side and does send HCC messages through its own layer (hcc_connect / bal_port_activate / bal_msg_send paths). Our clean-room driver replaces plat too, so the next static decode is: enumerate the plat module's init-time bal_msg_send/hcc_msg_tx messages (group/id/payload + call context) and compare with our boot ladder - that is the only remaining host-side pre-RX candidate surface.
+* F2 (RX-write address encoding) and F3 (live +0x04 = 0x8000 vs stock 0) remain as before; the stock-control run is still the decisive experiment, and F4's implementation gives the stock-control comparison a concrete behavioural difference to watch for (the vendor's firmware will receive the forwarded notifications; ours does not).
