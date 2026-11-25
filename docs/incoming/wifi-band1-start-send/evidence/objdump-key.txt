@@ -1,0 +1,12 @@
+== objdump of the built hi5622_band_start.o: the two key immediates
+ 160:	e3003242 	movw	r3, #578	@ 0x242
+ 1d8:	e3003243 	movw	r3, #579	@ 0x243
+
+== .modinfo params (parmtype lines only; the 6.18 loader drops descriptions)
+desc_table: (uint)
+dfs_mode: (uint)
+band_start: (uint)
+band_start_fallback: (uint)
+
+== the full sorted param list count
+63

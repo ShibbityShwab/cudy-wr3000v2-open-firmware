@@ -1,0 +1,14 @@
+== the H2D g0-id1 key 0x0242 band-1 MAC-start frames (host-built protocol bytes, not fired)
+
+primary (33 B) - 0x0242, body {01,00,01,00,00} (subcmd 1 sync/conditional start):
+  000100002100010000005a5a0000000001000000420205000100010000ffffffff
+forced  (33 B) - 0x0242, body {02,00,00,00,00} (subcmd 2 forced start, the first fallback rung):
+  000100002100010000005a5a0000000001000000420205000200000000ffffffff
+nudge   (29 B) - 0x0243, body {00} (the band-ready nudge, second fallback rung):
+  000100001d00010000005a5a00000000010000004302010000ffffffff
+
+carrier geometry: 12-B HCC header + 8-B token + key u16 (hdr+20) + len u16 (hdr+22)
+                  + body (hdr+24) + inherited 4-byte FF tail; total = 12+8+2+2+len+4
+primary/forced total field 0x0021 (33) -> SR node word1 0x00216D2B
+nudge total field 0x001D (29) -> SR node word1 0x001D6D2B
+field B (hdr[3]) = the AP-start module/context index (0 = the ladder default; the F2 field-B lesson)

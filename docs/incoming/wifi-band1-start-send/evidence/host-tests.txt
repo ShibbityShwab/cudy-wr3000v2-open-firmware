@@ -1,0 +1,20 @@
+== 1. portable 0x0242 band-start model (src/)
+frame:000100002100010000005a5a0000000001000000420205000100010000ffffffff
+frame_forced:000100002100010000005a5a0000000001000000420205000200000000ffffffff
+frame_nudge:000100001d00010000005a5a00000000010000004302010000ffffffff
+83 checks, 0 failed
+== 2. ordering contract on the patched driver tree (/tmp/bandstart-build)
+-- 2a. the frames pass the REAL frame_post validator (h2d_frames.c)
+21 checks, 0 failed
+-- 2b. the ordering contract (hi5622_scan_logic.c)
+15 checks, 0 failed
+primary derived frame (33 B): 000100002100010000005a5a0000000001000000420205000100010000ffffffff
+primary C builder frame  (33 B): 000100002100010000005a5a0000000001000000420205000100010000ffffffff
+forced derived frame (33 B): 000100002100010000005a5a0000000001000000420205000200000000ffffffff
+forced C builder frame  (33 B): 000100002100010000005a5a0000000001000000420205000200000000ffffffff
+nudge derived frame (29 B): 000100001d00010000005a5a00000000010000004302010000ffffffff
+nudge C builder frame  (29 B): 000100001d00010000005a5a00000000010000004302010000ffffffff
+97 checks, 0 failed
+== 3. built artifact contract (/tmp/bandstart-artifact/hi5622_wifi.ko)
+artifact 371212 B sha256 e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028 params 63
+host tests PASS (no device contacted)
