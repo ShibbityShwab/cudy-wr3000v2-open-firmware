@@ -623,3 +623,38 @@ Decoded evidence against the missing-pre-RX-host-request hypothesis:
 * **F4 (status forwarding) is now the concrete, evidence-backed host gap:** the vendor host *does* send g0 id0 (bits 0/1) and g0 id7 (bits 5/7/8/9) and W1Cs the served bits; our driver sends nothing and leaves 0x182's bit 1 latched forever. This is a host->firmware notification class we are missing on every boot - implement the safe g0 id0 half first (spec 11.1).
 * **F1 (dangling firmware RX state) weakens as a missing-host-message story** per 11.2, but stays alive in the weaker form: the vendor **plat** module (not the wifi module) owns the PCIe/device-boot side and does send HCC messages through its own layer (hcc_connect / bal_port_activate / bal_msg_send paths). Our clean-room driver replaces plat too, so the next static decode is: enumerate the plat module's init-time bal_msg_send/hcc_msg_tx messages (group/id/payload + call context) and compare with our boot ladder - that is the only remaining host-side pre-RX candidate surface.
 * F2 (RX-write address encoding) and F3 (live +0x04 = 0x8000 vs stock 0) remain as before; the stock-control run is still the decisive experiment, and F4's implementation gives the stock-control comparison a concrete behavioural difference to watch for (the vendor's firmware will receive the forwarded notifications; ours does not).
+
+---
+
+## 12. Follow-up 3 (2026-11-25): address-transform decode - relation, window record, and the TX paradox
+
+Bench isolation (Lead): no RX rings -> frames harmless, page golden:1; RX rings armed -> same frames latch bit10 and lose the golden page. The fault is our RX ring setup interacting with a received frame, so the address encoding is the prime suspect.
+
+### 12.1 The relation, re-verified from the plat module
+
+hi5622v100_plat.ko (symbols present; disassembly ../wifi-shim-port/raw/hi5622v100_plat.dis):
+
+* pcie_hostca_to_devva (0xaefc): ip=[iface+0x10]; r0=[iface+0x00]; devva = [iface+0x00] + (hostca - [iface+0x10]); the high words are at [iface+0x04]/[iface+0x14] (64-bit adds/compares in the code);
+* pcie_devva_to_hostca (0xadec): hostca = [iface+0x10] + (devva - [iface+0x00]), with compares against the record's [iface+0x08]/[iface+0x0c] (end) to refuse out-of-window addresses;
+* pcie_if_hostca_to_devva (0x69b8) is the global-instance wrapper used by the vendor's shuangta_host_rx_add_buff;
+* the iface record is at [pcie_ctrl+4]+0xc4; oal_pcie_host_init (0xbefc) sets that pointer as TABLE_BASE + 24*arg (r1=24; r2 = 'ldr r2,[pc,#340]' -> literal at .text+0xc0cc), i.e. a 24-byte-per-entry static table;
+* pcie_inbound_region_cfg (0x94e0) programs the connected PCIe bridge's iATU through ECAM config space: 0x90c <- record+0x10 (target lower), 0x910 <- record+0x14 (target upper), 0x914 <- record+0x38 + (target-1) (limit), 0x918 <- record+0x18 (base lower), 0x91c <- record+0x1c (base upper).  So a record is {devva_base lo/hi at +0x00/+0x04, end/limit at +0x08/+0x0c, host(target)-window base lo/hi at +0x10/+0x14, device(base) lo/hi at +0x18/+0x1c, size at +0x38}.
+
+Concrete record extraction (the literal was not .data+0): the word at file .text+0xc0cc is 0x00001fb8, so the table starts at .data+0x1fb8.  First 24-byte record:
+
+    rec0 = { 0x80000000, 0x00000000, 0xffffffff, 0x00000000, 0x80000000, 0x00000000 }
+
+i.e. devva base = 0x80000000 and host-window base = 0x80000000 for table index 0 -> the transform is IDENTITY for that record.  The table continues into non-window data immediately after the first record, so the record count and the index actually selected by oal_pcie_host_init's second argument (set by the caller oal_pci_lres_init / pcie_comm_init) still need to be pinned; the 0xffffffff limit word suggests the vendor writes the real window at runtime for some records, or index 0 is the identity 'metadata' window and RX/TX use a different record.
+
+### 12.2 Why TX works with raw DMA addresses (hypothesis, consistent with the record)
+
+Under the identity record the transform collapses to 'devva = hostca', so a raw dma_alloc_coherent bus address is already a valid device VA for that window; our TX frame/MSDU rings live in that window, so TX works, and the vendor's ring addresses in the stock dump (0x844c7000 etc.) are likewise plain bus addresses.  The vendor's RX producer additionally biases the address by a constant (add_buff computes hostca = skb->data + 0xc0000004 + 0x600000) which is consistent with (a) kernel VA -> host-CA conversion where host memory starts at 0x600000 in host-CA space (data + 0xc0000000 strips PAGE_OFFSET and +0x600000 adds the reserved-DRAM offset) - i.e. a constant-offset convention, not a per-window transform.  If kernel direct-mapped VA = bus + 0x40000000 (PAGE_OFFSET 0xc0000000 with RAM at 0x80000000), the bias reduces to hostca = bus + 0x600004, i.e. the host-CA window base is 0x600000 and devva = hostca - window_start + devva_base = bus + 4 - 0 + 0x80000000 under a window whose host_base is 0x600000 and devva_base is 0x80000000.  That is the missing record shape to confirm.
+
+### 12.3 Status and next commands (exact)
+
+1. extract the full 24-byte record table at .data+0x1fb8 (count inferred from the .data relocation/boundary) and the oal_pcie_host_init argument used by the luofu probe path (caller oal_pci_lres_init at 0x7cc8 sets r2; read backwards 0x7c80-0x7cc8);
+2. identify the record whose (host_base, devva_base) maps host-CA 0x600000-relative addresses to devva (candidate: host_base 0x00600000, devva_base 0x80000000, size = host-DRAM size);
+3. then the RX entry transform is: devva = raw_bus_dma + 4 - host_base + devva_base, to be implemented behind rx_entry_xform=1 (default 0), applied only to free-ring entries (and the TX frame address must be checked for the same convention: if TX already matches, its devva and RX baseline must be consistent - the stock dump's ring/buffer addresses are the cross-check);
+4. fire rung: same R2 with rx_entry_xform=1; PASS = frame captured in a buffer / no page loss; FAIL + unchanged = the transform record is not the issue.
+
+Honest state: the relation, the record layout, the iATU programming path and the identity record are decoded; the actual (host_base, devva_base) pair for the RX/TX window is one extraction step away (the record table beyond index 0 and the selected index), so no transform patch is shipped in this addendum yet - shipping a guessed constant into the MAC's DMA path is exactly the crash class this lane exists to prevent.
