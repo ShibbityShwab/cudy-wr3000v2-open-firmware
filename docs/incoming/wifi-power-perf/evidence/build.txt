@@ -1,0 +1,6 @@
+== base: /tmp/sibling-mgmt-fix (final association work tree)
+== apply 0001-power-perf-safe-subset.patch
+== patched params: 60
+build: OK stripped=349892 sha256=0143c6370695925d479f07d5511231521503130d088c1c41af46c90ca65a5b9e params=60
+build: artifact /tmp/wifi-power-perf-build/artifact/hi5622_wifi.stripped.ko (LOCAL evidence only, never committed)
+build: log /tmp/wifi-power-perf-build/build.log

@@ -1,0 +1,826 @@
+diff -ruN a/hcc.c b/hcc.c
+--- a/hcc.c	2026-11-25 11:08:51.586235906 +0700
++++ b/hcc.c	2026-11-25 12:44:06.063304634 +0700
+@@ -34,6 +34,7 @@
+ #include <asm/barrier.h>
+ 
+ #include "hi5622_hcc.h"
++#include "hi5622_pm_perf_logic.h"
+ #include "hi5622_scan.h"
+ #include "hi5622_mgmt.h"
+ 
+@@ -48,6 +49,25 @@
+ MODULE_PARM_DESC(hcc_trace,
+ 		 "hcc-core hot-path traces: 0=quiet default, 1=per-frame/periodic (debug)");
+ 
++/* wifi-power-perf lane (task-160): the vendor PM sleep path, exposed as a
++ * default-off safe subset.  RE (REPORT.md sec 2): the vendor platform sleep
++ * is H2D group-0 id1 -> <=500 ms ack wait -> BAL close + GPIO handshake, and
++ * its arming gate (g_wlan_pm_info+0x124) is only written by plat_pm_vote(),
++ * which no loaded module imports; the only hipriv pm_switch lives in
++ * wifi_debug.ko, loaded only when /etc/hi_version contains "turbo" (stock
++ * 2.4.15/2.5.24 do not).  So the vendor sleep path is dead on this board and
++ * the safe subset is: keep it disabled by default, expose a one-shot gated
++ * request for an attended rung, and prove the refusals on the host. */
++unsigned int hi5622_pm_enable;
++module_param_named(pm_enable, hi5622_pm_enable, uint, 0644);
++MODULE_PARM_DESC(pm_enable,
++		 "enable the H2D group-0 id1 PM-sleep request path (default 0 = disabled; the full vendor handshake also needs a BAL close + GPIO wake which this transport does not implement - attended only)");
++
++unsigned int hi5622_pm_sleep_ack_ms = HSPP_PM_ACK_MS_DEFAULT;
++module_param_named(pm_sleep_ack_ms, hi5622_pm_sleep_ack_ms, uint, 0644);
++MODULE_PARM_DESC(pm_sleep_ack_ms,
++		 "bounded PM-sleep ack window in ms (50..5000, default 500 = the vendor 50-jiffy window)");
++
+ 
+ int hi5622_hcc_init(struct hi5622_pci *ctx)
+ {
+@@ -55,7 +75,11 @@
+ 	struct hcc_core_config cfg;
+ 
+ 	hcc_core_config_default(&cfg);
+-	cfg.pm_enabled = false;		/* vendor PM layer is not on the boot path */
++	/* The vendor PM layer is not on the boot path (RE in REPORT.md sec 2).
++	 * The safe subset arms it only through the explicit pm_enable parameter,
++	 * and the ack window is clamped so a typo cannot make it unbounded. */
++	cfg.pm_enabled = hi5622_pm_enable != 0;
++	cfg.pm_sleep_ack_ms = hspp_pm_ack_ms_clamp(hi5622_pm_sleep_ack_ms);
+ 	cfg.heartbeat_armed = false;	/* vendor boot path leaves it off */
+ 	cfg.allow_ceed_repair = false;	/* GP8 golden boot needs no repair */
+ 	cfg.mbox_clear_timeout_ms = 1000;
+@@ -466,10 +490,160 @@
+ }
+ static DEVICE_ATTR_WO(hcc_dr_republish);
+ 
++/* ---------------------------------------------------------------------
++ * wifi-power-perf lane (task-160): PM safe-subset + PCIe ASPM assertion
++ * -------------------------------------------------------------------*/
++static const char *hcc_pm_gate_reason(hspp_u32 gate)
++{
++	switch (gate) {
++	case HSPP_PM_OK:
++		return "ok";
++	case HSPP_PM_REFUSE_DISABLED:
++		return "pm_enable=0 (default)";
++	case HSPP_PM_REFUSE_NOT_READY:
++		return "boot not latched or phase != ACTIVE";
++	case HSPP_PM_REFUSE_PENDING:
++		return "a previous sleep ack is still pending";
++	default:
++		return "unknown";
++	}
++}
++
++/* One-shot, default-off PM-sleep request (vendor H2D group-0 id1).  This is
++ * NOT a normal operation: our transport has no BAL close and no GPIO wake
++ * handshake, so a device that accepts the request may stop servicing the
++ * host until a physical power-cycle.  The gate mirrors the core's own
++ * preconditions, and pm_enable must be set at load time. */
++static ssize_t hcc_pm_sleep_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	struct hcc_core *core;
++	struct hspp_pm_input in;
++	hspp_u32 gate;
++	int ret;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	core = &ctx->hcc->hcc.core;
++	memset(&in, 0, sizeof(in));
++	in.enabled = core->cfg.pm_enabled ? 1u : 0u;
++	in.boot_latched = core->boot_latched ? 1u : 0u;
++	in.active_phase = (core->phase == HCC_PHASE_ACTIVE) ? 1u : 0u;
++	in.pending = core->pm_sleep_pending ? 1u : 0u;
++	gate = hspp_pm_gate(&in);
++	if (gate != HSPP_PM_OK) {
++		dev_warn(dev,
++			 "PM: sleep request refused (%s); no device write\n",
++			 hcc_pm_gate_reason(gate));
++		return gate == HSPP_PM_REFUSE_DISABLED ? -EOPNOTSUPP : -EBUSY;
++	}
++	ret = hcc_core_pm_request_sleep(core, hcc_kernel_now_ms());
++	if (ret) {
++		dev_warn(dev, "PM: core refused the sleep request (%d); no retry\n",
++			 ret);
++		return ret;
++	}
++	dev_warn(dev,
++		 "PM: H2D group-0 id1 sleep request posted ONCE (ack window %u ms) - D2H id4 disallow / id5 wake-ok counters are in hcc_pm_status.  This stack has NO BAL close and NO GPIO wake: attended-only evidence, physical power-cycle is the recovery\n",
++		 core->cfg.pm_sleep_ack_ms);
++	return count;
++}
++static DEVICE_ATTR_WO(hcc_pm_sleep);
++
++static ssize_t hcc_pm_status_show(struct device *dev,
++				  struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	struct hcc_core *core;
++	int pos = 0;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	core = &ctx->hcc->hcc.core;
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "pm: enabled=%u pm_enable_param=%u ack_ms=%u boot_latched=%u phase=%s pending=%u deadline_ms=%llu\n",
++			 core->cfg.pm_enabled ? 1u : 0u, hi5622_pm_enable,
++			 core->cfg.pm_sleep_ack_ms,
++			 core->boot_latched ? 1u : 0u,
++			 hcc_phase_name(core->phase),
++			 core->pm_sleep_pending ? 1u : 0u,
++			 (unsigned long long)core->pm_sleep_deadline_ms);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "pm counters: requests=%u state_changes=%u disallow=%u wake_ok=%u aborts=%u timeouts=%u (D2H group-0 ids 4/5 are decoded by the core; the vendor's platform BAL/GPIO handshake is not implemented)\n",
++			 core->h2d_pm_requests, core->pm_state_changes,
++			 core->pm_sleep_disallow ? 1u : 0u,
++			 core->pm_wake_ok ? 1u : 0u,
++			 core->pm_sleep_aborts, core->pm_sleep_timeouts);
++	if (ctx->aspm_read) {
++		struct hspp_aspm_state aspm = hspp_aspm_decode(ctx->aspm_lnkctl);
++
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "aspm: lnkctl=0x%04x l0s=%u l1=%u enabled=%u vendor_parity=%s cleared_by_attr=%u (vendor board: stock DTS has no aspm-enable -> ASPM off; enabling it is a link experiment, not the safe subset)\n",
++				 aspm.raw, aspm.l0s, aspm.l1, aspm.enabled,
++				 aspm.enabled ? "VIOLATED" : "ok",
++				 ctx->aspm_cleared ? 1u : 0u);
++	} else {
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++				 "aspm: unreadable at probe (no PCIe capability?)\n");
++	}
++	return pos;
++}
++static DEVICE_ATTR_RO(hcc_pm_status);
++
++/* Disable ASPM if (and only if) a nonzero value is found.  Disabling cannot
++ * break a trained link; enabling it is deliberately not offered. */
++static ssize_t aspm_disable_store(struct device *dev,
++				      struct device_attribute *attr,
++				      const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = pci_get_drvdata(to_pci_dev(dev));
++	struct hspp_aspm_state aspm;
++	u16 lnkctl = 0, cleared;
++	int cap, ret;
++
++	if (!ctx)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (!ctx->aspm_read)
++		return -EOPNOTSUPP;
++	cap = pci_pcie_cap(ctx->pdev);
++	ret = pci_read_config_word(ctx->pdev, cap + PCI_EXP_LNKCTL, &lnkctl);
++	if (ret)
++		return ret;
++	aspm = hspp_aspm_decode(lnkctl);
++	if (!aspm.enabled) {
++		ctx->aspm_lnkctl = lnkctl;
++		dev_info(dev,
++			 "ASPM: already disabled (LNKCTL=0x%04x) - vendor parity holds, no write\n",
++			 aspm.raw);
++		return count;
++	}
++	cleared = hspp_aspm_disable_bits(lnkctl);
++	ret = pci_write_config_word(ctx->pdev, cap + PCI_EXP_LNKCTL, cleared);
++	if (ret)
++		return ret;
++	(void)pci_read_config_word(ctx->pdev, cap + PCI_EXP_LNKCTL,
++				   &ctx->aspm_lnkctl);
++	ctx->aspm_cleared = true;
++	dev_warn(dev,
++		 "ASPM: disabled (LNKCTL 0x%04x -> 0x%04x, readback 0x%04x) - vendor parity restored; PM/throughput numbers are comparable to the vendor board\n",
++		 lnkctl, cleared, ctx->aspm_lnkctl);
++	return count;
++}
++static DEVICE_ATTR_WO(aspm_disable);
++
+ static struct attribute *hi5622_hcc_attrs[] = {
+ 	&dev_attr_hcc_sr_announce.attr,
+ 	&dev_attr_hcc_cece_kick.attr,
+ 	&dev_attr_hcc_dr_republish.attr,
++	&dev_attr_hcc_pm_sleep.attr,
++	&dev_attr_hcc_pm_status.attr,
++	&dev_attr_aspm_disable.attr,
+ 	NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_hcc);
+diff -ruN a/hi5622_data_tx.c b/hi5622_data_tx.c
+--- a/hi5622_data_tx.c	2026-11-25 11:08:51.777600975 +0700
++++ b/hi5622_data_tx.c	2026-11-25 12:43:38.573320548 +0700
+@@ -61,6 +61,7 @@
+ #include "hi5622_data_tx_logic.h"
+ #include "hi5622_driver.h"
+ #include "hi5622_dp_txrx.h"
++#include "hi5622_pm_perf_logic.h"
+ #include "hi5622_keys.h"
+ #include "hi5622_sta_ops.h"
+ #include "dp_rings.h"
+@@ -94,6 +95,15 @@
+ MODULE_PARM_DESC(data_tx_timeout_ms,
+ 	"bounded TX completion timeout in ms; on expiry the data-TX lane closes for this module load (no retry)");
+ 
++/* wifi-power-perf lane (task-160): completion rearm interval.  With the
++ * current HDTX_POOL_DEPTH=16 the host-side frame ceiling is
++ * 16 * (1000 / poll_ms) frames/s (tuning rungs in REPORT.md sec 5); 5 ms is
++ * the historical value, 1..100 clamp, 0 = compiled default. */
++static unsigned int hi5622_data_tx_poll_ms = HSPP_DATA_TX_POLL_MS_DEFAULT;
++module_param_named(data_tx_poll_ms, hi5622_data_tx_poll_ms, uint, 0644);
++MODULE_PARM_DESC(data_tx_poll_ms,
++		 "TX completion delayed-work rearm interval in ms (1..100, default 5 = host ceiling 3200 fps at pool=16)");
++
+ struct hdtx_slot {
+ 	bool		used;
+ 	u8		protect;
+@@ -358,7 +368,9 @@
+ 	if (rc)
+ 		return rc;
+ 	queue_delayed_work(system_wq, &d->poll,
+-			   msecs_to_jiffies(HDTX_POLL_MS));
++			   msecs_to_jiffies(
++				   hspp_data_tx_poll_ms_clamp(
++					   hi5622_data_tx_poll_ms)));
+ 	return 0;
+ }
+ 
+@@ -498,7 +510,9 @@
+ 			hi5622_data_tx_timeout_ms);
+ 	if (rearm)
+ 		queue_delayed_work(system_wq, &d->poll,
+-				   msecs_to_jiffies(HDTX_POLL_MS));
++				   msecs_to_jiffies(
++					   hspp_data_tx_poll_ms_clamp(
++						   hi5622_data_tx_poll_ms)));
+ }
+ 
+ /* ------------------------------------------------------------------ */
+diff -ruN a/hi5622_driver.h b/hi5622_driver.h
+--- a/hi5622_driver.h	2026-11-25 11:08:51.810232196 +0700
++++ b/hi5622_driver.h	2026-11-25 12:43:15.862333527 +0700
+@@ -82,6 +82,14 @@
+ 	bool			gate_repair_done;
+ 	/* stability hardening (wifi-stability lane, task-136) */
+ 	bool			chip_booted_at_probe;	/* page +8==2 before this load */
++	/* wifi-power-perf lane (task-160): PCIe ASPM assertion.  Vendor parity
++	 * [V]: the stock luofu DTS has no "aspm-enable", so the vendor RC never
++	 * sets LNKCTL ASPM bits; the board runs with L0s/L1 disabled.  probe()
++	 * records the endpoint LNKCTL read-only (no device write) and the
++	 * aspm_state/aspm_disable attributes report/clear it. */
++	u16			aspm_lnkctl;	/* LNKCTL sampled at probe (0 if unreadable) */
++	bool			aspm_read;	/* LNKCTL read succeeded at probe	*/
++	bool			aspm_cleared;	/* aspm_disable cleared nonzero ASPM bits */
+ 	bool			vap_base_posted;	/* firmware VAP object posted */
+ 	u8			vap_base_iftype;	/* iftype the base was posted for */
+ 	bool			ap_started;		/* one AP start committed */
+diff -ruN a/hi5622_pm_perf_logic.h b/hi5622_pm_perf_logic.h
+--- a/hi5622_pm_perf_logic.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_pm_perf_logic.h	2026-11-25 12:42:46.394294302 +0700
+@@ -0,0 +1,438 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_pm_perf_logic.h - portable, device-free logic for the power-
++ * management + performance tuning lane (task-160) of the Hi5622V100
++ * clean-room host (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code.  This header contains ONLY pure functions: no
++ * kernel headers, no device access, no libc.  It is shared verbatim by the
++ * kernel module (hcc.c / service.c / hi5622_data_tx.c / main.c) and by the
++ * host selftest (tools/pm_perf_selftest.c), so the policies that gate power
++ * and polling are testable on the host before any attended fire.
++ *
++ * Evidence grades follow the project convention: [V] decoded from a named
++ * vendor artifact, [V*] measured on the bench (cited in REPORT.md), [I]
++ * inference.  Every constant names its origin.
++ */
++#ifndef HI5622_PM_PERF_LOGIC_H
++#define HI5622_PM_PERF_LOGIC_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++typedef u8  hspp_u8;
++typedef u16 hspp_u16;
++typedef u32 hspp_u32;
++typedef u64 hspp_u64;
++#else
++#include <stdint.h>
++typedef uint8_t  hspp_u8;
++typedef uint16_t hspp_u16;
++typedef uint32_t hspp_u32;
++typedef uint64_t hspp_u64;
++#endif
++
++/* =====================================================================
++ * 1. PM gate - the safe subset of the vendor PM sleep path
++ *
++ * RE facts (REPORT.md sec 2, all [V]/[I] graded there):
++ *   - the vendor platform PM sleep is: H2D g0 id1 (bal_msg_send(0,1)),
++ *     a <= 50 jiffies (500 ms) wait for st_slp_ack_event, then BAL close +
++ *     a GPIO level handshake, and on wake bal_reinit + another <= 50 jiffies
++ *     wait (D2H id4 disallow / id5 wake-ok callbacks complete those events);
++ *   - the gate that arms this path is g_wlan_pm_info+0x124, written only by
++ *     plat_pm_vote() - which no loaded module imports on this build, and the
++ *     only hipriv pm_switch command lives in wifi_debug.ko, loaded only when
++ *     /etc/hi_version contains "turbo" (it does not on stock 2.4.15/2.5.24);
++ *   - so the vendor sleep path is DEAD on this board; the vendor's active
++ *     runtime difference is per-VAP chip power gating and cfg80211 STA
++ *     power-save config (both need firmware cooperation and are NOT part of
++ *     the safe subset).
++ *
++ * Our clean-room stack therefore keeps PM disabled by default.  This gate is
++ * the single decision point for a future attended PM rung: it mirrors the
++ * hcc_core_pm_request_sleep() preconditions exactly so a host test can prove
++ * the refusals before the attribute is ever armed.
++ * ===================================================================== */
++#define HSPP_PM_OK		0	/* request may be posted			*/
++#define HSPP_PM_REFUSE_DISABLED	1	/* pm_enable=0 (the default)		*/
++#define HSPP_PM_REFUSE_NOT_READY 2	/* no boot latch or phase != ACTIVE	*/
++#define HSPP_PM_REFUSE_PENDING	3	/* a previous sleep ack is outstanding	*/
++
++struct hspp_pm_input {
++	hspp_u8 enabled;		/* config pm_enabled (module param)	*/
++	hspp_u8 boot_latched;		/* handshake page +8 == 2 latched	*/
++	hspp_u8 active_phase;		/* HCC_PHASE_ACTIVE reached this load	*/
++	hspp_u8 pending;		/* pm_sleep_pending still true		*/
++};
++
++static inline hspp_u32 hspp_pm_gate(const struct hspp_pm_input *in)
++{
++	if (!in || !in->enabled)
++		return HSPP_PM_REFUSE_DISABLED;
++	if (!in->boot_latched || !in->active_phase)
++		return HSPP_PM_REFUSE_NOT_READY;
++	if (in->pending)
++		return HSPP_PM_REFUSE_PENDING;
++	return HSPP_PM_OK;
++}
++
++/* Vendor-ish bounded ack window: 50 jiffies at HZ=100 = 500 ms [V].
++ * The local copy clamps a user override to [50, 5000] ms so a typo cannot
++ * turn a bounded one-shot into an unbounded wait. */
++#define HSPP_PM_ACK_MS_DEFAULT	500u
++#define HSPP_PM_ACK_MS_MIN	50u
++#define HSPP_PM_ACK_MS_MAX	5000u
++
++static inline hspp_u32 hspp_pm_ack_ms_clamp(hspp_u32 ms)
++{
++	if (ms == 0u)
++		return HSPP_PM_ACK_MS_DEFAULT;
++	if (ms < HSPP_PM_ACK_MS_MIN)
++		return HSPP_PM_ACK_MS_MIN;
++	if (ms > HSPP_PM_ACK_MS_MAX)
++		return HSPP_PM_ACK_MS_MAX;
++	return ms;
++}
++
++/* =====================================================================
++ * 2. Adaptive service-poll governor (CPU idle / wakeup cost)
++ *
++ * The clean-room transport is polled: one kthread per endpoint calls
++ * hcc_service_pass() and then msleep()s.  The historic cadence is 5 ms
++ * (200 wakeups/s/endpoint, measured ~145 effective polls/s in the live
++ * tuning sample).  While idle this is pure wakeup cost; while traffic flows
++ * it bounds RX latency.  The governor keeps the fast cadence for a short
++ * activity window and backs off to an idle cadence otherwise:
++ *   - any pass that decoded something (or tick serviced work) = activity,
++ *     which resets the streak and forces the fast cadence immediately;
++ *   - idle cadence is never shorter than the active one.
++ * Both intervals are module parameters, so the bench can A/B the trade-off
++ * without a rebuild; idle_ms == 0 or < active_ms disables the backoff.
++ * ===================================================================== */
++#define HSPP_POLL_IDLE_MS_DEFAULT 20u	/* 5x fewer idle wakeups than 5 ms */
++#define HSPP_POLL_IDLE_STREAK_DEFAULT 25u /* 25 x 5 ms = 125 ms fast window */
++
++struct hspp_poll_gov {
++	hspp_u32 active_ms;
++	hspp_u32 idle_ms;
++	hspp_u32 threshold;
++	hspp_u32 streak;
++};
++
++static inline void hspp_poll_gov_init(struct hspp_poll_gov *g,
++				      hspp_u32 active_ms, hspp_u32 idle_ms,
++				      hspp_u32 threshold)
++{
++	if (!g)
++		return;
++	g->active_ms = active_ms ? active_ms : 1u;
++	if (idle_ms == 0u || idle_ms < g->active_ms)
++		idle_ms = g->active_ms;	/* backoff disabled */
++	g->idle_ms = idle_ms;
++	g->threshold = threshold ? threshold : 1u;
++	g->streak = 0u;
++}
++
++/* Record one pass.  active != 0 means the pass did work.  Returns the next
++ * sleep interval in milliseconds (always >= 1). */
++static inline hspp_u32 hspp_poll_gov_step(struct hspp_poll_gov *g,
++					  hspp_u32 active)
++{
++	if (!g)
++		return HSPP_POLL_IDLE_MS_DEFAULT;
++	if (active) {
++		g->streak = 0u;
++	} else if (g->streak < 0x7fffffffu) {
++		g->streak++;
++	}
++	if (g->idle_ms > g->active_ms && g->streak >= g->threshold)
++		return g->idle_ms;
++	return g->active_ms;
++}
++
++static inline hspp_u32 hspp_poll_gov_interval(const struct hspp_poll_gov *g)
++{
++	if (!g)
++		return HSPP_POLL_IDLE_MS_DEFAULT;
++	if (g->idle_ms > g->active_ms && g->streak >= g->threshold)
++		return g->idle_ms;
++	return g->active_ms;
++}
++
++/* =====================================================================
++ * 3. PCIe ASPM state (safe subset: assert vendor parity, never enable)
++ *
++ * Vendor RE [V]: hi_pcie_enable_aspm is called only when the DT PCIe node
++ * has an "aspm-enable" property; the stock luofu DTS does NOT have it, so
++ * the vendor RC never sets LNKCTL.ASPM (PCI_EXP_LNKCTL bits 1:0) and the
++ * board runs with L0s/L1 disabled.  Our target DTS also omits the property,
++ * so the safe action is: read the endpoint LNKCTL once at probe, log the
++ * state, and keep the bits at 0 (vendor parity).  Enabling ASPM would be a
++ * link-stability experiment, not a safe subset change; the public Hi1105
++ * quirk ("avoid L0s and L1") points the same way.
++ * ===================================================================== */
++#define HSPP_LNKCTL_ASPM_MASK	0x0003u	/* bit0 L0s, bit1 L1 */
++#define HSPP_LNKCTL_ASPM_L0S	0x0001u
++#define HSPP_LNKCTL_ASPM_L1	0x0002u
++
++struct hspp_aspm_state {
++	hspp_u16 raw;		/* the full LNKCTL value that was read		*/
++	hspp_u8  l0s;		/* L0s enabled					*/
++	hspp_u8  l1;		/* L1 enabled					*/
++	hspp_u8  enabled;	/* l0s || l1					*/
++};
++
++static inline struct hspp_aspm_state hspp_aspm_decode(hspp_u16 lnkctl)
++{
++	struct hspp_aspm_state s;
++
++	s.raw = lnkctl;
++	s.l0s = (lnkctl & HSPP_LNKCTL_ASPM_L0S) ? 1u : 0u;
++	s.l1 = (lnkctl & HSPP_LNKCTL_ASPM_L1) ? 1u : 0u;
++	s.enabled = (s.l0s || s.l1) ? 1u : 0u;
++	return s;
++}
++
++/* LNKCTL with the ASPM bits cleared; every other bit preserved.  Disabling
++ * ASPM cannot break a trained link (it only removes an optional low-power
++ * substate), which is why this direction is inside the safe subset while
++ * enabling is not. */
++static inline hspp_u16 hspp_aspm_disable_bits(hspp_u16 lnkctl)
++{
++	return (hspp_u16)(lnkctl & (hspp_u16)~HSPP_LNKCTL_ASPM_MASK);
++}
++
++/* =====================================================================
++ * 4. TX path capacity model (host -> AP data)
++ *
++ * Geometry [V]: 8 TID rings x 64 entries x 8 B (dp_rings.h DP_TX_MSDU_*),
++ * host in-flight pool 16 frames (hi5622_data_tx_logic.h HDTX_POOL_DEPTH),
++ * MPDU <= 768 B (HDTX_MPDU_MAX = DP_TXRX_MAX_MPDU), one TID, non-QoS, NO
++ * aggregation (no A-MPDU/A-MSDU in this stack).  Completion is a delayed
++ * work reading the device rptr: first arm 5 ms after the first post, rearm
++ * 5 ms while frames are in flight (HDTX_POLL_MS), so the host-side ceiling is
++ * pool_depth * (1000 / poll_ms) frames/s.  At the defaults that is
++ * 16 * 200 = 3200 frames/s = 2.46 MB/s of MPDU bytes.
++ *
++ * The over-the-air ceiling of a NON-aggregated 768 B frame is computed with
++ * the HT-mixed 2.4 GHz 20 MHz 1SS frame timing (preamble 40 us, SIFS 10 us,
++ * ACK 40 us, DIFS 34 us, average backoff 8 x 9 us = 72 us - the classic
++ * 802.11 values, [I] for the exact firmware rate choice).  At MCS7
++ * (65 Mbps PHY) the cycle is ~287 us -> ~3480 frames/s -> ~20.5 Mbps of
++ * 736 B payload, i.e. the host default 3200 frames/s is *close to* the
++ * non-aggregated air ceiling.  The real headroom steps are therefore
++ * (a) raising the host window for bursts, and (b) aggregation, which this
++ * clean-room stack does not implement.
++ * ===================================================================== */
++#define HSPP_TX_RING_DEPTH	64u	/* [V] per-TID MSDU ring depth		*/
++#define HSPP_TX_RING_COUNT	8u	/* [V] one ring per TID 0..7		*/
++#define HSPP_TX_POOL_DEPTH	16u	/* [V*] host in-flight pool (current)	*/
++#define HSPP_TX_MPDU_MAX	768u	/* [V] DP_TXRX_MAX_MPDU		*/
++#define HSPP_TX_MPDU_HDR		24u	/* 802.11 data hdr 24 B (no QoS)	*/
++#define HSPP_TX_LLC_BYTES	8u	/* LLC/SNAP 8 B				*/
++#define HSPP_TX_POLL_MS		5u	/* [V*] current completion rearm	*/
++
++/* Host-side frame rate ceiling for a (pool_depth, poll_ms) pair. */
++static inline hspp_u32 hspp_tx_pps(hspp_u32 pool_depth, hspp_u32 poll_ms)
++{
++	if (poll_ms == 0u || pool_depth == 0u)
++		return 0u;
++	return (hspp_u32)(((hspp_u64)pool_depth * 1000u) / poll_ms);
++}
++
++/* Bytes/s of MPDU (not payload) at that ceiling. */
++static inline hspp_u64 hspp_tx_mpdu_bytes_per_s(hspp_u32 pool_depth,
++						hspp_u32 poll_ms,
++						hspp_u32 mpdu_bytes)
++{
++	return (hspp_u64)hspp_tx_pps(pool_depth, poll_ms) * mpdu_bytes;
++}
++
++/* Application payload bytes/s (strip the 24 B header + 8 B LLC/SNAP). */
++static inline hspp_u64 hspp_tx_payload_bytes_per_s(hspp_u32 pool_depth,
++						   hspp_u32 poll_ms,
++						   hspp_u32 mpdu_bytes)
++{
++	hspp_u32 over = HSPP_TX_MPDU_HDR + HSPP_TX_LLC_BYTES;
++
++	if (mpdu_bytes <= over)
++		return 0u;
++	return (hspp_u64)hspp_tx_pps(pool_depth, poll_ms) *
++	       (mpdu_bytes - over);
++}
++
++/* ---------------------------------------------------------------------
++ * Single-frame airtime model (HT-mixed, 20 MHz, 1 spatial stream).
++ * phy_kbps is the PHY rate in kbit/s (65,000 = MCS7 / 65 Mbps).
++ * Returns the whole frame cycle in microseconds and the associated rates.
++ * ------------------------------------------------------------------- */
++struct hspp_air_model {
++	hspp_u32 frame_us;	/* preamble + data symbols			*/
++	hspp_u32 cycle_us;	/* + SIFS + ACK + DIFS + average backoff	*/
++	hspp_u32 pps;		/* 1e6 / cycle_us				*/
++	hspp_u64 payload_bps;	/* payload bits per second at this cycle	*/
++};
++
++struct hspp_air_params {
++	hspp_u32 phy_kbps;
++	hspp_u32 preamble_us;	/* 40 HT-mixed 1SS 20 MHz [I]			*/
++	hspp_u32 sifs_us;	/* 10						*/
++	hspp_u32 ack_us;	/* 40						*/
++	hspp_u32 difs_us;	/* 34						*/
++	hspp_u32 backoff_slots;	/* average 8					*/
++	hspp_u32 slot_us;	/* 9						*/
++};
++
++static inline struct hspp_air_model
++hspp_air_model_frame(const struct hspp_air_params *p, hspp_u32 mpdu_bytes)
++{
++	struct hspp_air_model m;
++	hspp_u64 bits, data_us;
++	hspp_u32 over = HSPP_TX_MPDU_HDR + HSPP_TX_LLC_BYTES;
++
++	if (!p || p->phy_kbps == 0u) {
++		m.frame_us = 0u;
++		m.cycle_us = 0u;
++		m.pps = 0u;
++		m.payload_bps = 0u;
++		return m;
++	}
++	bits = (hspp_u64)mpdu_bytes * 8u;
++	data_us = (bits * 1000u + p->phy_kbps - 1u) / p->phy_kbps;
++	m.frame_us = p->preamble_us + (hspp_u32)data_us;
++	m.cycle_us = m.frame_us + p->sifs_us + p->ack_us + p->difs_us +
++		     p->backoff_slots * p->slot_us;
++	m.pps = m.cycle_us ? (hspp_u32)(1000000u / m.cycle_us) : 0u;
++	m.payload_bps = (mpdu_bytes > over) ?
++		(hspp_u64)(mpdu_bytes - over) * 8u * m.pps : 0u;
++	return m;
++}
++
++/* Convenience: the classic 2.4 GHz HT20 1SS reference parameters. */
++static inline struct hspp_air_params hspp_air_params_ht20_2g(hspp_u32 phy_kbps)
++{
++	struct hspp_air_params p;
++
++	p.phy_kbps = phy_kbps ? phy_kbps : 65000u;
++	p.preamble_us = 40u;
++	p.sifs_us = 10u;
++	p.ack_us = 40u;
++	p.difs_us = 34u;
++	p.backoff_slots = 8u;
++	p.slot_us = 9u;
++	return p;
++}
++
++/* =====================================================================
++ * 5. Scan pace model
++ *
++ * Measured [V*]: 6 channel results in ~0.94 s then a hard stop = ~156 ms per
++ * channel; the firmware processes at most 6 channels per g0 id0xC request.
++ * The driver already batches ceil(n/scan_req_batch) requests (default 6)
++ * with scan_batch_gap_ms (default 300).  Model the expected wall time for a
++ * full 13-channel scan with and without batching; this is the number the
++ * ladder checks.
++ * ===================================================================== */
++#define HSPP_SCAN_PER_CH_MS	156u	/* [V*] measured 2026-11-27 20:30	*/
++#define HSPP_SCAN_FW_MAX_CH	6u	/* [V*] per-request firmware cap	*/
++#define HSPP_SCAN_BATCH_GAP_MS	300u	/* current driver default		*/
++
++static inline hspp_u32 hspp_scan_total_ms(hspp_u32 channels,
++					  hspp_u32 per_ch_ms)
++{
++	if (!channels || !per_ch_ms)
++		return 0u;
++	return channels * per_ch_ms;
++}
++
++/* Number of g0 id0xC requests for a channel list at a batch size
++ * (batch == 0 means "one request", the legacy form). */
++static inline hspp_u32 hspp_scan_requests(hspp_u32 channels, hspp_u32 batch)
++{
++	if (!channels || batch == 0u || batch >= channels)
++		return 1u;
++	return (channels + batch - 1u) / batch;
++}
++
++static inline hspp_u32 hspp_scan_batched_ms(hspp_u32 channels,
++					    hspp_u32 batch,
++					    hspp_u32 per_ch_ms,
++					    hspp_u32 gap_ms)
++{
++	hspp_u32 reqs = hspp_scan_requests(channels, batch);
++	hspp_u32 total = hspp_scan_total_ms(channels, per_ch_ms);
++
++	if (reqs > 1u)
++		total += (reqs - 1u) * gap_ms;
++	return total;
++}
++
++/* =====================================================================
++ * 6. Beacon / DTIM client-wakeup model (AP side)
++ *
++ * The AP beacons every ap.beacon_interval TU (100 TU = 102.4 ms on the
++ * bench [V*]) and advertises DTIM period 2.  A power-saving client may wake
++ * only every DTIM period, so the AP's DTIM setting is a client-side power
++ * knob; the AP chip itself is always-on in our stack (no chip PM), so this
++ * changes no AP power - only client wakeups and multicast latency.
++ * ===================================================================== */
++#define HSPP_BEACON_TU_DEFAULT	100u
++#define HSPP_DTIM_DEFAULT	2u
++
++static inline hspp_u32 hspp_beacon_ms(hspp_u32 beacon_tu)
++{
++	hspp_u32 ms;
++
++	if (!beacon_tu)
++		beacon_tu = HSPP_BEACON_TU_DEFAULT;
++	/* 1 TU = 1024 us; integer milliseconds, minimum 1. */
++	ms = (hspp_u32)(((hspp_u64)beacon_tu * 1024u) / 1000u);
++	return ms ? ms : 1u;
++}
++
++static inline hspp_u32 hspp_client_wakeups_per_min(hspp_u32 beacon_tu,
++						   hspp_u32 dtim_period)
++{
++	hspp_u32 interval;
++
++	if (!dtim_period)
++		dtim_period = HSPP_DTIM_DEFAULT;
++	interval = hspp_beacon_ms(beacon_tu) * dtim_period;
++	if (!interval)
++		return 0u;
++	return 60000u / interval;
++}
++
++/* ---------------------------------------------------------------------
++ * TX completion rearm interval.  The data-tx lane rearms a delayed work
++ * 5 ms after the first post and every 5 ms while frames are in flight, so
++ * the poll interval and the in-flight pool together set the host ceiling
++ * (sec 4).  The knob is clamped so a typo can never hammer the workqueue
++ * (min 1 ms) or stall completions past the bounded timeout (max 100 ms).
++ * ------------------------------------------------------------------- */
++#define HSPP_DATA_TX_POLL_MS_DEFAULT	5u
++#define HSPP_DATA_TX_POLL_MS_MIN	1u
++#define HSPP_DATA_TX_POLL_MS_MAX	100u
++
++static inline hspp_u32 hspp_data_tx_poll_ms_clamp(hspp_u32 ms)
++{
++	if (ms == 0u)
++		return HSPP_DATA_TX_POLL_MS_DEFAULT;
++	if (ms < HSPP_DATA_TX_POLL_MS_MIN)
++		return HSPP_DATA_TX_POLL_MS_MIN;
++	if (ms > HSPP_DATA_TX_POLL_MS_MAX)
++		return HSPP_DATA_TX_POLL_MS_MAX;
++	return ms;
++}
++
++/* =====================================================================
++ * 7. PCIe link power note (documented, not acted on)
++ *
++ * ASPM L1 gives the endpoint a lower link power state between frames, but
++ * the vendor board disables it (sec 3) and public Hi1105 guidance says
++ * "avoid L0s and L1".  DTIM/beacon tuning is client-visible only.  The only
++ * always-on cost this lane can reduce without firmware cooperation is the
++ * host poll cadence (sec 2) and the TX completion rearm interval (sec 4).
++ * ===================================================================== */
++
++#endif /* HI5622_PM_PERF_LOGIC_H */
+diff -ruN a/main.c b/main.c
+--- a/main.c	2026-11-25 11:06:33.157682716 +0700
++++ b/main.c	2026-11-25 12:43:15.866333525 +0700
+@@ -23,6 +23,7 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_cfg80211.h"
+ #include "hi5622_dp.h"
++#include "hi5622_pm_perf_logic.h"
+ #include "h2d_send.h"
+ 
+ /* ---------------------------------------------------------------------
+@@ -136,6 +137,32 @@
+ 	spin_lock_init(&ctx->doorbell_lock);
+ 	pci_set_drvdata(pdev, ctx);
+ 
++	/* wifi-power-perf lane (task-160): ASPM assertion, READ-ONLY.
++	 * Vendor parity [V]: the stock luofu DTS has no "aspm-enable" property,
++	 * so hi_pcie_enable_aspm is skipped and the vendor RC never writes
++	 * PCI_EXP_LNKCTL.ASPM - the board runs with L0s/L1 disabled.  Record the
++	 * endpoint LNKCTL once so hcc_pm_status can prove parity; clearing a
++	 * nonzero value is an explicit aspm_disable action.  probe() keeps its
++	 * "no device register writes" invariant. */
++	ctx->aspm_read = !pci_read_config_word(pdev,
++			pci_pcie_cap(pdev) + PCI_EXP_LNKCTL, &ctx->aspm_lnkctl);
++	if (ctx->aspm_read) {
++		struct hspp_aspm_state aspm = hspp_aspm_decode(ctx->aspm_lnkctl);
++
++		if (aspm.enabled)
++			dev_warn(dev,
++				 "%s: ASPM is ENABLED at probe (LNKCTL=0x%04x: L0s=%u L1=%u) - vendor parity on this board is ASPM OFF (stock DTS has no aspm-enable); run 'echo 1 > aspm_disable' before trusting PM/throughput numbers\n",
++				 HI5622_DRV_NAME, aspm.raw, aspm.l0s, aspm.l1);
++		else
++			dev_info(dev,
++				 "%s: PCIe ASPM off at probe (LNKCTL=0x%04x) - vendor parity (stock DTS has no aspm-enable)\n",
++				 HI5622_DRV_NAME, aspm.raw);
++	} else {
++		dev_info(dev,
++			 "%s: PCIe LNKCTL unreadable (no PCIe capability?) - ASPM state unknown\n",
++			 HI5622_DRV_NAME);
++	}
++
+ 	/* Stability hardening (wifi-stability lane): detect a module reload after
+ 	 * a live boot BEFORE any subsystem can write.  The firmware keeps running
+ 	 * with the previous load's host rings, so upload/seed/release and H2D
+Binary files a/.module-common.o and b/.module-common.o differ
+diff -ruN a/service.c b/service.c
+--- a/service.c	2026-11-24 17:03:08.824172295 +0700
++++ b/service.c	2026-11-25 12:43:38.565320552 +0700
+@@ -26,6 +26,7 @@
+ #include <asm/barrier.h>
+ 
+ #include "hi5622_hcc.h"
++#include "hi5622_pm_perf_logic.h"
+ #include "hi5622_cfg80211.h"
+ 
+ /* Per-endpoint service cadence: the vendor's D2H flush routine (CPU 0xC6108)
+@@ -35,6 +36,17 @@
+ MODULE_PARM_DESC(hcc_poll_ms,
+ 		 "HCC service cadence in ms (1..1000, default 5)");
+ 
++/* wifi-power-perf lane (task-160): adaptive idle backoff.  The service thread
++ * polls (there is no usable IRQ line on our boot path), so the 5 ms cadence
++ * costs 200 wakeups/s/endpoint while idle.  Once the protocol phase is ACTIVE
++ * and HSPP_POLL_IDLE_STREAK_DEFAULT consecutive passes did nothing, sleep the
++ * idle interval instead; any pass that decodes work snaps back to hcc_poll_ms.
++ * hcc_poll_idle_ms=0 (or < hcc_poll_ms) disables the backoff. */
++unsigned int hi5622_hcc_poll_idle_ms = HSPP_POLL_IDLE_MS_DEFAULT;
++module_param_named(hcc_poll_idle_ms, hi5622_hcc_poll_idle_ms, uint, 0644);
++MODULE_PARM_DESC(hcc_poll_idle_ms,
++		 "idle service cadence in ms after 25 quiet passes in ACTIVE (0/less-than hcc_poll_ms = backoff off, default 20)");
++
+ /* CECE policy: 0 = evidence-driven (default), 1 = never write (negative
+  * control), 2 = evidence-driven + bounded manual kick. */
+ unsigned int hi5622_cece_mode;
+@@ -422,13 +434,26 @@
+ 	struct hi5622_hcc_service *h = data;
+ 	struct hi5622_pci *ctx = h->ctx;
+ 	struct device *dev = &ctx->pdev->dev;
++	struct hspp_poll_gov gov;
+ 
+-	dev_info(dev, "HCC loop: service thread started (cadence %u ms): core protocol tick + direct D2H reader (primary) + engine watchdog; cece_mode=%u\n",
+-		 hi5622_hcc_poll_ms, hi5622_cece_mode);
++	hspp_poll_gov_init(&gov, hi5622_hcc_poll_ms ? hi5622_hcc_poll_ms : 1u,
++			   hi5622_hcc_poll_idle_ms,
++			   HSPP_POLL_IDLE_STREAK_DEFAULT);
++	dev_info(dev, "HCC loop: service thread started (active cadence %u ms, idle cadence %u ms after %u quiet passes): core protocol tick + direct D2H reader (primary) + engine watchdog; cece_mode=%u\n",
++		 gov.active_ms, gov.idle_ms, gov.threshold, hi5622_cece_mode);
+ 	while (!kthread_should_stop()) {
+-		hcc_service_pass(ctx, "loop");
+-		if (msleep_interruptible(hi5622_hcc_poll_ms ?
+-					 hi5622_hcc_poll_ms : 1))
++		unsigned int interval;
++		int active = hcc_service_pass(ctx, "loop");
++
++		if (h->hcc.core.phase == HCC_PHASE_ACTIVE &&
++		    gov.idle_ms > gov.active_ms)
++			interval = hspp_poll_gov_step(&gov, active > 0);
++		else {
++			/* Bootstrap (pre-ACTIVE) keeps the fast, fixed cadence. */
++			(void)hspp_poll_gov_step(&gov, 1u);
++			interval = gov.active_ms;
++		}
++		if (msleep_interruptible(interval ? interval : 1u))
+ 			break;
+ 	}
+ 	dev_info(dev, "HCC loop: stopped; phase=%s d2h_words=%llu h2d[pub=%u done=%u closed=%u] cece[w=%u blocked=%u] direct frames=%llu\n",
