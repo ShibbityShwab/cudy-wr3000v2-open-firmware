@@ -40,14 +40,16 @@ claim-ID sequence, table/finding completeness, the v2-v5 milestone vocabulary, k
 cross-checks against the owning lanes' committed sources and the superproject ledger,
 forbidden-content scan) and a final PASS with the check count. v5 added the static-RE-wave checks
 (sections 6.1-6.17, findings F1-F19, tables T1-T37, claims EV-001..EV-305); **v6 extends the same
-checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-341** - the
+checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-342** - the
 association module identities and 56 params, the corrected g0 id6 mgmt-TX carrier, the g1 id13
 management-RX event, the SET_RX_FILTER negative, the RX arm ordering (0x182 vs 0x02), the R11
 `field10` values, the RF path-loss observation and the 51/51 public-source manifest. At the v6
-cut-off the verifier reports **RESULT: PASS (295/295 checks)**; the image-2 bake addendum
-(container `0d9429ec...`, kernel slice unchanged `13e81214...`/slot `1794a531...`, rootfs UBI
-`44df3a63...`, verify 82/82) is cross-checked against `wifi-final-image-2/HASHES.txt` +
-`REPORT.md`. Exit code 0 on success.
+cut-off the verifier reports **RESULT: PASS (303/303 checks)**; the image-2 bakes are
+cross-checked against `wifi-final-image-2/` - the pre-watermark history (container `0d9429ec...`,
+module `ab9e18a4...`/installed `4f1b45c1...`, rootfs UBI `44df3a63...`) and the **successor FINAL
+image-2** (container `8ba1ad22...`, module `d2c608e7...` 57 params / installed `b4c076bf...`,
+rootfs UBI `31e7a39c...`, squashfs `cb42bfed...`, verify 84/84); kernel slice unchanged
+`13e81214...`/slot `1794a531...` in both. Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -156,7 +158,8 @@ commits; re-fetching is a network action). The R11 scan ladder is `wifi-scan-ful
 observation, not a reproducible host test. The image-2 bake is reproduced by
 `wifi-final-image-2/tools/bake-final-image-2.sh` + `tools/verify-final-image-2.sh` (needs the
 local artifacts directory and the shared OpenWrt tree; host-only, nothing flashed); its identity
-is recorded in `wifi-final-image-2/HASHES.txt` and the report's T45.
+is recorded in `wifi-final-image-2/HASHES.txt` and the report's T45 (the CURRENT FINAL row is
+the RX-watermark successor container `8ba1ad22...`; the earlier `0d9429ec...` row is history).
 
 ## 5. Reproduce the firmware patch recipes (host-only)
 

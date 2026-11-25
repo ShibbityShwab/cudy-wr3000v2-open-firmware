@@ -3094,8 +3094,12 @@ The image-2 lane has now **baked and host-verified** this module into the SAE-ca
 container **7,188,799 B sha256 `0d9429ec...`**, kernel slice **unchanged** (3,372,638 B
 `13e81214...`, slot `1794a531...` - a rootfs-only successor), rootfs UBI **3,801,088 B
 `44df3a63...`**, 83 packages, build-tail verify **82/82 PASS**, three recorded bakes
-byte-identical; nothing was flashed by that lane (`wifi-final-image-2/`). The association/4-way
-ladders (L5) wait on the antenna fix.
+byte-identical; nothing was flashed by that lane (`wifi-final-image-2/`). A **successor rebake**
+("FINAL image-2") then folded in the RX refill watermark (`rx_refill_wm`, default 75, fail-closed
+at boot): module **`d2c608e7...` 347,388 B / 57 params**, installed `b4c076bf...`; container
+**`8ba1ad22...`**, rootfs UBI **`31e7a39c...`**, verify **84/84**, kernel slice still unchanged
+(`13e81214...`/`1794a531...`). The pre-watermark `0d9429ec`/`ab9e18a4` row (T45) remains the
+history. The association/4-way ladders (L5) wait on the antenna fix.
 
 ---
 
@@ -3510,10 +3514,10 @@ CRX event, and the association-chain software exists in one module. The ranking 
    the on-air observer; capture auth/assoc via `g1 id13`, `STA added`, EAPOL 4-way, PTK;
 (2) **on-air beacon/association proof with a reliable client** and the RX data capture that comes
    with it (the RF fix also unblocks the 4-way PTK);
-(3) **the image bake of the corrected association module** - host-only bake **done** (image-2:
-   SAE hostapd + WPA2/WPA3 configs + the `ab9e18a4` module; kernel slice unchanged; container
-   7,188,799 B `0d9429ec...`; verify 82/82); remaining: the attended install, the post-boot
-   receipt and the on-air client test;
+(3) **the image bake of the corrected association module** - host-only bake **done**, now with the
+   RX refill watermark (**FINAL image-2**: module `d2c608e7...` 347,388 B / 57 params, container
+   7,188,799 B `8ba1ad22...`, verify 84/84, kernel slice unchanged); remaining: the attended
+   install, the post-boot receipt and the on-air client test;
 (4) **5 GHz / STA-join rungs** once association works (band5g endpoint-0001 ready handshake, the
    `sta_join=2` risk, WAL join fields);
 (5) **RX hardening proposals** (completion validity wait/clear-after-read, refill watermark) before
@@ -3626,8 +3630,10 @@ our own vendor modules (no bytes reproduced). No per-unit RF calibration value o
 committed: the RF statement is a bench observation (~44 dB path loss, -64 dBm at 30 cm), not a
 calibration dump. The image-2 bake is likewise recorded by size+sha256 only (container
 `0d9429ec...`, kernel slice `13e81214...`/slot `1794a531...`, rootfs UBI `44df3a63...`, installed
-module `4f1b45c1...`); the image/UBI/kernel/module binaries remain local (gitignored) and that
-lane contacted no device.
+module `4f1b45c1...`), with the successor FINAL image-2 recorded the same way (container
+`8ba1ad22...`, rootfs UBI `31e7a39c...`, squashfs `cb42bfed...`, module `d2c608e7...` / installed
+`b4c076bf...`, 57 params, verify 84/84); the image/UBI/kernel/module binaries remain local
+(gitignored) and that lane contacted no device.
 
 **Why it is publishable.** The repository is an intentionally public research notebook: negative
 results, dead ends and the ledger are part of the record. This report is written to that standard:

@@ -149,11 +149,11 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 341 claims", len(uniq) >= 341, "%d" % len(uniq))
+    check("evidence index has at least 342 claims", len(uniq) >= 342, "%d" % len(uniq))
     check("evidence index carries the v5 range EV-278..EV-308", 278 in nums and 308 in nums,
           "278=%s 308=%s" % (278 in nums, 308 in nums))
-    check("evidence index carries the v6 range EV-309..EV-341", 309 in nums and 341 in nums,
-          "309=%s 341=%s" % (309 in nums, 341 in nums))
+    check("evidence index carries the v6 range EV-309..EV-342", 309 in nums and 342 in nums,
+          "309=%s 342=%s" % (309 in nums, 342 in nums))
     check("evidence index carries the v3 range EV-196..EV-244", 196 in nums and 244 in nums,
           "196=%s 244=%s" % (196 in nums, 244 in nums))
     check("evidence index carries the v4 range EV-245..EV-277", 245 in nums and 277 in nums,
@@ -362,10 +362,26 @@ def check_constants():
         ("image-2 container size 7,188,799 B", "7,188,799",
          get_lane("wifi-final-image-2/HASHES.txt").lower()),
         ("image-2 rootfs UBI hash", "44df3a63",
-         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+         get_lane("wifi-final-image-2/build-evidence/build-runs.txt").lower()),
         ("image-2 installed module hash", "4f1b45c1",
+         get_lane("wifi-final-image-2/build-evidence/build-runs.txt").lower()),
+        ("image-2 pre-watermark bake history", "0d9429ec",
+         get_lane("wifi-final-image-2/build-evidence/build-runs.txt").lower()),
+        ("image-2 successor container hash", "8ba1ad22",
          get_lane("wifi-final-image-2/HASHES.txt").lower()),
-        ("image-2 build verify 82/82", "82/82",
+        ("image-2 successor rootfs UBI hash", "31e7a39c",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 successor squashfs hash", "cb42bfed",
+         get_lane("wifi-final-image-2/build-evidence/hashes.txt").lower()),
+        ("image-2 successor module artifact hash", "d2c608e7",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 successor installed module hash", "b4c076bf",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 successor verify 84/84", "84/84",
+         get_lane("wifi-final-image-2/REPORT.md").lower()),
+        ("image-2 successor RX watermark parameter", "rx_refill_wm",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 successor module parameters 57", "57 params",
          get_lane("wifi-final-image-2/REPORT.md").lower()),
     ]
     for name, needle, src in checks_const:
