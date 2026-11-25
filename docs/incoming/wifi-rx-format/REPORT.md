@@ -419,3 +419,157 @@ detection (page/mask/excp_announce sampling) is the right instrument.
 Bench (the Lead fires; read-only): `tools/route-rx-probe.sh --all` on the
 router after the association ladder reached `dp_rx_arm`; interpretation table
 in [FIRE-RECIPE.md](FIRE-RECIPE.md).
+
+---
+
+## 10. Follow-up (2026-11-25): the R2b fault result, why the PPDU pre-write is not the fix, and the RX-fault analysis
+
+### 10.1 What the bench established (and the plan correction)
+
+R0/R2 (rx-vendor-diff module, `rx_drain_write=0 rx_status_service=0`) gave the
+first positive MAC-receive evidence and then the decisive fault result:
+
+* R0 (write-free parity): the device-side RX/MAC state matches the vendor
+  stock dump (live +0x14/+0x24/+0x28/+0x2c/+0x30 all match; config 21/21
+  match); the one deviation is device-owned live +0x04 = 0x8000 vs stock 0
+  (recorded, meaning [U]).
+* R2 (observe-only, zero writes, laptop sent 3 auth frames): observe
+  `actions=1 frames=0 bad=0 chains=0` -> **not a single byte was written into
+  any host RX buffer**, the 36-byte header stayed all-zero, and the sticky
+  host-MAC status went 0x00000182 -> 0x00000582 (+ bit 10, rx_ppdu_desc
+  error). **The firmware handshake page went golden:0 during the auth
+  attempts** -> the RX path faults the device/firmware DMAC (data abort),
+  not just drops frames.
+
+The earlier plan of this lane was to pre-write a host PPDU-descriptor devVA at
+buffer+4+0x00. That plan was **checked, built and then abandoned before
+commit** at the Lead's direction, because the static evidence refutes its
+premise (this lane had already flagged the first point in its review):
+
+1. the vendor producer `shuangta_host_rx_add_buff` 0x374d0 **zeroes the whole
+   36-byte header on every publication** (`str r4,[r0],#4` stores the skb at
+   buffer+0; `memset_s(r0, 36, 0)` at 0x37688) - a published vendor free
+   buffer's header+0x00 is zero, so the vendor does not pre-write it either;
+2. no host PPDU-descriptor pool exists: `shuangta_rx_host_init_dscr_queue`
+   0x37888 allocates only the norm/small free rings and the completion ring;
+3. header+0x00 is device-authored (the vendor's
+   `shuangta_host_rx_get_ppdu_dscr_addr` 0x387b4 has no caller in the shipped
+   host module - only the debug dump path uses the field);
+4. **status bit 10 is already latched and masked in the committed vendor stock
+   dump** (`opensource/dumps/reg_all.txt`: CA 0x40050000 = 0x400 = bit 10;
+   mask +0x48 = 0xfffffcc1 has bit 10 = 1, i.e. masked).  "bit 10 clear" is
+   therefore **not** a sufficient success criterion; it is a masked,
+   informational status the vendor itself shows in a healthy state.
+
+Consequence: the fault is **earlier than the per-buffer header write** and is
+device/firmware-internal; the next productive work is a candidate analysis of
+the device-side RX sequence, not another host buffer pre-write.
+
+### 10.2 (a) Completion-ring descriptor write side
+
+The host-visible completion-ring contract is fully conformant with the vendor
+stock dump (checked here against the same dump the parity action uses):
+
+| item | vendor stock | ours | conclusion |
+| --- | --- | --- | --- |
+| ring base register (+0x28) | device VA of a host-DRAM ring | dp_setup-programmed host DRAM devVA, read-back verified | conform |
+| depth (+0x34) | 0x00000fff (4095 x 4 B) | same | conform |
+| host consumer (+0x40) | 0 | 0 (only a drain with `rx_drain_write=1` would move it) | conform |
+| device producer (live +0x10) | 0 | 0 | conform |
+| entry format | 4-byte device VA; the MAC echoes the free-ring entry (buffer+4 devVA), ISR converts devCA->hostVA and reads the host word at hostva-4 | our observe path classifies the same values | format conformant; no host pre-initialisation is required (entries are written by the device only) |
+| status bits | 0x400 (bit 10 latched, masked) | 0x182 idle -> 0x582 on the auth attempt | bit 10 is not a discriminator |
+
+The bit-10 handler's own log reads the **completion-ring** indices: host
+consumer (config +0x40) and device producer (live +0x10) - i.e. the error is
+raised inside the device when it tries to process a completion descriptor,
+before/independent of any host-visible entry. Since our completion-ring
+registers are byte-identical to the vendor stock (and the only device-owned
+live difference is +0x04), there is **no known host-side completion-ring
+format or ownership violation to fix**. What remains is the device-internal
+target of that descriptor write (see 10.4).
+
+### 10.3 (b) RX buffer DMA path: what could abort
+
+Host-controlled buffer properties are all within the verified contract:
+allocation 0x640 (norm) / 0xb4 (small), entry = devVA(buffer+4), 4-byte
+aligned, header zeroed, payload bound `len + 0x28 <= 0x640`, device-writes
+area 0x63c/0xb0.  Two things a host can still get wrong on this path, ranked:
+
+1. **Address space of the write master vs the read master.**  Our only positive
+   cross-master evidence is TX: the device *reads* our host-DRAM at raw
+   dma_alloc_coherent bus addresses (frame on air, TX COMPLETED).  RX is a
+   *write* to the same window; if the RX DMA master validated addresses in a
+   different (vendor "host CA") encoding, a write could abort while reads work.
+   The vendor publishes RX buffers through a different address transform than
+   ours: `shuangta_host_rx_add_buff` computes the entry from
+   `skb->data + 0xc0000004 + 0x600000` through
+   `pcie_if_hostca_to_devva` (a host-CA transform), while our entries are raw
+   coherent DMA addresses.  Both are in 0x8xxxxxxx and the same window as the
+   rings, so this is a low-probability but *testable* hypothesis: one attended
+   rung could publish buffers whose entries are transformed exactly like the
+   vendor's (requires the vendor WOC host-CA relation, still [U]), or the
+   stock-control run can be used to compare.
+2. **Device-RAM/PPDU-descriptor target** (see 10.4): if the device fetches a
+   descriptor pointer from an area that is not initialised, the abort shows up
+   as a firmware data abort with no host write at all - exactly the R2b shape.
+
+The 0x20 free-rptr prefetch is the vendor stock mirror, i.e. normal; it does
+not fault by itself.  The "complete entry phase bit" (15 index bits + phase
+bit 15) is only a *host* publishing convention; the device writes completion
+entries as plain 4-byte values, so a phase mismatch cannot cause a device
+fault.
+
+### 10.4 (c) Between receiving a PPDU and writing the buffer: the device-side path
+
+Decisive observation from the firmware image (local artifact, strings only):
+the RX path is **firmware-mediated**, not a pure hardware DMA:
+
+* `smac_rx_complete_5g_isr` / `smac_rx_complete_2g_isr` (firmware RX
+  completion ISRs), `HCC RX Thread`, `smac_rx_timeout_*_isr`;
+* `st_device_alloced_ppdu_dscr_list` - the firmware owns a **list of allocated
+  PPDU descriptors** (this is why header+0x00 is device-authored: the device
+  writes a device-RAM descriptor address into it);
+* `smac_msg_proc_enable_trx_req` / `..._disable_trx_req` and
+  `smac_msg_proc_rx_ring_reset_req` - firmware message handlers that (re)arm
+  the receive path on a host request.
+
+So the sequence on a received PPDU is: MAC hardware -> firmware/DMAC consumes
+the PPDU + PPDU descriptor (device RAM, firmware-owned list) -> firmware
+writes the host RX buffer and completion entry (and, for management, builds
+the D2H CRX event).  The R2b page golden-loss is a **firmware data abort in
+this path**, and it happens before the firmware's first host-buffer write.
+The strongest candidate is therefore that the firmware-side RX ring/PPDU
+descriptor state was **never (re)initialised in our session**, because the
+clean-room host never sends the vendor's pre-RX configuration sequence - our
+driver sends only the minimal AP/data-plane message set, and the vendor's
+`enable_trx` / `rx_ring_reset` requests are **not built by either vendor host
+module we have statically decoded** (no sender strings in
+hi5622v100_wifi/plat), i.e. they come from another vendor host component (or
+another message name/route) not yet in our artifact set.
+
+Candidate differences to emulate/verify (ranked):
+
+| # | candidate | evidence | cheap test |
+| --- | --- | --- | --- |
+| F1 | firmware RX ring/PPDU descriptor state uninitialised -> firmware dereferences an unarmed list on the first PPDU (data abort before host write) | firmware strings `st_device_alloced_ppdu_dscr_list`, `smac_msg_proc_rx_ring_reset_req`, `smac_msg_proc_enable_trx_req`; R2b observe frames=0 + page golden:0 | **stock-control run**: vendor image, vendor AP, same auth frames -> if no page loss, capture the vendor's pre-RX H2D sequence (the vendor host component that sends the rx-ring reset is not in our modules; hunt the full vendor rootfs module set) |
+| F2 | RX-write address encoding differs from the TX-read encoding (vendor host-CA transform at buffer publication) | vendor add_buff uses `pcie_if_hostca_to_devva` on a WOC host CA; our entries are raw coherent DMA VAs | a later rung that publishes entries transformed exactly like the vendor (needs the WOC host-CA relation) - or a vendor-image memory comparison of published free-ring entries |
+| F3 | device-owned live +0x04 = 0x8000 (ours) vs 0 (vendor stock) is a firmware RX state word | R0 parity was the only deviation | record live +0x04 before/after the trigger and in the stock-control run; if stock vendor shows 0 while RX works, ask what wrote 0x8000 in our boot (phase-bit pattern suggests a ring state) |
+| F4 | status bits 1/8 (asserted in our 0x182) are vendor-"forward to firmware core" classes that our driver never forwards | vendor ISR forward helpers 0x39558 (bit 1) / 0x3920c (bit 8); vendor-diff decode | compare with a stock-control dmesg; if the vendor forwards them, a host-side status-forward implementation is a candidate (needs the firmware message decode) |
+
+The bit-10 status the R2 run latched is *not* a sufficient criterion (10.1
+item 4); it is evidence that a PPDU-descriptor error was counted, but the
+fatal event is the firmware page loss.  The decisive discriminator remains
+the **stock-control run**: if the vendor image can receive the same auth
+frames without losing the golden page, the difference is host-side session
+configuration (F1/F4), not the buffer format; if the vendor image also loses
+the page while *not* AP-associated, the fault class is upstream.
+
+### 10.5 What was NOT shipped
+
+The follow-up PPDU-descriptor pre-write patch (host-DRAM descriptor pool,
+`rx_ppdu_desc`/`rx_ppdu_desc_stride` params, `dp_rx_ppdu` survey) was
+implemented and host-tested (86/86 checks) and then **not committed** at the
+Lead's direction once the R2b data showed the header write never happens; the
+plan-correction evidence above (10.1) supersedes it.  Nothing in this
+follow-up changes the shipped lane artifacts: the committed deliverables are
+still the 0001 patch, the model/tests and the contract in sections 1-9.

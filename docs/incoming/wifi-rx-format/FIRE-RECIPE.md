@@ -83,3 +83,41 @@ not reset the Wi-Fi chip), and keep the snapshot as the (B) finding.
 * The drain (`dp_rx_drain`) is **not** needed for the witness verdict; if the
   association lane's drain loop is already running, the probe remains valid
   (read-only) and should be taken between drain ticks.
+
+---
+
+## 5. Follow-up (2026-11-25): stock-control run + fault-localisation (R2b result)
+
+R2 observe-only showed `frames=0 bad=0 chains=0` (no host buffer written) and
+**page golden:0 during the auth attempts** -> the receive path faults the
+device/firmware DMAC.  The PPDU pre-write plan was dropped (REPORT section 10);
+no lane module is required for the next datum - it is a **stock-control** run.
+
+### SC-1 - vendor image control (the decisive rung)
+
+Boot the stock vendor image (vendor host driver + vendor AP bring-up, no
+clean-room module), bring the AP up the vendor way, and let the laptop send
+the same 3 auth frames.  Record: page/golden, vector mask, staging, dmesg
+`rx_ppdu_desc` lines, live bank CA 0x40050000 (status, +0x04!, +0x08/+0x0c,
++0x10), and whether the vendor AP logs the auth.
+
+| outcome | meaning |
+| --- | --- |
+| vendor receives/auths, page stays golden | the fault is in our clean-room session configuration (firmware-side RX state/F1 or status-forward F4) - the vendor's pre-RX host sequence is the thing to emulate |
+| vendor also loses the page on the same frames | the fault class is upstream (RF/PHY/MAC or firmware bug), not our host setup |
+| vendor receives but logs `rx_ppdu_desc error` | bit 10 is confirmed as benign/informational (it is latched and masked in the stock dump already) |
+
+### SC-2 - diagnostics that need no new module (read-only)
+
+* Record live +0x04 before/after the auth trigger (ours booted as 0x8000,
+  vendor stock 0), plus the full live window for the crash plan.
+* Record whether our status bits 1/8 (asserted since boot as 0x182) correlate
+  with any dmesg/forwarding difference vs stock.
+* On the stock-control boot, capture the vendor's H2D message sequence if the
+  image exposes it; the firmware handlers `smac_msg_proc_enable_trx_req` /
+  `smac_msg_proc_rx_ring_reset_req` suggest a pre-RX request that our
+  clean-room driver does not build (no sender in the two vendor modules we
+  decoded - other vendor host component/message name).
+
+Every rung: one load per boot, attended, recovery door armed; STOP on any
+golden-page deviation and power-cycle physically.
