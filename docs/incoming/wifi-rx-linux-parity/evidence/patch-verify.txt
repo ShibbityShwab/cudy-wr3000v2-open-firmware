@@ -1,0 +1,12 @@
+# patch verification: base = wifi-rx-static/src + wifi-rx-watermark patch
+# this lane's patch applies to that reconstructed current-state tree
+
+5e90c7748bc1fc71cbbd9fb477f01aa5165dd638b238e5b0f9cf11c86177dd27  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-rx-linux-parity/patches/0001-rx-linux-parity.patch
+
+files owned by the patch:
++++ b/hi5622_dp.c
++++ b/hi5622_dp_txrx.c
++++ b/hi5622_dp_txrx.h
++++ b/hi5622_rx_parity.c
++++ b/hi5622_rx_parity.h
++++ b/Kbuild

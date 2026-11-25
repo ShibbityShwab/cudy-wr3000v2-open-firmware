@@ -1,0 +1,131 @@
+rx_parity_selftest - WiFi rx Linux-parity model (task task-166)
+-- group 1: exact-width packed publication --
+PASS: pack(index 0, phase 0) = 0x0000
+PASS: pack(index 0, phase 1) = 0x8000 (the dp_setup full-ring publish)
+PASS: pack(index 255, phase 0, depth 256) = 0x00ff
+PASS: pack(index 255, phase 1, depth 256) = 0x80ff
+PASS: pack(index 32, phase 1, depth 256) = 0x8020
+PASS: refuse index == depth
+PASS: refuse phase 2
+PASS: refuse depth 0
+PASS: refuse depth above the 15-bit index field
+PASS: refuse NULL out
+PASS: every accepted value fits the 16-bit register
+-- group 2: served-bits-only W1C --
+PASS: served(status 0x182, mask 0xfffffcc1) = 0x102
+PASS: served value contains no masked-off bit
+PASS: served value is a subset of the status word
+PASS: served(0, mask) = 0
+PASS: mask 0 serves every bit
+PASS: masked bit is never acknowledged
+PASS: unmasked bit is acknowledged
+PASS: refuse NULL out
+-- group 3: completion-entry commit decision --
+PASS: zero/zero is NOT settled (spurious producer advance)
+PASS: zero then non-zero is settled (committed between reads)
+PASS: equal non-zero reads are settled
+PASS: changing non-zero reads are NOT settled
+PASS: non-zero then zero is NOT settled
+PASS: refuse NULL settled
+PASS: zero entry with budget left: retry
+PASS: retry at the last budget slot
+PASS: stop retrying at the bounded wait budget
+PASS: a non-zero entry needs no retry
+PASS: rx_entry_wait=0 reproduces the old single-read behaviour
+PASS: refuse NULL retry
+-- group 4: spurious-advance budget --
+PASS: no spurious yet: lane stays open
+PASS: at the cap: lane stays open (a transient is not corruption)
+PASS: above the cap: fail closed
+PASS: refuse a zero spurious cap
+PASS: refuse NULL close_lane
+-- group 5: bounded refill window --
+PASS: no consumer movement: no refill, producer unchanged
+PASS: 32 consumed, 100 queued, cap 64 -> refill 32, producer 0x8020
+PASS: cap 16 bounds the refill and the producer
+PASS: only 5 returned buffers queued -> refill 5
+PASS: full ring (posted == depth): room 0, no refill
+PASS: refuse queued > depth
+PASS: refuse cap > depth
+PASS: refuse depth 0
+PASS: refuse NULL new_producer
+PASS: no returned buffers queued is a no-op
+PASS: refuse a producer index outside the depth
+PASS: index wrap (255 -> 32): 33 consumed but the posted room caps it at 32
+PASS: one-lap phase wrap gives a depth-sized window, bounded by cap
+-- group 6: opt-in RX-control candidate word --
+PASS: candidate offset 0x08 allowed
+PASS: candidate offset 0x0c allowed
+PASS: candidate offset 0x14 allowed
+PASS: candidate offset 0x18 allowed
+PASS: ring-program word 0x00 refused
+PASS: msdu ring table word 0x10 refused
+PASS: RX buffer length word 0x1c refused
+PASS: free-ring producer word 0x38 refused
+PASS: interrupt status/clear word 0x44 refused
+PASS: interrupt mask word 0x48 refused
+PASS: vendor-live +0x5c refused (covered by mac_tail_writes)
+PASS: vendor-live +0x6c refused (covered by mac_tail_writes)
+PASS: unaligned offset refused
+PASS: outside the 0xb0 span refused
+PASS: unlisted but in-span 0x58 refused (not a candidate)
+PASS: RMW set on a zero word
+PASS: RMW clear preserves the other bits
+PASS: RMW set+clear compose
+PASS: refuse a bit both set and cleared
+PASS: refuse an empty set/clr request
+PASS: refuse a non-candidate offset
+PASS: refuse NULL out
+-- group 7: stall classification --
+PASS: no movement -> IDLE
+PASS: free-ring rptr moved, completion wptr did not -> PREFETCH_ONLY
+PASS: completion production is the strongest progress signal
+PASS: spurious producer visible with no movement -> SPURIOUS_WPTR
+PASS: a transport miss -> PROBE_ERROR
+PASS: stall names are stable
+-- group 8: parity-probe classification --
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the 14-write program word is recognised
+PASS: the four candidate words are NOT in the 14-write program
+PASS: the vendor-live +0x5c/+0x6c are NOT in the 14-write program
+PASS: stock +0x1c = 0x00b0063c
+PASS: stock +0x48 = 0xfffffcc1
+PASS: stock +0x5c/+0x6c = 4 (no identified writer)
+PASS: stock 0x08/0x18 = 0 (candidate control words)
+PASS: unknown offset classifies as 0
+PASS: programmed word matching stock -> class 1
+PASS: programmed word differing from stock -> class 2
+PASS: unprogrammed vendor-nonzero word -> class 3 (missing-write candidate)
+PASS: unprogrammed stock-zero word -> class 4 (candidate control word)
+PASS: offset outside the 0xb0 span -> class 0
+PASS: unaligned offset -> class 0
+-- group 9: step catalogue --
+PASS: step 0 is ring_alloc
+PASS: DMA-enable step is named and present
+PASS: DMA-enable step is honestly marked MISSING/UNKNOWN
+PASS: RX-filter step is honestly marked MISSING/UNKNOWN
+PASS: stall-watch step is honestly marked missing
+PASS: out-of-range step is NULL
+PASS: producer_publish name
+PASS: invalid step name is 'invalid'
+PASS: the catalogue has 13 steps
+-- group 10: literal decode anchors --
+PASS: config-block pointer/status offsets unchanged
+PASS: live-bank offsets unchanged
+PASS: ring depths unchanged
+PASS: the dp_setup full-ring publish is the model's phase-bit value
+PASS: bounded-wait and spurious-budget constants are pinned
+
+118 checks, 0 failures

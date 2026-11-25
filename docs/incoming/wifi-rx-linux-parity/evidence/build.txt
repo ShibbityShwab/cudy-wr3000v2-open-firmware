@@ -1,0 +1,21 @@
+# build.sh run (host-only)
+
+== 1. reconstruct the current RX source state ==
+PASS: base reconstructed (wifi-rx-static/src + wifi-rx-watermark patch)
+== 2. apply the parity patch and compare with src/ ==
+PASS: patch scope is exactly 6 files and src/ reproduces byte-for-byte
+== 3. host selftest (device-free, vendor-data-free) ==
+PASS: host selftest: 118 checks, 0 failures
+== 4. kernel-header compile (6.18.60) ==
+PASS: kernel-header compile of the portable model RC=0
+PASS: kernel compile of the patched glue objects: 6/6 objects, 0 errors, 0 warnings (modpost unresolved is the unlinked full module, expected)
+     (modpost RC=2; unresolved symbols belong to the unlinked full driver, not to the patched files)
+== 5. optional full-module integration build (RX_FULL_BASE) ==
+SKIP: RX_FULL_BASE not set (full association tree is not committed)
+== 6. publication checks ==
+PASS: lane contains no binaries/objects
+PASS: SPDX header: hi5622_rx_parity.c
+PASS: SPDX header: hi5622_rx_parity.h
+PASS: SPDX header: rx_parity_selftest.c
+PASS: no confidential markers
+RESULT: 10 passed, 0 failed

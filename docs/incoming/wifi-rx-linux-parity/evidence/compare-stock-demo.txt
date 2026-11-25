@@ -1,0 +1,15 @@
+# compare_stock.py against the committed vendor stock capture
+# (synthetic probe built from the capture itself to verify the classifier)
+
+  40040098  00000000  00000000  mac-cfg    match
+  4004009c  00000000  00000000  mac-cfg    match
+  400400a0  00000000  00000000  mac-cfg    match
+  400400a4  00000000  00000000  mac-cfg    match
+  400400a8  00000000  00000000  mac-cfg    match
+  400400ac  00000000  00000000  mac-cfg    match
+
+MAC config words with vendor state our 14-write program never writes: 2
+  +0x5c stock=00000004 probe=00000004
+  +0x6c stock=00000004 probe=00000004
+
+summary: 200 words, 0 differences (programmed=0, other=0), 2 missing-write candidates

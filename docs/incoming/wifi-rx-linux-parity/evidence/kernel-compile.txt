@@ -1,0 +1,13 @@
+# kernel-header compile: portable model + patched glue objects (6.18.60)
+
+PASS: kernel-header compile of the portable model RC=0
+PASS: kernel compile of the patched glue objects: 6/6 objects, 0 errors, 0 warnings (modpost unresolved is the unlinked full module, expected)
+
+# glue objects built:
+dp_rings.o
+dp_txrx.o
+glue_probe.o
+hi5622_dp.o
+hi5622_dp_txrx.o
+hi5622_rx_live.o
+hi5622_rx_parity.o

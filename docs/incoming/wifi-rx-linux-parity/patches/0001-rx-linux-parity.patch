@@ -1,0 +1,1436 @@
+--- a/hi5622_dp.c
++++ b/hi5622_dp.c
+@@ -931,6 +931,17 @@
+ static struct device_attribute dev_attr_dp_mac_tail_init =
+     __ATTR(dp_mac_tail_init, 0200, NULL, hi5622_dp_mac_tail_init_store);
+ 
++/* wifi-rx-linux-parity lane (task-166): READ-ONLY parity probe (live bank +
++ * MAC config block + the other band-0 machw blocks, classified against the
++ * committed vendor stock capture), the opt-in second producer publish and the
++ * one-shot allowlisted RX-control candidate-word experiment. */
++static struct device_attribute dev_attr_dp_rx_parity =
++    __ATTR(dp_rx_parity, 0444, hi5622_dp_rx_parity_show, NULL);
++static struct device_attribute dev_attr_dp_rx_kick =
++    __ATTR(dp_rx_kick, 0200, NULL, hi5622_dp_rx_kick_store);
++static struct device_attribute dev_attr_dp_rx_ctl =
++    __ATTR(dp_rx_ctl, 0200, NULL, hi5622_dp_rx_ctl_store);
++
+ static struct attribute *hi5622_dp_attrs[] = {
+     &dev_attr_dp_probe.attr,
+     &dev_attr_dp_setup.attr,
+@@ -948,6 +959,9 @@
+     &dev_attr_dp_tx_complete_poll.attr,
+     &dev_attr_dp_mac_ext.attr,
+     &dev_attr_dp_mac_tail_init.attr,
++    &dev_attr_dp_rx_parity.attr,
++    &dev_attr_dp_rx_kick.attr,
++    &dev_attr_dp_rx_ctl.attr,
+     NULL,
+ };
+ ATTRIBUTE_GROUPS(hi5622_dp);
+--- a/hi5622_dp_txrx.c
++++ b/hi5622_dp_txrx.c
+@@ -37,6 +37,7 @@
+ #include "dp_rings.h"
+ #include "dp_txrx.h"
+ #include "hi5622_rx_live.h"
++#include "hi5622_rx_parity.h"
+ 
+ #define DPTX_FRAME_OWNER 0x54585258u /* "TXRX" host bookkeeping word */
+ #define DPTX_TX_POST_MAX 8u          /* per-load first-frame budget */
+@@ -93,6 +94,43 @@
+ MODULE_PARM_DESC(rx_refill_wm,
+ 	"RX free-ring refill watermark as a percent of ring depth (0..100; 0=off=old behaviour, default 75 = keep >=3/4 posted); the drain re-publishes completed buffers when the posted count drops below it");
+ 
++/* wifi-rx-linux-parity (shared task task-166).  The Linux RX-enable order has
++ * steps this driver did not implement (see hi5622_rx_parity.h section 1).  The
++ * ones that can be applied safely are gated here, fail-closed:
++ *   rx_entry_wait  bounded completion-entry commit wait (0 = old single read)
++ *   rx_ring_kick   opt-in second producer store ("ring kick") after arm
++ *   rx_ctl_*       one-shot allowlisted RX-control candidate-word experiment
++ *   rx_legacy_bank opt-in legacy reads of config +0x4c/+0x50/+0x54, which the
++ *                  vendor never reads (read-side hazard candidate) */
++static unsigned int dptx_rx_entry_wait = RXP_ENTRY_WAIT_DEF;
++module_param_named(rx_entry_wait, dptx_rx_entry_wait, uint, 0644);
++MODULE_PARM_DESC(rx_entry_wait,
++	"bounded completion-entry commit wait in re-reads (default 32; 0 = old single-read behaviour; a still-zero entry is a spurious producer advance, not corruption)");
++static unsigned int dptx_rx_ring_kick = 0u;
++module_param_named(rx_ring_kick, dptx_rx_ring_kick, uint, 0644);
++MODULE_PARM_DESC(rx_ring_kick,
++	"opt-in attended experiment: re-publish the two free-ring producer words with the exact vendor zero-extended u16 after dp_rx_arm (one shot; default 0)");
++static unsigned int dptx_rx_ctl_enable = 0u;
++module_param_named(rx_ctl_enable, dptx_rx_ctl_enable, uint, 0644);
++MODULE_PARM_DESC(rx_ctl_enable,
++	"opt-in attended experiment: allow ONE allowlisted RX-control candidate-word write (default 0 = refused)");
++static unsigned int dptx_rx_ctl_off = 0xffffffffu;
++module_param_named(rx_ctl_off, dptx_rx_ctl_off, uint, 0644);
++MODULE_PARM_DESC(rx_ctl_off,
++	"candidate word offset inside MAC band 0 for rx_ctl_enable (allowlist 0x08/0x0c/0x14/0x18 only; default invalid)");
++static unsigned int dptx_rx_ctl_set = 0u;
++module_param_named(rx_ctl_set, dptx_rx_ctl_set, uint, 0644);
++MODULE_PARM_DESC(rx_ctl_set,
++	"bits to set in the one-shot RX-control candidate word (set & clr must be 0)");
++static unsigned int dptx_rx_ctl_clr = 0u;
++module_param_named(rx_ctl_clr, dptx_rx_ctl_clr, uint, 0644);
++MODULE_PARM_DESC(rx_ctl_clr,
++	"bits to clear in the one-shot RX-control candidate word (set & clr must be 0)");
++static unsigned int dptx_rx_legacy_bank = 0u;
++module_param_named(rx_legacy_bank, dptx_rx_legacy_bank, uint, 0644);
++MODULE_PARM_DESC(rx_legacy_bank,
++	"opt-in: let dp_rx_poll read config +0x4c/+0x50/+0x54 (the vendor never reads those words; default 0 = live bank only)");
++
+ /* Documentation-example address (02:00:... locally administered); never a
+  * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
+ static const u8 dptx_example_addr[6] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x01 };
+@@ -216,6 +254,22 @@
+ 	u32  rx_wm_refilled_norm;
+ 	u32  rx_wm_refilled_small;
+ 	bool rx_wm_low;
++
++	/* wifi-rx-linux-parity (task-166): commit-wait / kick / candidate-control
++	 * telemetry and the log-only stall classification. */
++	u32  rx_commit_waits;
++	u32  rx_commit_ok;
++	u32  rx_spurious;
++	u32  rx_spurious_closed;
++	u32  rx_parity_probes;
++	bool rx_kick_done;
++	u32  rx_kick_values[2];
++	bool rx_ctl_done;
++	u32  rx_ctl_off;
++	u32  rx_ctl_old;
++	u32  rx_ctl_value;
++	u32  rx_legacy_reads;
++	int  rx_stall_class;
+ 	u32  rx_last_err;
+ };
+ 
+@@ -309,27 +363,41 @@
+ 	return 0;
+ }
+ 
+-/* Publish a packed 16-bit ring index to a config-block word, preserving the
+- * upper half (the vendor hal_set_* accessors do a 32-bit RMW while the
+- * hal_ring_set_sw2hw paths store a zero-extended u16).  Read-back checked. */
++/* Publish a packed 16-bit ring index to a config-block word with the exact
++ * vendor write width.  The luofu vendor hal_ring_set_sw2hw stores a
++ * zero-extended u16 (index[14:0] | phase<<15), not a 32-bit RMW [V
++ * wifi-rx-static REPORT sec. 4]; the inherited RMW preserved an upper half the
++ * vendor never writes, which is a divergence on the same registers the MAC
++ * uses for its ring pointers.  Rule (hi5622_rx_parity.h sec. 2): refuse an
++ * unexpected non-zero upper half instead of clobbering it, write exactly the
++ * u16, and verify the low half plus the (expected zero) upper half. */
+ static int dptx_publish16(struct hi5622_pci *ctx, u32 off, u32 packed,
+ 			  u32 *readback)
+ {
+-	u32 old, val, rb;
++	u32 old, rb;
+ 
+-	if (packed > 0xffffu)
++	if (packed > RXP_PTR_MAX)
+ 		return -ERANGE;
+ 	old = dptx_mac_read(ctx, off);
+ 	if (old == 0xffffffffu)
+ 		return -EFAULT;
+-	val = (old & 0xffff0000u) | packed;
+-	if (dptx_mac_write_checked(ctx, off, val) != 0)
++	if ((old & 0xffff0000u) != 0u) {
++		dev_err(&ctx->pdev->dev,
++			"DP rx: MAC +0x%02x upper half 0x%08x is non-zero - the vendor zero-extended u16 publish cannot produce this state; refused (no write)\n",
++			off, old & 0xffff0000u);
++		return -ERANGE;
++	}
++	if (dptx_mac_write_checked(ctx, off, packed) != 0)
+ 		return -EFAULT;
+ 	rb = dptx_mac_read(ctx, off);
+ 	if (readback)
+ 		*readback = rb;
+ 	if ((rb & 0xffffu) != packed)
+ 		return -EIO;
++	if ((rb & 0xffff0000u) != 0u)
++		dev_warn(&ctx->pdev->dev,
++			 "DP rx: MAC +0x%02x read back upper half 0x%08x (vendor path leaves it zero; recorded, not retried)\n",
++			 off, rb & 0xffff0000u);
+ 	return 0;
+ }
+ 
+@@ -803,10 +871,21 @@
+ 		return -EBUSY;
+ 	}
+ 
+-	/* Bounded wait for the device completion producer to move. */
++	/* Bounded wait for the device completion producer to move.  The default
++	 * source is the live bank CA 0x40050000 +0x10 - the pointer the vendor
++	 * ISR reads.  The config-block +0x4c/+0x50/+0x54 words are never read by
++	 * the vendor, read 0 in the vendor stock capture, and a read-sensitive
++	 * register there is a candidate for the observed firmware exception; they
++	 * are reachable only behind the opt-in rx_legacy_bank=1. */
+ 	while (waited < DPTX_RX_POLL_MS) {
+-		u32 wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
++		u32 wptr;
+ 
++		if (dptx_rx_legacy_bank) {
++			t->rx_legacy_reads++;
++			wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
++		} else {
++			wptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_CMP_WPTR);
++		}
+ 		pending = (u32)dp_txrx_idx_count(wptr, t->rx_state.cmp_rptr,
+ 						 DP_TXRX_RX_CMP_DEPTH);
+ 		if (pending > 0u)
+@@ -815,10 +894,18 @@
+ 		waited += DPTX_RX_POLL_STEP_MS;
+ 	}
+ 	t->rx_waited_ms = waited;
+-	t->rx_cmp_wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
+-	t->rx_cmp_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_RPTR);
+-	t->rx_norm_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXNORM_RPTR);
+-	t->rx_small_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXSMALL_RPTR);
++	if (dptx_rx_legacy_bank) {
++		t->rx_legacy_reads += 3u;
++		t->rx_cmp_wptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_WPTR);
++		t->rx_cmp_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXCMP_RPTR);
++		t->rx_norm_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXNORM_RPTR);
++		t->rx_small_rptr = dptx_mac_read(ctx, DP_TXRX_MAC_REG_RXSMALL_RPTR);
++	} else {
++		t->rx_cmp_wptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_CMP_WPTR);
++		t->rx_cmp_rptr = t->rx_cmp_cons;
++		t->rx_norm_rptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_NORM_RPTR);
++		t->rx_small_rptr = dptx_mac_read_live(ctx, HIL_RX_LIVE_SMALL_RPTR);
++	}
+ 	if (t->rx_cmp_wptr != 0xffffffffu) {
+ 		pending = (u32)dp_txrx_idx_count(t->rx_cmp_wptr,
+ 						 t->rx_state.cmp_rptr,
+@@ -926,6 +1013,14 @@
+ 			 t->rx_wm_low ? " CREDIT_LOW" : "",
+ 			 t->rx_wm_refilled_norm, t->rx_wm_refilled_small);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX parity (task-166): rx_entry_wait=%u commit{waits=%u ok=%u spurious=%u closed=%u} ring_kick=%u done=%u ctl_enable=%u done=%u legacy_bank=%u reads=%u stall=%s\n",
++			 dptx_rx_entry_wait, t->rx_commit_waits, t->rx_commit_ok,
++			 t->rx_spurious, t->rx_spurious_closed,
++			 dptx_rx_ring_kick, t->rx_kick_done ? 1u : 0u,
++			 dptx_rx_ctl_enable, t->rx_ctl_done ? 1u : 0u,
++			 dptx_rx_legacy_bank, t->rx_legacy_reads,
++			 rxp_stall_name((enum rxp_stall) t->rx_stall_class));
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+ 			 "RX static live bank CA 0x40050000: status=0x%08x norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x prod{norm=0x%04x small=0x%04x} cmp_cons=0x%04x last_err=%d\n",
+ 			 t->rx_live_status, t->rx_live_norm_rptr,
+ 			 t->rx_live_small_rptr, t->rx_live_cmp_wptr,
+@@ -998,15 +1093,19 @@
+ 	return HIL_RX_OK;
+ }
+ 
+-/* Refill one free ring from its refill queue, bounded by the number of slots
+- * the device consumed since the last snapshot (live-bank rptr delta).  The
+- * buffers being re-published were handed back by completions, so no buffer
+- * can be in flight twice.  Returns refilled count or a negative error (any
+- * error closes the RX lane: no retry). */
++/* Refill one free ring from its refill queue inside the bounded parity window
++ * (hi5622_rx_parity.h sec. 5): plan = min(device-consumed delta, returned
++ * buffers queued, depth - posted, action cap).  The inherited code refilled by
++ * the raw delta and could over-publish past the posted/unposted room if the
++ * phase bookkeeping and the queue ever disagreed.  Buffers being re-published
++ * were handed back by validated completions, so no buffer can be in flight
++ * twice.  Returns the refilled count or a negative error (the caller closes
++ * the RX lane: no retry). */
+ static int dptx_rx_refill(struct hi5622_dp_txrx *t, u8 ring_kind)
+ {
+ 	struct hi5622_pci *ctx = t->ctx;
+-	u32 old, new, avail, buf_dma, idx, prod, depth, cfg_off;
++	u32 old, fresh, buf_dma, idx, prod, new_prod, depth, cfg_off;
++	u32 queued, plan, cap;
+ 	u32 *q;
+ 	u16 *head, *count;
+ 	void *ring;
+@@ -1014,7 +1113,7 @@
+ 
+ 	if (ring_kind == 0u) {
+ 		old = t->rx_last_norm_rptr;
+-		new = t->rx_live_norm_rptr;
++		fresh = t->rx_live_norm_rptr;
+ 		depth = HIL_RX_NORM_DEPTH;
+ 		cfg_off = HIL_RX_CFG_WPTR_NORM;
+ 		q = t->rx_refill_norm_q;
+@@ -1024,7 +1123,7 @@
+ 		prod = t->rx_norm_prod;
+ 	} else {
+ 		old = t->rx_last_small_rptr;
+-		new = t->rx_live_small_rptr;
++		fresh = t->rx_live_small_rptr;
+ 		depth = HIL_RX_SMALL_DEPTH;
+ 		cfg_off = HIL_RX_CFG_WPTR_SMALL;
+ 		q = t->rx_refill_small_q;
+@@ -1035,10 +1134,15 @@
+ 	}
+ 	if (!ring)
+ 		return HIL_RX_EARG;
+-	rc = hi5622_rx_ring_consumed(old, new, depth, &avail);
+-	if (rc != HIL_RX_OK)
+-		return rc;
+-	while (avail > 0u && *count > 0u) {
++	cap = dptx_rx_drain_max;
++	if (cap == 0u || cap > HIL_RX_DRAIN_MAX)
++		cap = HIL_RX_DRAIN_MAX;
++	queued = (u32)*count;
++	rc = rxp_refill_plan(old, fresh, prod, depth, queued, cap, &plan,
++			     &new_prod);
++	if (rc != 0)
++		return HIL_RX_ERANGE;
++	while (plan > 0u) {
+ 		idx = prod & HIL_RX_IDX_MASK;
+ 		if (idx >= depth)
+ 			return HIL_RX_ERANGE;
+@@ -1047,21 +1151,21 @@
+ 		*head = (u16)(((u32)*head + 1u) % depth);
+ 		(*count)--;
+ 		prod = hi5622_rx_idx_advance(prod, depth);
+-		avail--;
++		plan--;
+ 		refilled++;
+ 	}
+ 	if (ring_kind == 0u) {
+-		t->rx_last_norm_rptr = new;
+-		t->rx_norm_prod = prod;
++		t->rx_last_norm_rptr = fresh;
++		t->rx_norm_prod = new_prod;
+ 		t->rx_refilled_norm += (u32)refilled;
+ 	} else {
+-		t->rx_last_small_rptr = new;
+-		t->rx_small_prod = prod;
++		t->rx_last_small_rptr = fresh;
++		t->rx_small_prod = new_prod;
+ 		t->rx_refilled_small += (u32)refilled;
+ 	}
+ 	if (refilled > 0) {
+ 		dma_wmb();
+-		rc = dptx_publish16(ctx, cfg_off, prod, NULL);
++		rc = dptx_publish16(ctx, cfg_off, new_prod, NULL);
+ 		if (rc)
+ 			return rc;
+ 	}
+@@ -1206,6 +1310,19 @@
+ 	return rc < 0 ? rc : -EIO;
+ }
+ 
++/* Log-only stall classification (iwlwifi RX_STALLED / sibling P3 analogue).
++ * Never moves a pointer; the drain calls it once per action. */
++static void dptx_rx_stall_update(struct hi5622_dp_txrx *t, u32 st, u32 nr,
++				 u32 sr, u32 cw)
++{
++	int cls = RXP_STALL_IDLE;
++
++	if (rxp_stall_class(t->rx_arm_status, t->rx_arm_norm_rptr,
++			    t->rx_arm_small_rptr, t->rx_arm_cmp_wptr,
++			    st, nr, sr, cw, t->rx_spurious, &cls) == 0)
++		t->rx_stall_class = cls;
++}
++
+ /* dp_rx_arm: read-only validation of the live RX bank.  This is the mirror of
+  * the TXQ publish proof for the RX direction: it must show that the MAC has
+  * consumed the free-ring entries the 14-write program published.  It never
+@@ -1326,6 +1443,7 @@
+ 	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
+ 	struct hi5622_pci *ctx;
+ 	u32 st, nr, sr, cw, pending, max, cons, active = 0u;
++	u32 stopped = 0u, processed = 0u;
+ 	int rc, i, norm_refill, small_refill, wm_norm_refill, wm_small_refill;
+ 
+ 	(void)attr;
+@@ -1393,18 +1511,21 @@
+ 				       &wm_norm_refill, &wm_small_refill);
+ 		if (rc < 0)
+ 			goto drain_refuse;
++		dptx_rx_stall_update(t, st, nr, sr, cw);
+ 		if (wm_norm_refill + wm_small_refill > 0) {
+ 			mutex_unlock(&t->lock);
+ 			dev_info(dev,
+-				 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x) - watermark refill re-published %d norm / %d small queued buffers (producer moved, completion consumer did not)\n",
++				 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x stall=%s) - watermark refill re-published %d norm / %d small queued buffers (producer moved, completion consumer did not)\n",
+ 				 st, active, nr, sr, cw, t->rx_cmp_cons,
++				 rxp_stall_name((enum rxp_stall)t->rx_stall_class),
+ 				 wm_norm_refill, wm_small_refill);
+ 			return (ssize_t)count;
+ 		}
+ 		mutex_unlock(&t->lock);
+ 		dev_info(dev,
+-			 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x) - no pointer moved\n",
+-			 st, active, nr, sr, cw, t->rx_cmp_cons);
++			 "DP rx_drain: no new completion (live status=0x%08x rx_pending=%u norm_rptr=0x%04x small_rptr=0x%04x cmp_wptr=0x%04x cmp_cons=0x%04x stall=%s) - no pointer moved\n",
++			 st, active, nr, sr, cw, t->rx_cmp_cons,
++			 rxp_stall_name((enum rxp_stall) t->rx_stall_class));
+ 		return (ssize_t)count;
+ 	}
+ 	cons = t->rx_cmp_cons;
+@@ -1422,8 +1543,64 @@
+ 			rc = -ERANGE;
+ 			goto drain_refuse;
+ 		}
++		/* Completion-entry commit decision (hi5622_rx_parity.h sec. 3):
++		 * the device producer pointer can become visible before the entry
++		 * payload is committed (the sibling Hi1105 HAL spins until the entry
++		 * is non-zero for this reason).  A zero entry is a spurious producer
++		 * advance, not corruption; it is retried within rx_entry_wait and
++		 * never consumed while zero. */
+ 		dma_rmb(); /* the live wptr was read before the ring memory */
+-		entry = ((const u32 *)(const void *)t->rx_cmp_ring)[slot];
++		{
++			const u32 *cmp = (const u32 *)(const void *)t->rx_cmp_ring;
++			unsigned int waits = 0;
++			u32 first;
++
++			first = cmp[slot];
++			entry = first;
++			while (entry == 0u && waits < dptx_rx_entry_wait) {
++				cpu_relax();
++				dma_rmb();
++				entry = cmp[slot];
++				waits++;
++			}
++			if (waits > 0u)
++				t->rx_commit_waits++;
++			if (entry == 0u) {
++				int close_lane = 0;
++
++				t->rx_spurious++;
++				dptx_rx_stall_update(t, st, nr, sr, cw);
++				if (rxp_spurious_limit(t->rx_spurious,
++						       RXP_SPURIOUS_MAX,
++						       &close_lane) != 0 ||
++				    close_lane) {
++					t->rx_spurious_closed = 1u;
++					rc = -EIO;
++					goto drain_refuse;
++				}
++				dev_warn(dev,
++					 "DP rx_drain: completion entry %d still zero after %u bounded re-reads - spurious producer advance (not corruption); %u/%u consecutive; entry not consumed\n",
++					 i, waits, t->rx_spurious,
++					 (u32)RXP_SPURIOUS_MAX);
++				stopped = 1u;
++				break;
++			}
++			{
++				int settled = 0;
++
++				if (rxp_commit_settled(first, entry, &settled) !=
++				    0 || !settled) {
++					t->rx_spurious++;
++					dptx_rx_stall_update(t, st, nr, sr, cw);
++					dev_warn(dev,
++						 "DP rx_drain: completion entry %d changed across the bounded commit reads (0x%08x -> 0x%08x) - producer/entry desync, entry not consumed\n",
++						 i, first, entry);
++					stopped = 1u;
++					break;
++				}
++				t->rx_commit_ok++;
++			}
++		}
+ 		rc = dptx_rx_find_buffer(t, entry, &ring_kind, &slot_idx);
+ 		if (rc != HIL_RX_OK) {
+ 			t->rx_bad_entry++;
+@@ -1475,8 +1652,26 @@
+ 		rc = dptx_rx_queue_completed(t, ring_kind, buf_dma);
+ 		if (rc != HIL_RX_OK)
+ 			goto drain_refuse;
++		/* clear-after-read: never hand a stale entry to a later lane
++		 * re-arm/restart (Hi1105 hal_ring_get_entries zeroes consumed
++		 * entries for this reason). */
++		((u32 *)(void *)t->rx_cmp_ring)[slot] = 0u;
+ 		cons = hi5622_rx_idx_advance(cons, HIL_RX_CMP_DEPTH);
++		processed++;
+ 	}
++	if (stopped && processed == 0u) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_drain: stopped before any validated completion (commit desync, spurious=%u) - no ring pointer published\n",
++			 t->rx_spurious);
++		return (ssize_t)count;
++	}
++	if (stopped)
++		dev_warn(dev,
++			 "DP rx_drain: stopped early after %u validated completions (commit desync, spurious=%u) - publishing only the validated prefix\n",
++			 processed, t->rx_spurious);
++	pending = processed;
++	dma_wmb();
+ 	/* Commit point: every entry validated.  Refill the free rings first (the
+ 	 * buffers were handed back by completions, so this cannot double-hand a
+ 	 * live buffer), then run the watermark pass against a FRESH live-bank
+@@ -1509,19 +1704,32 @@
+ 	if (rc)
+ 		goto drain_refuse;
+ 	if (dptx_rx_clear_status) {
+-		/* Vendor clear path: W1C the observed status word (only the bits
+-		 * the live block reported; the mask value was validated at arm). */
+-		if (dptx_mac_write_checked(ctx, HIL_RX_CFG_INT_STATUS, st) != 0) {
++		/* Vendor ISR clear path: status &= ~mask, then W1C exactly the
++		 * served bits (the inherited code W1C'd the raw status word, i.e.
++		 * bits the vendor never acknowledges). */
++		u32 mask_now = dptx_mac_read(ctx, HIL_RX_CFG_INT_MASK);
++		u32 w1c = 0u;
++
++		if (mask_now == 0xffffffffu ||
++		    rxp_w1c_served(st, mask_now, &w1c) != 0) {
++			rc = -EFAULT;
++			goto drain_refuse;
++		}
++		if (dptx_mac_write_checked(ctx, HIL_RX_CFG_INT_STATUS, w1c) != 0) {
+ 			rc = -EIO;
+ 			goto drain_refuse;
+ 		}
+ 	}
+ 	t->rx_drained += pending;
+ 	t->rx_drain_actions++;
++	dptx_rx_stall_update(t, st, nr, sr, cw);
+ 	mutex_unlock(&t->lock);
+ 	dev_info(dev,
+-		 "DP rx_drain: drained=%u/%u cmp_cons=0x%04x live{cmp_wptr=0x%04x norm_rptr=0x%04x small_rptr=0x%04x status=0x%08x} refilled{norm=%d small=%d} wm{pct=%u trips=%u credit_low=%u refilled{norm=%d small=%d} posted{norm=%u small=%u} target{norm=%u small=%u}} totals{drained=%u actions=%u bad=%u chain=%u} - completion ring consumer published, free rings refilled\n",
+-		 pending, pending, cons, cw, nr, sr, st, norm_refill, small_refill,
++		 "DP rx_drain: drained=%u/%u cmp_cons=0x%04x live{cmp_wptr=0x%04x norm_rptr=0x%04x small_rptr=0x%04x status=0x%08x stall=%s commit{waits=%u ok=%u spurious=%u}} refilled{norm=%d small=%d} wm{pct=%u trips=%u credit_low=%u refilled{norm=%d small=%d} posted{norm=%u small=%u} target{norm=%u small=%u}} totals{drained=%u actions=%u bad=%u chain=%u} - completion ring consumer published, free rings refilled\n",
++		 pending, pending, cons, cw, nr, sr, st,
++		 rxp_stall_name((enum rxp_stall) t->rx_stall_class),
++		 t->rx_commit_waits, t->rx_commit_ok, t->rx_spurious,
++		 norm_refill, small_refill,
+ 		 dptx_rx_refill_wm, t->rx_wm_trips, t->rx_wm_credit_low,
+ 		 wm_norm_refill, wm_small_refill, t->rx_wm_posted_norm,
+ 		 t->rx_wm_posted_small, t->rx_wm_target_norm,
+@@ -1777,6 +1985,291 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* wifi-rx-linux-parity (task-166): read-only parity probe, the opt-in */
++/* ring kick, and the one-shot allowlisted RX-control experiment       */
++/* ------------------------------------------------------------------ */
++
++/* Absolute-CA MAC read through the same range-checked translation.  The probe
++ * reads the other band-0 machw blocks, whose CAs are not the host-interface
++ * base; the helper refuses any CA the six inbound regions do not cover. */
++static u32 dptx_mac_read_ca(struct hi5622_pci *ctx, u32 ca)
++{
++	u32 bar0 = hi5622_ca_to_bar0(ca);
++
++	if (!bar0)
++		return 0xffffffffu;
++	return readl(ctx->bar0 + bar0);
++}
++
++/* dp_rx_parity - READ-ONLY parity probe.  Linux drivers program and inspect
++ * the whole RX queue state (base/size/index/enable) as one object; our driver
++ * only ever reads the live bank and the config words it writes.  This probe
++ * reads, in one bounded pass:
++ *   - the live bank CA 0x40050000 +0x00..+0x3c (16 words),
++ *   - the MAC host-interface config block CA 0x40040000 +0x00..+0xac (44
++ *     words, classified against the committed vendor stock capture),
++ *   - the first 16 words of the other eight band-0 machw blocks (words 0..4,
++ *     6, 7, 9) so a missing host-writable enable/filter word in another block
++ *     becomes visible instead of being guessed at.
++ * The vendor's own register dumper reads exactly these blocks (its output is
++ * opensource/dumps/reg_all.txt), so the reads are proven safe; the probe never
++ * writes.  Compare with tools/compare_stock.py. */
++ssize_t hi5622_dp_rx_parity_show(struct device *dev,
++				 struct device_attribute *attr, char *buf)
++{
++	static const u32 blocks[] = {
++		0x40042000u, 0x40044000u, 0x40046000u, 0x40048000u,
++		0x4004a000u, 0x4004c000u, 0x40052000u, 0x40054000u,
++	};
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	int pos = 0;
++	unsigned int i, k;
++	u32 off;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!ctx->windows_programmed || !ctx->hcc || !ctx->hcc->armed)
++		return -EBUSY;
++	mutex_lock(&t->lock);
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	t->rx_parity_probes++;
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "DP rx parity probe #%u (read-only, one MAC band-0 pass; the vendor register dumper reads the same blocks):\n",
++			 t->rx_parity_probes);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos, "live %08x:",
++			 HIL_RX_LIVE_CA_BAND0);
++	for (i = 0; i < 16u; i++)
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, " %08x",
++				 dptx_mac_read_live(ctx, i * 4u));
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos, "\n");
++	for (k = 0; k < RXP_MAC_CFG_SPAN / 4u; k++) {
++		int stock_nonzero = 0, matches = 0, cls;
++		const char *mark = "";
++		u32 value;
++
++		off = k * 4u;
++		if (k % 16u == 0u)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++					 "%s%08x:", k == 0u ? "" : "\n",
++					 DP_MAC_CA_BAND0 + off);
++		value = dptx_mac_read(ctx, off);
++		cls = rxp_mac_cfg_class(off, value, &stock_nonzero, &matches);
++		if (cls == 3)
++			mark = "*";  /* vendor non-zero, never written by us */
++		else if (cls == 2)
++			mark = "!";  /* programmed word differs from stock   */
++		else if (value == 0xffffffffu)
++			mark = "?";
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, " %08x%s",
++				 value, mark);
++	}
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "\nlegend: * = non-zero in the vendor stock capture but never written by our 14-write program; ! = programmed word differing from the stock capture; ? = transport miss\n");
++	for (i = 0; i < ARRAY_SIZE(blocks); i++) {
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, "blk  %08x:",
++				 blocks[i]);
++		for (k = 0; k < 16u; k++)
++			pos += scnprintf(buf + pos, PAGE_SIZE - pos, " %08x",
++					 dptx_mac_read_ca(ctx,
++							  blocks[i] + k * 4u));
++		pos += scnprintf(buf + pos, PAGE_SIZE - pos, "\n");
++	}
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "parity: commit{waits=%u ok=%u spurious=%u closed=%u} ring_kick{en=%u done=%u} ctl{en=%u done=%u off=0x%02x old=0x%08x new=0x%08x} legacy_bank{en=%u reads=%u} stall=%s\n",
++			 t->rx_commit_waits, t->rx_commit_ok, t->rx_spurious,
++			 t->rx_spurious_closed, dptx_rx_ring_kick,
++			 t->rx_kick_done ? 1u : 0u, dptx_rx_ctl_enable,
++			 t->rx_ctl_done ? 1u : 0u, t->rx_ctl_off,
++			 t->rx_ctl_old, t->rx_ctl_value, dptx_rx_legacy_bank,
++			 t->rx_legacy_reads,
++			 rxp_stall_name((enum rxp_stall)t->rx_stall_class));
++	mutex_unlock(&t->lock);
++	return pos;
++}
++
++/* dp_rx_kick - opt-in attended experiment: re-publish the two free-ring
++ * producer words with the exact vendor zero-extended u16 AFTER dp_rx_arm.  The
++ * Linux analogues are the explicit kick store mt76_dma_kick_queue performs
++ * after it fills descriptors (wmb then index store) and brcmfmac's
++ * write-complete (wptr store then doorbell).  Our 14-write program publishes
++ * the producer once; this lane offers a second, identical-width publish to
++ * test whether the MAC latches its ring-armed state on a later kick.  One shot
++ * per load, gated exactly like the drain; default 0 = refused. */
++ssize_t hi5622_dp_rx_kick_store(struct device *dev,
++				struct device_attribute *attr, const char *buf,
++				size_t count)
++{
++	static const u32 offs[2] = {
++		HIL_RX_CFG_WPTR_NORM, HIL_RX_CFG_WPTR_SMALL
++	};
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 vals[2], rb;
++	unsigned int i;
++	int rc;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ctx = t->ctx;
++	mutex_lock(&t->lock);
++	if (!dptx_rx_ring_kick) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_kick: refused - rx_ring_kick=0 (default). This is an opt-in attended experiment only\n");
++		return -EPERM;
++	}
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->rx_kick_done) {
++		mutex_unlock(&t->lock);
++		return -EALREADY;
++	}
++	if (!dptx_rx_enable || !t->rx_armed || t->rx_failed) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_kick: refused - needs rx_enable=1, a successful dp_rx_arm and an open RX lane\n");
++		return -EPERM;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev, "DP rx_kick: refused by gate '%s' - no device write\n",
++			 dptx_gate_name(rc));
++		return rc;
++	}
++	vals[0] = t->rx_norm_prod;
++	vals[1] = t->rx_small_prod;
++	for (i = 0; i < 2u; i++) {
++		rc = dptx_publish16(ctx, offs[i], vals[i], &rb);
++		if (rc) {
++			mutex_unlock(&t->lock);
++			dev_err(dev,
++				"DP rx_kick: +0x%02x publish failed (%d) - lane not marked done, reload to retry\n",
++				offs[i], rc);
++			return rc;
++		}
++		t->rx_kick_values[i] = rb;
++	}
++	t->rx_kick_done = true;
++	mutex_unlock(&t->lock);
++	dev_warn(dev,
++		 "DP rx_kick: EXPERIMENT - re-published exact-width producer words norm +0x38=0x%08x small +0x3c=0x%08x (read-back 0x%08x/0x%08x); one shot per load, no retry; observe dp_rx_parity/dp_rx_capture next\n",
++		 vals[0], vals[1], t->rx_kick_values[0], t->rx_kick_values[1]);
++	return (ssize_t)count;
++}
++
++/* dp_rx_ctl - opt-in, one-shot, allowlisted RX-control candidate-word write.
++ * Linux drivers always write an explicit RX engine/ring enable word before a
++ * ring can produce completions (mt76 WPDMA_GLO_CFG RX_DMA_EN, iwlwifi
++ * FH_MEM_RCSR_CHNL0_CONFIG_REG channel enable / RFH_RXF_DMA_CFG RFH_DMA_EN,
++ * ath11k HAL_REO1_RING_MISC_SRNG_ENABLE).  Our chip has no decoded equivalent
++ * yet [U]; the four allowlisted words (0x08/0x0c/0x14/0x18) are the only
++ * MAC-config-block words that are zero in the vendor stock capture and are not
++ * part of the 14-write ring program.  The action is a deliberate attended
++ * experiment: explicit module gate, one word, one shot per load, read-back
++ * verified, and a read-back mismatch closes the tail lane (no retry). */
++ssize_t hi5622_dp_rx_ctl_store(struct device *dev,
++			       struct device_attribute *attr, const char *buf,
++			       size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 off, old, value = 0u, rb;
++	int rc;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	ctx = t->ctx;
++	mutex_lock(&t->lock);
++	if (!dptx_rx_ctl_enable) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_ctl: refused - rx_ctl_enable=0 (default). One allowlisted candidate-word experiment only, attended\n");
++		return -EPERM;
++	}
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	if (t->rx_ctl_done) {
++		mutex_unlock(&t->lock);
++		return -EALREADY;
++	}
++	if (!dptx_rx_enable || !t->rx_armed || t->rx_failed) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_ctl: refused - needs rx_enable=1, a successful dp_rx_arm and an open RX lane\n");
++		return -EPERM;
++	}
++	off = dptx_rx_ctl_off;
++	if (!rxp_ctl_offset_allowed(off)) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_ctl: refused - +0x%02x is not an allowlisted candidate word (0x08/0x0c/0x14/0x18 only)\n",
++			 off);
++		return -EINVAL;
++	}
++	rc = dptx_write_gate(ctx);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev, "DP rx_ctl: refused by gate '%s' - no device write\n",
++			 dptx_gate_name(rc));
++		return rc;
++	}
++	old = dptx_mac_read(ctx, off);
++	if (old == 0xffffffffu) {
++		mutex_unlock(&t->lock);
++		return -EFAULT;
++	}
++	if (rxp_ctl_value(off, old, dptx_rx_ctl_set, dptx_rx_ctl_clr,
++			  &value) != 0) {
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_ctl: refused - invalid set/clr composition (set=0x%08x clr=0x%08x; a bit cannot be both and set|clr must be non-zero)\n",
++			 dptx_rx_ctl_set, dptx_rx_ctl_clr);
++		return -EINVAL;
++	}
++	/* one shot: mark done before the write so no path can retry it */
++	t->rx_ctl_done = true;
++	t->rx_ctl_off = off;
++	t->rx_ctl_old = old;
++	t->rx_ctl_value = value;
++	if (dptx_mac_write_checked(ctx, off, value) != 0) {
++		mutex_unlock(&t->lock);
++		return -EIO;
++	}
++	rb = dptx_mac_read(ctx, off);
++	if ((rb & (dptx_rx_ctl_set | dptx_rx_ctl_clr)) !=
++	    (value & (dptx_rx_ctl_set | dptx_rx_ctl_clr))) {
++		t->failed = true;
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_ctl: read-back 0x%08x != written 0x%08x - tail lane CLOSED, no retry\n",
++			rb, value);
++		return -EIO;
++	}
++	mutex_unlock(&t->lock);
++	dev_warn(dev,
++		 "DP rx_ctl: EXPERIMENT - MAC band0 +0x%02x old=0x%08x new=0x%08x (set=0x%08x clr=0x%08x) read-back=0x%08x; meaning [U], one shot per load, no retry; observe dp_rx_parity / live-bank rptr / cmp_wptr\n",
++		 off, old, value, dptx_rx_ctl_set, dptx_rx_ctl_clr, rb);
++	return (ssize_t)count;
++}
++
++/* ------------------------------------------------------------------ */
+ /* bind / release                                                     */
+ /* ------------------------------------------------------------------ */
+ int hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
+@@ -1844,6 +2337,7 @@
+ 	memset(t->tx_frame, 0, DP_TXRX_FRAME_AREA);
+ 	t->tx_frame_ready = true;
+ 	t->bound = true;
++	t->rx_stall_class = RXP_STALL_IDLE;
+ 	list_add_tail(&t->node, &dptx_list);
+ 	mutex_unlock(&dptx_list_lock);
+ 
+--- a/hi5622_dp_txrx.h
++++ b/hi5622_dp_txrx.h
+@@ -97,4 +97,19 @@
+                                       struct device_attribute *attr,
+                                       const char *buf, size_t count);
+ 
++/* wifi-rx-linux-parity (shared task task-166): Linux RX-enable parity.
++ * dp_rx_parity is READ-ONLY (live bank + MAC config block + the other machw
++ * blocks, classified against the committed vendor stock capture).  dp_rx_kick
++ * is the opt-in second exact-width producer publish.  dp_rx_ctl is the
++ * one-shot, allowlisted, explicitly enabled RX-control candidate-word
++ * experiment.  All are gated like the drain; the defaults refuse. */
++ssize_t hi5622_dp_rx_parity_show(struct device *dev,
++                                 struct device_attribute *attr, char *buf);
++ssize_t hi5622_dp_rx_kick_store(struct device *dev,
++                                struct device_attribute *attr,
++                                const char *buf, size_t count);
++ssize_t hi5622_dp_rx_ctl_store(struct device *dev,
++                               struct device_attribute *attr,
++                               const char *buf, size_t count);
++
+ #endif /* _HI5622_DP_TXRX_H */
+--- a/hi5622_rx_parity.c
++++ b/hi5622_rx_parity.c
+@@ -0,0 +1,356 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rx_parity.c - portable Linux-driver RX-enable parity rules for the
++ * Hi5622V100 clean-room host (lane wifi-rx-linux-parity, shared task task-166).
++ *
++ * ORIGINAL clean-room code; no vendor source/object code is reproduced.  The
++ * rules are derived facts with Linux architectural references (quoted by
++ * file/function/line in REPORT.md) and committed project evidence.  This file
++ * is device-free: the kernel glue (hi5622_dp_txrx.c) applies the rules to the
++ * MAC, and tools/rx_parity_selftest.c pins them on the host.
++ */
++#include "hi5622_rx_parity.h"
++#include "hi5622_rx_live.h"
++
++/* ------------------------------------------------------------------ */
++/* The step catalogue                                                 */
++/* ------------------------------------------------------------------ */
++static const struct rxp_step_info rxp_steps[RXP_STEP_COUNT] = {
++    [RXP_STEP_RING_ALLOC] = {
++        "ring_alloc",
++        "mt76 mt76_dma_alloc_queue; iwlwifi iwl_pcie_rx_alloc; ath11k ath11k_dp_srng_setup (dma_alloc_coherent)",
++        "done: dp_setup allocates norm 256x4, small 512x4, completion 4095x4 coherent"
++    },
++    [RXP_STEP_RING_PROGRAM] = {
++        "ring_program",
++        "iwlwifi rx_hw_init (RBDCB_BASE/STTS_WPTR/size); ath10k ath10k_ce_init_dest_ring; ath11k hal_srng_dst_hw_init",
++        "done: the 14-write MAC program (reads back verified)"
++    },
++    [RXP_STEP_BUF_FILL] = {
++        "buf_fill",
++        "mt76 mt76_dma_rx_fill (dma_map_single DMA_FROM_DEVICE); iwlwifi rxq_alloc_rbs; ath10k rx_post_pipe",
++        "done: coherent buffers, devVA(buffer+4) entries, both free rings filled"
++    },
++    [RXP_STEP_DMA_ENABLE] = {
++        "dma_enable",
++        "mt76 MT_WPDMA_GLO_CFG RX_DMA_EN; iwlwifi FH_MEM_RCSR_CHNL0_CONFIG_REG EN / RFH_RXF_DMA_CFG RFH_DMA_EN; ath11k HAL_REO1_RING_MISC_SRNG_ENABLE",
++        "MISSING/UNKNOWN: no decoded host-writable RX engine/ring enable word [U] - the open bug"
++    },
++    [RXP_STEP_IRQ_NAPI] = {
++        "irq_napi",
++        "mt76 mt7615_irq_enable; iwlwifi RX MSI-X + napi; ath10k hif_start napi_enable+irq_enable; brcmfmac D2H doorbell",
++        "deliberately not done: poll-driven bench model; MAC int mask already vendor value 0xfffffcc1"
++    },
++    [RXP_STEP_RX_FILTER] = {
++        "rx_filter",
++        "mt76 MT_WF_RFCR read-modify-write; iwlwifi/mac80211 filter config; ath10k MAC filter; brcmfmac firmware filter",
++        "MISSING/UNKNOWN: driver writes no RX filter; whether the firmware programs it is [U]"
++    },
++    [RXP_STEP_PRODUCER_PUBLISH] = {
++        "producer_publish",
++        "mt76 writel(q->head, cpu_idx); iwlwifi inc_wr_ptr; ath10k CE ring index; ath11k hal_srng_access_end hp",
++        "done: packed producer 0x8000 (index 0, phase 1); width corrected by this lane"
++    },
++    [RXP_STEP_KICK] = {
++        "kick",
++        "mt76 mt76_dma_kick_queue (wmb then index store); brcmfmac commonring write_complete (wptr store then ring bell)",
++        "partial: the single producer store is the only kick; opt-in re-publish added by this lane"
++    },
++    [RXP_STEP_COMPLETION_CONSUME] = {
++        "completion_consume",
++        "mt76 DMA_DONE check; ath11k loop count; iwlwifi uCode READ index; Hi1105 HAL spin-until-nonzero",
++        "done by wifi-rx-static; commit wait + clear-after-read added by this lane"
++    },
++    [RXP_STEP_CONSUMER_PUBLISH] = {
++        "consumer_publish",
++        "iwlwifi RBDC write index; ath11k hal_srng_access_end tp; brcmfmac read_complete rptr",
++        "done: completion consumer packed index; width corrected by this lane"
++    },
++    [RXP_STEP_REFILL] = {
++        "refill",
++        "iwlwifi rxq_restock; ath10k rx_post retry timer; ath11k rxdma replenish; mt76 rx_fill after poll",
++        "done: rx-static drain + rx-watermark sustained refill; window rule added by this lane"
++    },
++    [RXP_STEP_STALL_WATCH] = {
++        "stall_watch",
++        "iwlwifi RX_STALLED when no free buffers; Hi1105 free-ring-empty ISR; ath10k rx_post retry timer",
++        "missing as telemetry: added log-only classification by this lane"
++    },
++    [RXP_STEP_TEARDOWN] = {
++        "teardown",
++        "iwlwifi rx_stop disables the RX DMA first; mt76 mt76_dma_rx_reset; ath11k srng cleanup",
++        "n/a: the clean-room driver has no device stop/reload path (module reload power-cycles)"
++    },
++};
++
++const struct rxp_step_info *rxp_step_info(enum rxp_step step)
++{
++    if ((unsigned int)step >= (unsigned int)RXP_STEP_COUNT)
++        return NULL;
++    return &rxp_steps[step];
++}
++
++const char *rxp_step_name(enum rxp_step step)
++{
++    const struct rxp_step_info *info = rxp_step_info(step);
++
++    return info ? info->name : "invalid";
++}
++
++/* ------------------------------------------------------------------ */
++/* 2. Exact-width pointer publication                                 */
++/* ------------------------------------------------------------------ */
++int rxp_publish_value(rxp_u32 index, unsigned int phase, rxp_u32 depth,
++                      rxp_u32 *value)
++{
++    if (value == NULL || depth == 0u || depth > RXP_IDX_MASK)
++        return -1;
++    if (index >= depth || phase > 1u)
++        return -1;
++    *value = (index & RXP_IDX_MASK) | (phase ? RXP_PHASE_BIT : 0u);
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 3. Completion-entry commit decision                                */
++/* ------------------------------------------------------------------ */
++int rxp_commit_settled(rxp_u32 first, rxp_u32 last, int *settled)
++{
++    if (settled == NULL)
++        return -1;
++    if (last == 0u) {
++        *settled = 0; /* still not committed */
++        return 0;
++    }
++    /* A zero first read that became non-zero committed between the reads; a
++     * non-zero first read must agree with the second one to be stable. */
++    *settled = (first == 0u || first == last) ? 1 : 0;
++    return 0;
++}
++
++int rxp_commit_retry(rxp_u32 last, unsigned int waits_done,
++                     unsigned int wait_max, int *retry)
++{
++    if (retry == NULL)
++        return -1;
++    *retry = (last == 0u && waits_done < wait_max) ? 1 : 0;
++    return 0;
++}
++
++int rxp_spurious_limit(rxp_u32 spurious, rxp_u32 cap, int *close_lane)
++{
++    if (close_lane == NULL)
++        return -1;
++    if (cap == 0u)
++        return -1;
++    *close_lane = (spurious > cap) ? 1 : 0;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 4. Served-bits-only W1C                                            */
++/* ------------------------------------------------------------------ */
++int rxp_w1c_served(rxp_u32 status, rxp_u32 mask, rxp_u32 *value)
++{
++    if (value == NULL)
++        return -1;
++    *value = status & ~mask;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 5. Bounded refill window                                           */
++/* ------------------------------------------------------------------ */
++int rxp_refill_plan(rxp_u32 old_consumer, rxp_u32 fresh_consumer,
++                    rxp_u32 producer, rxp_u32 depth, rxp_u32 queued,
++                    rxp_u32 cap, rxp_u32 *count, rxp_u32 *new_producer)
++{
++    rxp_u32 avail = 0u, posted = 0u, room, plan, prod;
++    int rc;
++
++    if (count == NULL || new_producer == NULL)
++        return -1;
++    if (depth == 0u || depth > RXP_IDX_MASK || queued > depth || cap > depth)
++        return -1;
++    rc = hi5622_rx_ring_consumed(old_consumer, fresh_consumer, depth, &avail);
++    if (rc != HIL_RX_OK)
++        return -1;
++    rc = hi5622_rx_ring_pending(producer, fresh_consumer, depth, &posted);
++    if (rc != HIL_RX_OK)
++        return -1;
++    if (posted > depth)
++        return -1;
++    room = depth - posted;
++    plan = avail;
++    if (queued < plan)
++        plan = queued;
++    if (room < plan)
++        plan = room;
++    if (cap < plan)
++        plan = cap;
++    prod = producer;
++    {
++        rxp_u32 n = plan;
++
++        while (n > 0u) {
++            prod = hi5622_rx_idx_advance(prod, depth);
++            if ((prod & RXP_IDX_MASK) >= depth)
++                return -1;
++            n--;
++        }
++    }
++    *count = plan;
++    *new_producer = prod;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 6. Opt-in RX-control candidate word                                */
++/* ------------------------------------------------------------------ */
++static const rxp_u32 rxp_ctl_candidates[RXP_CTL_OFF_CANDIDATE_MAX] = {
++    0x08u, 0x0cu, 0x14u, 0x18u
++};
++
++int rxp_ctl_offset_allowed(rxp_u32 off)
++{
++    unsigned int i;
++
++    if ((off & 3u) != 0u)
++        return 0;
++    if (off + 4u > RXP_MAC_CFG_SPAN)
++        return 0;
++    for (i = 0; i < RXP_CTL_OFF_CANDIDATE_MAX; i++) {
++        if (rxp_ctl_candidates[i] == off)
++            return 1;
++    }
++    return 0;
++}
++
++int rxp_ctl_value(rxp_u32 off, rxp_u32 old, rxp_u32 set, rxp_u32 clr,
++                  rxp_u32 *value)
++{
++    if (value == NULL)
++        return -1;
++    if (!rxp_ctl_offset_allowed(off))
++        return -1;
++    if ((set & clr) != 0u) /* a bit cannot be both set and cleared */
++        return -1;
++    if ((set | clr) == 0u) /* nothing to do */
++        return -1;
++    *value = (old & ~clr) | set;
++    return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* 7. Stall classification                                            */
++/* ------------------------------------------------------------------ */
++int rxp_stall_class(rxp_u32 arm_status, rxp_u32 arm_norm_rptr,
++                    rxp_u32 arm_small_rptr, rxp_u32 arm_cmp_wptr,
++                    rxp_u32 now_status, rxp_u32 now_norm_rptr,
++                    rxp_u32 now_small_rptr, rxp_u32 now_cmp_wptr,
++                    rxp_u32 spurious, int *class_out)
++{
++    if (class_out == NULL)
++        return -1;
++    if (arm_status == 0xffffffffu || now_status == 0xffffffffu ||
++        arm_norm_rptr == 0xffffffffu || now_norm_rptr == 0xffffffffu ||
++        arm_small_rptr == 0xffffffffu || now_small_rptr == 0xffffffffu ||
++        arm_cmp_wptr == 0xffffffffu || now_cmp_wptr == 0xffffffffu) {
++        *class_out = RXP_STALL_ERROR;
++        return 0;
++    }
++    if (now_cmp_wptr != arm_cmp_wptr) {
++        *class_out = RXP_STALL_PROGRESS;
++        return 0;
++    }
++    if (spurious > 0u) {
++        *class_out = RXP_STALL_SPURIOUS;
++        return 0;
++    }
++    if (now_norm_rptr != arm_norm_rptr ||
++        now_small_rptr != arm_small_rptr) {
++        *class_out = RXP_STALL_PREFETCH_ONLY;
++        return 0;
++    }
++    *class_out = RXP_STALL_IDLE;
++    return 0;
++}
++
++const char *rxp_stall_name(enum rxp_stall stall)
++{
++    switch (stall) {
++    case RXP_STALL_IDLE:          return "IDLE";
++    case RXP_STALL_PREFETCH_ONLY: return "PREFETCH_ONLY";
++    case RXP_STALL_PROGRESS:      return "PROGRESS";
++    case RXP_STALL_SPURIOUS:      return "SPURIOUS_WPTR";
++    case RXP_STALL_ERROR:         return "PROBE_ERROR";
++    default:                      return "invalid";
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/* 8. Parity probe classification                                     */
++/* ------------------------------------------------------------------ */
++static const rxp_u32 rxp_program_offs[] = {
++    0x00u, 0x04u, 0x10u, 0x1cu, 0x20u, 0x24u, 0x28u, 0x2cu,
++    0x30u, 0x34u, 0x38u, 0x3cu, 0x40u, 0x48u
++};
++
++int rxp_is_program_off(rxp_u32 off)
++{
++    unsigned int i;
++
++    for (i = 0; i < (unsigned int)(sizeof(rxp_program_offs) /
++                                   sizeof(rxp_program_offs[0])); i++) {
++        if (rxp_program_offs[i] == off)
++            return 1;
++    }
++    return 0;
++}
++
++rxp_u32 rxp_mac_cfg_stock(rxp_u32 off)
++{
++    /* opensource/dumps/reg_all.txt, MAC block CA 0x40040000, stock vendor boot
++     * [V*] - every word not listed is 0 in that capture.  The two address
++     * values are the vendor boot's own DMA allocations, already published in
++     * the committed capture; they are not per-unit or secret data. */
++    switch (off) {
++    case 0x00u: return 0x00000100u;
++    case 0x04u: return 0x83fd7000u;
++    case 0x10u: return 0x02060850u;
++    case 0x1cu: return 0x00b0063cu;
++    case 0x20u: return 0x844c7000u;
++    case 0x24u: return 0x844c8000u;
++    case 0x28u: return 0x83734000u;
++    case 0x2cu: return 0x00000100u;
++    case 0x30u: return 0x00000200u;
++    case 0x34u: return 0x00000fffu;
++    case 0x38u: return 0x00008000u;
++    case 0x3cu: return 0x00008000u;
++    case 0x48u: return 0xfffffcc1u;
++    case 0x5cu: return 0x00000004u;
++    case 0x6cu: return 0x00000004u;
++    default:    return 0x00000000u;
++    }
++}
++
++int rxp_mac_cfg_class(rxp_u32 off, rxp_u32 value, int *stock_nonzero,
++                      int *matches_stock)
++{
++    rxp_u32 stock;
++    int programmed;
++
++    if ((off & 3u) != 0u || off + 4u > RXP_MAC_CFG_SPAN)
++        return 0;
++    programmed = rxp_is_program_off(off);
++    stock = rxp_mac_cfg_stock(off);
++    if (stock_nonzero != NULL)
++        *stock_nonzero = (stock != 0u) ? 1 : 0;
++    if (matches_stock != NULL)
++        *matches_stock = (value == stock) ? 1 : 0;
++    if (programmed)
++        return (value == stock) ? 1 : 2;
++    if (stock != 0u)
++        return 3;
++    return 4;
++}
+--- a/hi5622_rx_parity.h
++++ b/hi5622_rx_parity.h
+@@ -0,0 +1,247 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rx_parity.h - portable Linux-driver RX-enable parity rules for the
++ * Hi5622V100 clean-room host (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-rx-linux-parity, shared task task-166).
++ * No vendor source/object code, no vendor text, no firmware byte and no
++ * per-unit identity is reproduced.  The file exists so the host selftest can
++ * pin the rules that the kernel glue applies to the MAC RX path; every rule is
++ * a derived fact with a Linux-driver reference (an architectural analogue, not
++ * copied code) and/or a committed project evidence marker in REPORT.md.
++ *
++ * Why this file exists: the hi5622 RX ring program (the 14 MAC writes) matches
++ * the vendor's ring init, yet the MAC never writes a received frame.  The
++ * driver reproduces only part of the canonical Linux RX-enable order - the
++ * ring program, the free-buffer fill and the producer publish - and does not
++ * have the steps Linux drivers also perform before they expect RX traffic:
++ * a completion-entry ownership/commit decision, an exact-width pointer
++ * publish, a served-bits-only W1C, a bounded refill window and a stall
++ * classification.  This file models that missing half so it can be tested on
++ * the host and applied fail-closed on the bench.
++ *
++ * Evidence markers used in the comments:
++ *   [V]  committed project decode of a vendor/Linux artifact
++ *   [L]  measured on the bench by an earlier attended lane (quoted)
++ *   [I]  inference
++ *   [U]  unknown / not pinned
++ */
++#ifndef HI5622_RX_PARITY_H
++#define HI5622_RX_PARITY_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++typedef u8  rxp_u8;
++typedef u16 rxp_u16;
++typedef u32 rxp_u32;
++typedef s32 rxp_s32;
++#else
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  rxp_u8;
++typedef uint16_t rxp_u16;
++typedef uint32_t rxp_u32;
++typedef int32_t  rxp_s32;
++#endif
++
++/* ===================================================================
++ * 1. The canonical RX-enable step catalogue (Linux reference -> us)
++ *
++ * The comparison table in REPORT.md cites the exact function and file for
++ * every row in a local Linux 5.10.201 tree (mt76, iwlwifi, ath10k, ath11k,
++ * brcmfmac).  The catalogue here only names the steps so the driver telemetry
++ * and the host test share one vocabulary.
++ * =================================================================== */
++enum rxp_step {
++    RXP_STEP_RING_ALLOC = 0,   /* ring memory + DMA-coherent allocation   */
++    RXP_STEP_RING_PROGRAM,     /* base/size/id/depth registers            */
++    RXP_STEP_BUF_FILL,         /* per-buffer DMA mapping + entry write    */
++    RXP_STEP_DMA_ENABLE,       /* explicit engine/ring enable word        */
++    RXP_STEP_IRQ_NAPI,         /* interrupt unmask + NAPI                 */
++    RXP_STEP_RX_FILTER,        /* MAC address / RX filter word            */
++    RXP_STEP_PRODUCER_PUBLISH, /* host producer index store               */
++    RXP_STEP_KICK,             /* second store / doorbell after publish   */
++    RXP_STEP_COMPLETION_CONSUME,
++    RXP_STEP_CONSUMER_PUBLISH,
++    RXP_STEP_REFILL,
++    RXP_STEP_STALL_WATCH,
++    RXP_STEP_TEARDOWN,
++    RXP_STEP_COUNT
++};
++
++struct rxp_step_info {
++    const char *name;
++    const char *linux_analogue;  /* architectural reference, not quoted code */
++    const char *our_state;       /* done / partial / missing / n/a           */
++};
++
++/* Static catalogue (never NULL for a valid step). */
++const struct rxp_step_info *rxp_step_info(enum rxp_step step);
++const char *rxp_step_name(enum rxp_step step);
++
++/* ===================================================================
++ * 2. Exact-width pointer publication (vendor hal_ring_set_sw2hw analogue)
++ *
++ * Linux drivers publish a host producer/consumer index as a plain integer in
++ * a ring register (mt76 cpu_idx, ath10k CE ring write index, iwlwifi RBD
++ * write pointer); the luofu vendor's hal_ring_set_sw2hw stores a
++ * zero-extended u16 packed {index[14:0], phase<<15} [V wifi-rx-static REPORT
++ * sec. 4].  The inherited driver used a 32-bit read-modify-write that
++ * preserved the upper half - a write width the vendor never uses.  The
++ * parity rule is: validate the packed value, write exactly the zero-extended
++ * u16, and refuse when the register reads back with unexpected upper bits
++ * (that is a state the vendor path never produces).
++ * =================================================================== */
++#define RXP_IDX_MASK    0x7fffu
++#define RXP_PHASE_BIT   0x8000u
++#define RXP_PTR_MAX     0xffffu
++
++/* Pack an (index, phase) pair the way every luofu ring pointer is packed.
++ * Returns 0 on success; refuses depth 0/too deep, index >= depth, phase > 1. */
++int rxp_publish_value(rxp_u32 index, unsigned int phase, rxp_u32 depth,
++                      rxp_u32 *value);
++
++/* ===================================================================
++ * 3. Completion-entry commit decision (Linux ownership/DONE-bit analogue)
++ *
++ * Linux completion consumers never consume an entry until the device has
++ * committed it: mt76 descriptors carry MT_DMA_CTL_DMA_DONE, ath11k descriptors
++ * carry a loop count, iwlwifi reads the uCode's READ index after the write
++ * pointer.  The luofu completion ring has no explicit owner bit [V/U], so the
++ * driver can only bound the producer-visible-before-entry-committed window
++ * (the Hi1105 sibling HAL spins until the entry is non-zero, <=1000
++ * iterations [V sibling REPORT sec. 4.2]).  Rule: read the entry, if zero
++ * re-read it up to rx_entry_wait times, and only consume a value that is
++ * non-zero and stable across the two reads; a still-zero entry is a
++ * spurious producer advance (not corruption) and is not consumed.
++ * =================================================================== */
++#define RXP_ENTRY_WAIT_DEF 32u /* bounded re-reads of a still-zero entry      */
++#define RXP_SPURIOUS_MAX 64u   /* consecutive spurious advances before close */
++
++/* Settled = the last read is non-zero AND (the first read was zero - it
++ * committed between the two reads - or both reads agree). */
++int rxp_commit_settled(rxp_u32 first, rxp_u32 last, int *settled);
++
++/* Bounded-wait decision: retry = 1 means "read again"; retry = 0 means the
++ * caller must decide (settled or spurious).  waits_done is the number of
++ * re-reads already performed. */
++int rxp_commit_retry(rxp_u32 last, unsigned int waits_done,
++                     unsigned int wait_max, int *retry);
++
++/* Close the lane only once the consecutive-spurious budget is exceeded. */
++int rxp_spurious_limit(rxp_u32 spurious, rxp_u32 cap, int *close_lane);
++
++/* ===================================================================
++ * 4. Served-bits-only W1C (vendor ISR analogue)
++ *
++ * The vendor host-MAC ISR computes status &= ~mask and W1Cs exactly the
++ * served bits to config +0x44 [V wifi-rx-static REPORT sec. 5].  The
++ * inherited driver W1C'd the raw live status word.  Rule: only the bits the
++ * mask leaves enabled may be acknowledged; the masked-off bits are not the
++ * host's to clear.
++ * =================================================================== */
++int rxp_w1c_served(rxp_u32 status, rxp_u32 mask, rxp_u32 *value);
++
++/* ===================================================================
++ * 5. Bounded free-ring refill window (Linux refill/restock analogue)
++ *
++ * Linux RX queues refill only slots the device has returned and never
++ * overrun the posted producer (iwlwifi restock moves the WRITE index to the
++ * READ index; ath11k replenishes into requested entries; mt76 fills to
++ * ndesc - 1).  The inherited drain refilled by the raw consumer delta but did
++ * not bound the plan by the posted/unposted room.  Rule: plan =
++ * min(device-consumed delta, returned buffers queued, depth - posted, cap)
++ * and derive the new producer from it; refuse any input that cannot describe
++ * a valid window instead of clamping.
++ * =================================================================== */
++int rxp_refill_plan(rxp_u32 old_consumer, rxp_u32 fresh_consumer,
++                    rxp_u32 producer, rxp_u32 depth, rxp_u32 queued,
++                    rxp_u32 cap, rxp_u32 *count, rxp_u32 *new_producer);
++
++/* ===================================================================
++ * 6. Opt-in RX-control candidate word (the missing explicit enable)
++ *
++ * Linux drivers write an explicit RX DMA/ring enable word before the ring can
++ * produce completions: mt76 sets MT_WPDMA_GLO_CFG_RX_DMA_EN after the ring
++ * base/size/index program and before the RX ring interrupts are enabled
++ * (mt7615_dma_start), iwlwifi writes FH_MEM_RCSR_CHNL0_CONFIG_REG with the
++ * channel EN bit / RFH_RXF_DMA_CFG with RFH_DMA_EN_ENABLE_VAL, ath11k sets
++ * HAL_REO1_RING_MISC_SRNG_ENABLE in the ring MISC register.  Our chip has no
++ * decoded host-writable equivalent yet [U]: the 14-write program writes every
++ * vendor-stock non-zero word of the MAC config block except +0x5c/+0x6c
++ * (which have no identified writer and are covered by the existing
++ * mac_tail_writes experiment).  The only words left in that block that are
++ * zero in the vendor stock capture and are NOT part of the ring program are
++ * the four candidates below.  This lane never claims one of them is the
++ * enable: it provides the read-only parity probe plus a one-shot, explicitly
++ * enabled, allowlisted candidate write for an attended fire.
++ * =================================================================== */
++#define RXP_CTL_OFF_CANDIDATE_MAX 4u
++
++/* 1 = a candidate offset the one-shot dp_rx_ctl action may write.  The list is
++ * deliberately tiny and fixed: 0x08, 0x0c, 0x14, 0x18 (zero in the vendor
++ * stock dump, outside the 14-write ring program, inside the 0xb0-byte block).
++ * Everything else - in particular every ring-program/status word - is
++ * refused. */
++int rxp_ctl_offset_allowed(rxp_u32 off);
++
++/* Compose the one-shot RMW value.  Refuses set & clr (a bit cannot be both),
++ * refuses set | clr == 0 (nothing to do) and requires the offset to be an
++ * allowlisted candidate. */
++int rxp_ctl_value(rxp_u32 off, rxp_u32 old, rxp_u32 set, rxp_u32 clr,
++                  rxp_u32 *value);
++
++/* ===================================================================
++ * 7. Stall classification (iwlwifi RX_STALLED / sibling P3 analogue)
++ *
++ * iwlwifi documents RX_STALLED: when no free buffers are available the READ
++ * index is not advanced and the stall flag is set, because the free-buffer
++ * ring is the RX credit.  The sibling Hi1105 HAL has a dedicated
++ * free-ring-empty interrupt.  Our chip exposes the live bank only, so the
++ * driver classifies a drain into: IDLE (nothing moved), PREFETCH_ONLY (the
++ * device consumer moved, no completion), PROGRESS (completion producer moved)
++ * or SPURIOUS (producer visible without a settled entry).  Log-only; no
++ * pointer is moved by the classification.
++ * =================================================================== */
++enum rxp_stall {
++    RXP_STALL_IDLE = 0,
++    RXP_STALL_PREFETCH_ONLY,
++    RXP_STALL_PROGRESS,
++    RXP_STALL_SPURIOUS,
++    RXP_STALL_ERROR
++};
++
++int rxp_stall_class(rxp_u32 arm_status, rxp_u32 arm_norm_rptr,
++                    rxp_u32 arm_small_rptr, rxp_u32 arm_cmp_wptr,
++                    rxp_u32 now_status, rxp_u32 now_norm_rptr,
++                    rxp_u32 now_small_rptr, rxp_u32 now_cmp_wptr,
++                    rxp_u32 spurious, int *class_out);
++const char *rxp_stall_name(enum rxp_stall stall);
++
++/* ===================================================================
++ * 8. Read-only parity probe classification
++ *
++ * The probe dumps the MAC config block, the live bank and the first words of
++ * the other eight machw blocks; these classification helpers tell the host
++ * tool which words are part of the reproduced 14-write program, which are
++ * vendor-stock non-zero words the driver never writes (the candidate missing
++ * configuration) and whether a word currently matches the vendor stock dump.
++ * =================================================================== */
++#define RXP_MAC_CFG_SPAN 0xb0u  /* vendor-dumper block length [V] */
++
++/* 1 = off is one of the 14 MAC words the driver's dp_setup programs. */
++int rxp_is_program_off(rxp_u32 off);
++
++/* Vendor stock value of a MAC config block word, from the committed
++ * opensource/dumps/reg_all.txt capture [V*]; unknown/never-dumped offsets read
++ * as 0 (the whole block is 0 in the capture except the words in the table). */
++rxp_u32 rxp_mac_cfg_stock(rxp_u32 off);
++
++/* Classify one word: 0 = absent from the probe set, 1 = programmed word
++ * matching stock, 2 = programmed word differing from stock, 3 = unprogrammed
++ * word that is non-zero in stock (the "vendor has state we never write" set),
++ * 4 = unprogrammed word, zero in stock. */
++int rxp_mac_cfg_class(rxp_u32 off, rxp_u32 value, int *stock_nonzero,
++                      int *matches_stock);
++
++#endif /* HI5622_RX_PARITY_H */
+--- a/Kbuild
++++ b/Kbuild
+@@ -25,7 +25,7 @@
+ 		 hcc_core.o hcc_core_kernel.o \
+ 		 h2d_frames.o h2d_send_logic.o h2d_send.o \
+ 		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+-		 hi5622_rx_live.o \
++		 hi5622_rx_live.o hi5622_rx_parity.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
