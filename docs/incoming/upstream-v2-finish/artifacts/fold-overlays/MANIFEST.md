@@ -10,7 +10,7 @@ Diff bodies that **replace** a v1 entry in the v2 form.
 
 | file | replaces | sha256 | status |
 | --- | --- | --- | --- |
-| `0019-arm-clk-luofu-clock-tree-folded.patch` | series/0019 (folds L0 027) | `198d24f65dc8e2842a0f20a64526527daa30c5a817d58a6d29c6c69a39c4006e` | validated: applies over entry 0018, full 26-patch series applies 26/26 patch(1)+git am identical, checkpatch-neutral ([validation/partial-v2-L2](../validation/partial-v2-L2/)) |
+| `0019-arm-clk-luofu-clock-tree-folded.patch` | series/0019 (folds L0 027) | `198d24f65dc8e2842a0f20a64526527daa30c5a817d58a6d29c6c69a39c4006e` | validated: applies over entry 0018, full 26-patch series applies 26/26 patch(1)+git am identical, checkpatch-neutral ([validation/partial-v2-L2](../../validation/partial-v2-L2/)) |
 
 Diff body only: the format-patch mail header is supplied by
 `tools/gen-series.py` from `commit-messages/0019`.  The commit message still
@@ -19,7 +19,7 @@ has to be updated to mention the folded 027 content.
 ## `fold-overlays/`
 
 Re-contextualized fold deltas emitted by
-[`tools/fold-sequence.py`](../tools/fold-sequence.py): each is the diff that
+[`tools/fold-sequence.py`](../../tools/fold-sequence.py): each is the diff that
 the fold source produced when applied **in L0 order on top of the v1 form**
 at the point where it composed.  They are raw material for the v2
 composition tree; a hand re-contextualization / gate strip is still required
@@ -45,4 +45,4 @@ deterministically by `tools/fold-sequence.py` from the L0 stack.
 Deviations to review before use: **051** composed only with one line of
 context (`git apply -C1`) and must be re-derived by hand; **066/067** are
 textually clean but carry an unresolved gate/content decision (see
-[`FOLD-EXECUTION.md`](../FOLD-EXECUTION.md) and `CONSISTENCY.md` K2).
+[`FOLD-EXECUTION.md`](../../FOLD-EXECUTION.md) and `CONSISTENCY.md` K2).
