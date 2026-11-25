@@ -1,0 +1,37 @@
+== native build ==
+PASS: native build (-Wall -Wextra, no warnings above)
+== --selftest (ring validator + window/register address math) ==
+SELFTEST: 17/17 PASS
+PASS: --selftest
+== fake window fixture ==
+PASS: fixtures written
+== -p probe on a live-looking window (mmap path) ==
+omo-h2dsampler v2 probe window=0x583f2000 access=file-fake
+SR ch0 ctrl=0x00000000 base=0x848f6000 depth=0x0000001f prod=0x00000014 cons=0x00000014 ring=YES
+SR ch1 ctrl=0x00000000 base=0x00000000 depth=0x00000000 prod=0x00000000 cons=0x00000000 ring=NO
+SR ch2 ctrl=0x00000000 base=0x00000000 depth=0x00000000 prod=0x00000000 cons=0x00000000 ring=NO
+pread_control=FAIL errno=9 (Bad file descriptor) -- expected: v1's read() cannot reach MMIO below RAM
+probe: ring=YES
+PASS: -p ring=YES (exit 0)
+== -p probe on an unprogrammed window ==
+omo-h2dsampler v2 probe window=0x583f2000 access=file-fake
+SR ch0 ctrl=0x00000000 base=0x00000000 depth=0x00000000 prod=0x00000000 cons=0x00000000 ring=NO
+SR ch1 ctrl=0x00000000 base=0x00000000 depth=0x00000000 prod=0x00000000 cons=0x00000000 ring=NO
+SR ch2 ctrl=0x00000000 base=0x00000000 depth=0x00000000 prod=0x00000000 cons=0x00000000 ring=NO
+pread_control=FAIL errno=9 (Bad file descriptor) -- expected: v1's read() cannot reach MMIO below RAM
+probe: ring=NO
+PASS: -p ring=NO (exit 1)
+== ring detection + ring-seen (fake window, no DRAM) ==
+PASS: capture exit 0
+PASS: log header v2
+PASS: log win-probe
+PASS: log ring-seen
+PASS: log heartbeat with misreads
+== negative: unprogrammed window logs ring-not-seen + last regs ==
+omo-h2dsampler: ring not seen within 1 s (last base=0x00000000 depth=0x00000000)
+PASS: negative exit 4
+PASS: negative logs last regs
+== summary ==
+HOST TESTS: 12 passed, 0 failed
+
+run-host-tests.sh exit=0

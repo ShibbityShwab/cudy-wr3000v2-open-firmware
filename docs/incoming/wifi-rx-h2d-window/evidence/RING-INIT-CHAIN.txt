@@ -1,0 +1,35 @@
+### symbol table (vendor hi5622v100_plat.ko; local decode artifact, never committed)
+00000704 t pcie_main_init
+00007068 t pcie_ete_init_src_ring
+00007820 t pcie_ete_init
+00014a48 t pcie_ete_sr_reg_init
+00014b98 t pcie_ete_sr_init
+
+### call sites in the decoded-object disassembly (line: address: instruction)
+8883:    7178:	ebfffffe 	bl	14b98 <pcie_ete_sr_init>
+26756:   14c2c:	ebfffffe 	bl	14a48 <pcie_ete_sr_reg_init>
+38409:     8e8:	ebfffffe 	bl	7820 <pcie_ete_init>
+
+### the pcie_main_init call order (committed decode: opensource/docs/phase16/endpoint-init.md:110-130)
+  0x0821c: pci_dev_res_init:
+  0x0258: bl -> oal_pci_lres_init               ; once per enumerated endpoint
+```
+
+4. Conditional remap enable (only when probe count > 1 and `[res+0x10] != 0`):
+
+```
+  0x08b8: ldr  r3, [r5, #0x6c]                  ; probe/device count
+  0x08c0: cmp  r3, #1
+  0x08c8: ldr  r3, [r8, #0x10]
+  0x08dc: bl -> oal_pcie_enable_remap.part.0
+  ...   -> shuangta_pcie_enable_remap (see A.6)
+```
+
+5. ETE rings + comms:
+
+```
+  0x08e8: bl -> pcie_ete_init
+  0x0944: bl -> pcie_comm_init
+  ...
+  0x171d0: pcie_comm_init: bl -> pcie_thread_init ; then tail-b -> pcie_msg_init
+```

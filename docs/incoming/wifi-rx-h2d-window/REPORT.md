@@ -162,15 +162,19 @@ start + steady stream; the failed session's `-t 180` would also have sufficed).
    is why this root cause was invisible).
 3. **`-p` read-only probe mode**: map the window, print `SR ch0..2 ctrl/base/depth/prod/cons`
    and, as a control, one `pread()` of the same address with its `errno`. This is the T2.5 gate
-   in RUNBOOK-DELTA.md: on the stock it should show a live DRAM base and **`pread_control=EFAULT
-   (EINVAL-class)`**, confirming §2 on the device in one command.
+   in RUNBOOK-DELTA.md: on the stock it should show a live DRAM base and **`pread_control=EFAULT (errno 14)`**, confirming §2 on the device in one command.
 4. **Error accounting**: `misreads=` in the heartbeat `E` lines, so a future instrument fault
    is visible in the log itself.
+
+The built artifact is `build/wifi-rx-h2d-window/omo_h2dsampler-mmap` (54,364 B, static
+ARM/musl, `sha256 cb03ee1b85feb7fdd0a81b3b7a4d97461a8ad2eb1a9459134426ddbbbf352805`); the
+host-side checks are `evidence/HOST-TESTS.txt` (12/12; `--selftest` 17/17) and the v1->v2
+diff is `evidence/V1-V2-DIFF.txt`.
 
 Log format is unchanged (the committed `tools/decode_h2d.py` keeps working); the version line
 becomes `# omo_h2dsampler v2 … access=mmap`.
 
-## 6. Honest limits [I]/[U]
+## 7. Honest limits [I]/[U]
 
 * This lane touched no device. §2's `-EFAULT` is a **code-path proof + symptom match**; the
   v2 `-p` gate is the on-device confirmation, and it is step 1 of the retry.

@@ -18,8 +18,10 @@ $D/tools/build-sampler-mmap.sh
 file build/wifi-rx-h2d-window/omo_h2dsampler-mmap
 sha256sum build/wifi-rx-h2d-window/omo_h2dsampler-mmap
 ```
-Record the sha256 in the session evidence. (The v2 source self-test can be run host-side with
-`$D/tools/run-host-tests.sh`; expected output is in `evidence/HOST-TESTS.txt`.)
+Expected: `build/wifi-rx-h2d-window/omo_h2dsampler-mmap`, 54,364 B, static ARM/musl,
+`sha256 cb03ee1b85feb7fdd0a81b3b7a4d97461a8ad2eb1a9459134426ddbbbf352805` (the byte-exact
+artifact this lane tested host-side). Run `$D/tools/run-host-tests.sh` first; expected output is
+`evidence/HOST-TESTS.txt` (12/12 + selftest 17/17). Record the sha256 in the session evidence.
 
 ## D1. Payload substitution (during T0/T3; same paths as v1)
 
@@ -50,7 +52,7 @@ Expected (the retry's first evidence lines):
 * `window=0x583f2000 access=mmap`
 * SR ch0: `base=0x8xxxxxxx` (non-zero, in `0x80000000..0x87ffffff`), `depth=0x1f`,
   producer/consumer counters present, `ring=YES`;
-* `pread_control=EFAULT` (errno printed): this is the v1 defect measured on the device
+* `pread_control=FAIL errno=14 (Bad address)` - i.e. **EFAULT**: this is the v1 defect measured on the device
   (REPORT §2) - **expected**, not a fault;
 * optional alias check `/usr/bin/omo_h2dsampler -p -w 0x403f2000`: same SR0 base.
 

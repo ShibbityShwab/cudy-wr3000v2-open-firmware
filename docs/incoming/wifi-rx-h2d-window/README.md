@@ -49,6 +49,9 @@ The retry therefore needs a **v2 sampler with mmap() register access** (delivere
   -> pcie_ete_sr_init -> pcie_ete_sr_reg_init` during probe (14.10-14.21 s), i.e. **before**
   the firmware download (14.23-14.54 s), and `module_loaded` only becomes visible after that
   same probe, so the v1 wait loop would have detected a live ring on its first poll.
+* **[V] the instrument**: v2 builds (`build/wifi-rx-h2d-window/omo_h2dsampler-mmap`,
+  54,364 B, `sha256 cb03ee1b…`) and its host tests pass 12/12 (selftest 17/17), see
+  `evidence/HOST-TESTS.txt` and `evidence/V1-V2-DIFF.txt`.
 * **[I] the on-device confirmation**: the v1 `pread` returning `-EFAULT` is inferred from the
   kernel code path + the symptom; the v2 `-p` probe mode makes it direct on the retry
   (`pread_control=EFAULT`), which is the first line of the retry evidence.

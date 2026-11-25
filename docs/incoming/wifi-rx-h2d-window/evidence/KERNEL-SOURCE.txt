@@ -1,0 +1,129 @@
+### arch/arm/mm/mmap.c (valid_phys_addr_range = the read()/pread() gate; valid_mmap_phys_addr_range = the mmap() gate)
+
+/*
+ * You really shouldn't be using read() or write() on /dev/mem.  This
+ * might go away in the future.
+ */
+int valid_phys_addr_range(phys_addr_t addr, size_t size)
+{
+	if (addr < PHYS_OFFSET)
+		return 0;
+	if (addr + size > __pa(high_memory - 1) + 1)
+		return 0;
+
+	return 1;
+}
+
+/*
+ * Do not allow /dev/mem mappings beyond the supported physical range.
+ */
+int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
+{
+	return (pfn + (size >> PAGE_SHIFT)) <= (1 + (PHYS_MASK >> PAGE_SHIFT));
+}
+
+#ifdef CONFIG_STRICT_DEVMEM
+
+#include <linux/ioport.h>
+
+/*
+ * devmem_is_allowed() checks to see if /dev/mem access to a certain
+ * address is valid. The argument is a physical page number.
+ * We mimic x86 here by disallowing access to system RAM as well as
+
+### drivers/char/mem.c read_mem (the read() path): valid_phys_addr_range at the entry
+static ssize_t read_mem(struct file *file, char __user *buf,
+			size_t count, loff_t *ppos)
+{
+	phys_addr_t p = *ppos;
+	ssize_t read, sz;
+	void *ptr;
+	char *bounce;
+	int err;
+
+	if (p != *ppos)
+		return 0;
+
+	if (!valid_phys_addr_range(p, count))
+		return -EFAULT;
+	read = 0;
+#ifdef __ARCH_HAS_NO_PAGE_ZERO_MAPPED
+	while (count > 0) {
+		unsigned long remaining;
+		int allowed, probe;
+
+		sz = size_inside_page(p, count);
+
+		err = -EPERM;
+		allowed = page_is_allowed(p >> PAGE_SHIFT);
+		if (!allowed)
+			goto failed;
+
+		err = -EFAULT;
+		if (allowed == 2) {
+			/* Show zeros for restricted memory. */
+			remaining = clear_user(buf, sz);
+		} else {
+			/*
+			 * On ia64 if a page has been mapped somewhere as
+			 * uncached, then it must also be accessed uncached
+			 * by the kernel or data corruption may occur.
+			 */
+			ptr = xlate_dev_mem_ptr(p);
+			if (!ptr)
+				goto failed;
+
+			probe = copy_from_kernel_nofault(bounce, ptr, sz);
+			unxlate_dev_mem_ptr(p, ptr);
+			if (probe)
+				goto failed;
+
+			remaining = copy_to_user(buf, bounce, sz);
+		}
+
+		if (remaining)
+			goto failed;
+
+		buf += sz;
+		p += sz;
+		count -= sz;
+		read += sz;
+		if (should_stop_iteration())
+			break;
+
+### arch/arm/include/asm/io.h: read_mem translates via __va() only
+extern void pci_iounmap(struct pci_dev *dev, void __iomem *addr);
+
+/*
+ * Convert a physical pointer to a virtual kernel pointer for /dev/mem
+ * access
+ */
+#define xlate_dev_mem_ptr(p)	__va(p)
+
+/*
+ * Convert a virtual cached pointer to an uncached pointer
+ */
+#define xlate_dev_kmem_ptr(p)	p
+
+#include <asm-generic/io.h>
+
+#ifdef CONFIG_MMU
+#define ARCH_HAS_VALID_PHYS_ADDR_RANGE
+extern int valid_phys_addr_range(phys_addr_t addr, size_t size);
+
+### drivers/of/fdt.c: the "Ignoring memory range" line is printed when base < phys_offset (= __pa(PAGE_OFFSET))
+		pr_warn("Ignoring memory block 0x%llx - 0x%llx\n",
+			base, base + size);
+		return;
+	}
+	if (base < phys_offset) {
+		pr_warn("Ignoring memory range 0x%llx - 0x%llx\n",
+			base, phys_offset);
+		size -= phys_offset - base;
+		base = phys_offset;
+	}
+	memblock_add(base, size);
+}
+
+int __init __weak early_init_dt_mark_hotplug_memory_arch(u64 base, u64 size)
+{

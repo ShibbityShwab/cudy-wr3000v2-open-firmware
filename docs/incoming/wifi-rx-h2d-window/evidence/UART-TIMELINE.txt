@@ -1,0 +1,40 @@
+# file: build/uart-logs/20261125T113518Z-uart-h2d-stock.log (503328 B)
+# sha256: d831a01d6ff975243526e5e57b3c478cd560afb932053f49314038d2e2e1640c
+# capture boot = the LAST stock boot: U-Boot 'Image Name: Linux-5.10.201' line 6491 -> reboot line 7750
+# (earlier boots in the same capture are the T1/T3 boots; the 6.18.60 pair-B boot follows at line 7808)
+
+73:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+78:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+480:[    9.948159] kmodloader: done loading kernel modules from /etc/modules.d/*
+1385:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+1390:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+1792:[    9.960026] kmodloader: done loading kernel modules from /etc/modules.d/*
+2660:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+2665:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+3067:[    9.975342] kmodloader: done loading kernel modules from /etc/modules.d/*
+3935:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+3940:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+4342:[    9.817292] kmodloader: done loading kernel modules from /etc/modules.d/*
+5228:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+5233:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+5635:[   10.102030] kmodloader: done loading kernel modules from /etc/modules.d/*
+6503:[    0.000000] OF: fdt: Ignoring memory range 0x80500000 - 0x80600000
+6508:[    0.000000]   Normal   [mem 0x0000000080600000-0x0000000087ffffff]
+6909:[    9.763340] kmodloader: done loading kernel modules from /etc/modules.d/*
+6910:[   11.701196] PCIe:0 switch to RC mode
+6953:[   12.117356] hwifi_config_init read ini file failed cfg_id[173]tag[18]!
+7130:[   14.097143] wlan_pm_open chip_id[0]
+7132:[   14.104213] [PCIEL]pcie_main_init chip[0], bus[0]
+7145:[   14.183267] [PCIEL]oal_pcie_enable_remap:chip_id=0
+7146:[   14.188335] [PCIE][ERR]  [pcie_msg_init:1690]pcie_msg_init
+7150:[   14.214793] [wlan_pm_init]wlan_pm_init ok!
+7153:[   14.229542] enter firmware_download_function
+7158:[   14.536873] firmware_download success
+7161:[   14.557009] Device plat ready! chip id : 0
+7192:[   15.477322] excp wifi callback register chip0
+7425:[   24.631063] hostapd_setup: channel=6, htmode=HE40, hwmode=g, ht_capab=[HT40+].
+7500:[   31.114999] hostapd_setup: channel=36, htmode=HE160, hwmode=a, ht_capab=[HT40+].
+7750:[  294.373823] reboot: Restarting system
+8224:[   17.057314] kmodloader: done loading kernel modules from /etc/modules.d/*
+
+# timestamps are kernel-boot-relative seconds

@@ -1,0 +1,537 @@
+--- wifi-rx-h2d-trace/tools/omo_h2dsampler.c	2026-11-25 18:02:15.985845291 +0700
++++ wifi-rx-h2d-window/tools/omo_h2dsampler-mmap.c	2026-11-25 22:38:14.544319292 +0700
+@@ -1,38 +1,57 @@
+-/* omo_h2dsampler - read-only host->device (H2D) trace sampler for the Cudy WR3000 v2.0
+- * stock (pair-A) image, lane rx-h2d-trace / task-176.
++/* omo_h2dsampler v2 (mmap) - read-only host->device (H2D) trace sampler for the
++ * Cudy WR3000 v2.0 stock (pair-A) image. Lane rx-h2d-window / task-194; v1 is
++ * docs/incoming/wifi-rx-h2d-trace/tools/omo_h2dsampler.c (task-176).
++ *
++ * WHY v2 EXISTS (see docs/incoming/wifi-rx-h2d-window/REPORT.md §2):
++ *   v1 read the ETE registers with pread() on /dev/mem. On this 32-bit ARM kernel
++ *   read()/pread() of /dev/mem goes through read_mem() -> valid_phys_addr_range()
++ *   (arch/arm/mm/mmap.c), which rejects every address below PHYS_OFFSET (RAM start,
++ *   0x80600000 on the stock) with -EFAULT. Both ETE windows (0x403f2000 EP0,
++ *   0x583f2000 EP1) are below it, so v1 could NEVER read a register: the returned
++ *   error was ignored, base/depth stayed 0, and the run ended with "ring not seen".
++ *   v2 mmaps the ETE window page (/dev/mem mmap is allowed and ioremaps - the same
++ *   path busybox devmem uses) and keeps pread() only for host DRAM (ring nodes and
++ *   message buffers, addresses >= PHYS_OFFSET, which is correct).
+  *
+  * WHAT IT DOES (READ-ONLY):
+- *   The vendor's H2D messages are HCC frames in host DRAM, posted as 8-byte nodes into the
+- *   ETE SR ring. This tool polls the SR channel producer registers (through the endpoint's
+- *   BAR0 region-3 window, which on this board is a host-physical MMIO window at 0x403b8000 +
+- *   (CA - 0x40000000); the ETE window CA 0x4003a000 is therefore host 0x403f2000), and for
+- *   every new node reads the 8-byte node + the message buffer + the 12-byte HCC header, and
+- *   appends one line per message to a log file.
++ *   Prints the HCC frames the vendor posts into the ETE SR ring as 8-byte nodes.
++ *   It only: mmap()s a /dev/mem page READ-ONLY, pread()s /dev/mem (DRAM), writes its
++ *   own log file, and stat()s /proc/modules + a stop file. No device writes.
+  *
+- *   It performs ONLY: pread() on /dev/mem (physical reads), writes to its own log file, and
+- *   stat()/open() of /proc/modules + a stop file. No device writes, no module loads, no flash.
++ * DEFAULT WINDOW: 0x583f2000 = EP1 (0001:00:00.0 = vendor chip->dev[0], phy_devid 0)
++ *   region-3 host base 0x583b8000 + (ETE CA 0x4003a000 - CA base 0x40000000).
++ *   0x403f2000 is EP0 (our port / PD4 image) and aliases the SAME on-chip register
++ *   block (phase21/sibling-ep.md A.4), so -w 0x403f2000 works too; v1 used it.
+  *
+- * USAGE (on the stock root shell; run from a one-shot init aid):
+- *   omo-h2dsampler -o /overlay/h2d-trace.log -t 180 -r 20
++ * USAGE (on the stock root shell; run from the one-shot init aid or by hand):
++ *   omo-h2dsampler -o /overlay/h2d-trace.log -t 240 -r 20 -w 0x583f2000 -W 180
+  *   options:
+  *     -o PATH   log file (append). default: /overlay/h2d-trace.log
+- *     -t SEC    capture duration after the ring appears. default: 180
++ *     -t SEC    capture duration after the ring appears. default: 240
+  *     -r MS     poll period. default: 20
+- *     -w PHYS   ETE window host physical address. default: 0x403f2000
++ *     -w PHYS   ETE window host physical address. default: 0x583f2000 (EP1)
+  *     -m NAME   module to wait for. default: hi5622v100_plat
+  *     -s PATH   stop file; stop when it exists. default: /overlay/h2d-trace.stop
+- *     -W SEC    max wait for the module/ring before giving up. default: 120
++ *     -W SEC    max wait for the module/ring before giving up. default: 180
++ *     -p        READ-ONLY PROBE mode: print the SR ch0..2 registers + one pread()
++ *               control read, then exit (0 = ring looks valid, 1 = not). No log file.
++ *     --selftest  host-side pure unit checks of the ring/address helpers.
+  *     -q        quiet (only the log file)
+  *
+- * LOG FORMAT (version 1):
+- *   # omo_h2dsampler v1 ts0=... window=... module=...
++ * TEST HOOK: if env OMO_H2D_FAKE_WIN names a regular file, the window is mmap()ed
++ *   from that file at offset 0 instead of /dev/mem (host tests only); /dev/mem is not
++ *   opened, so DRAM preads fail and are counted as misreads.
++ *
++ * LOG FORMAT (version 2; the v1 format is kept, tools/decode_h2d.py still decodes it):
++ *   # omo_h2dsampler v2 ts0=... window=... module=... duration=... period_ms=... access=mmap
++ *   E ts_ms=... msg=win-probe base=... depth=... prod=... cons=... ctrl=... ring=yes|no
+  *   R ts_ms=... ch=... ctrl=... base=... depth=... prod=... cons=...
+  *   M ts_ms=... ch=... idx=... prime=... node=0x... len=... flags=0x... total=... group=...
+  *     bid=0x... vap=... chip=... id=... dst=... hex=<full frame hex>
+- *   E ts_ms=... msg=...
+- *
+- * The M record carries the FULL frame bytes; the host decoder (tools/decode_h2d.py) does the
+- * validation/classification/diff. See docs/incoming/wifi-rx-h2d-trace/H2D-FORMATS.md.
++ *   E ts_ms=... msg=heartbeat misreads=... win_err=...
++ *   E ts_ms=... msg=ring-seen dt_wait_ms=...
++ *   E ts_ms=... msg=ring-not-seen wait_sec=... module_loaded=... last=base=... depth=...
++ *   E ts_ms=... msg=stopped
+  */
+ #define _GNU_SOURCE
+ #include <errno.h>
+@@ -43,10 +62,13 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/mman.h>
+ #include <time.h>
+ #include <unistd.h>
+ 
+-#define ETE_DEFAULT_WINDOW  0x403f2000u   /* CA 0x4003a000 through BAR0 region-3 */
++#define ETE_DEFAULT_WINDOW  0x583f2000u   /* EP1: 0x583b8000 + (CA 0x4003a000 - 0x40000000) */
++#define ETE_ALT_WINDOW      0x403f2000u   /* EP0 (our port): alias of the same register block */
++#define WIN_MAP_SIZE        0x2000u
+ #define SR_BLOCK_OFF        0x400u        /* SR0 block inside the ETE window */
+ #define SR_STRIDE           0x50u
+ #define SR_CHANNELS         3
+@@ -55,6 +77,9 @@
+ #define REG_DEPTH           0x14u
+ #define REG_PROD            0x18u
+ #define REG_CONS            0x1cu
++#define DRAM_LO             0x80000000u   /* stock DRAM window (boot log: 0x80600000-0x87ffffff) */
++#define DRAM_HI             0x88000000u
++#define DEPTH_MAX           1024u
+ #define NODE_MAX_LEN        0x700u
+ #define FRAME_MAX_LEN       NODE_MAX_LEN
+ #define HCC_TAG_OFF         10
+@@ -68,6 +93,15 @@
+ };
+ 
+ static volatile sig_atomic_t g_stop;
++static int mem_fd = -1;
++static unsigned char *win_map;
++static uint32_t win_page;
++static uint32_t win_delta;      /* window - page-aligned map base */
++static int win_is_fake;
++static FILE *log_fp;
++static int quiet;
++static unsigned long long g_dram_misreads;
++static unsigned long long g_win_misreads;
+ 
+ static void on_signal(int sig)
+ {
+@@ -82,22 +116,72 @@
+ 	return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+ }
+ 
+-static int mem_fd = -1;
+-static FILE *log_fp;
+-static int quiet;
+-
++/* Host DRAM reads (ring nodes, message buffers): pread() is correct here because
++ * these addresses are >= PHYS_OFFSET, i.e. inside the kernel's direct map. */
+ static int phys_read(uint32_t phys, void *buf, size_t len)
+ {
+ 	ssize_t n;
+-	if (mem_fd < 0)
++	if (mem_fd < 0) {
++		g_dram_misreads++;
+ 		return -1;
++	}
+ 	n = pread(mem_fd, buf, len, (off_t)phys);
+-	return (n == (ssize_t)len) ? 0 : -1;
++	if (n != (ssize_t)len) {
++		g_dram_misreads++;
++		return -1;
++	}
++	return 0;
++}
++
++/* ETE register read: through the mmap()ed window page (v2; see the header comment). */
++static int win_read32(uint32_t off_from_window, uint32_t *out)
++{
++	if (!win_map || win_delta + off_from_window + sizeof(*out) > WIN_MAP_SIZE) {
++		g_win_misreads++;
++		return -1;
++	}
++	memcpy(out, win_map + win_delta + off_from_window, sizeof(*out));
++	return 0;
+ }
+ 
+-static int read32(uint32_t phys, uint32_t *out)
++static int ring_valid(uint32_t base, uint32_t depth)
+ {
+-	return phys_read(phys, out, sizeof(*out));
++	if (base < DRAM_LO || base >= DRAM_HI)
++		return 0;               /* 0, 0xffffffff, MMIO, ... are all "not programmed" */
++	if (depth < 1 || depth > DEPTH_MAX)
++		return 0;               /* depth is the depth-1 register on this device */
++	return 1;
++}
++
++static int window_map_open(uint32_t window)
++{
++	const char *fake = getenv("OMO_H2D_FAKE_WIN");
++	int fd;
++
++	if (fake && *fake) {
++		fd = open(fake, O_RDONLY);
++		if (fd < 0)
++			return -1;
++		win_page = 0;
++		win_delta = 0;
++		win_is_fake = 1;
++	} else {
++		fd = mem_fd;            /* /dev/mem, O_RDONLY|O_SYNC, opened by the caller */
++		if (fd < 0)
++			return -1;
++		win_page = window & ~0xFFFu;     /* mmap offset must be page-aligned */
++		win_delta = window - win_page;
++	}
++	win_map = mmap(NULL, WIN_MAP_SIZE, PROT_READ, MAP_SHARED, fd, (off_t)win_page);
++	if (win_map == MAP_FAILED) {
++		win_map = NULL;
++		if (win_is_fake)
++			close(fd);
++		return -1;
++	}
++	if (win_is_fake)
++		close(fd);
++	return 0;
+ }
+ 
+ static int module_loaded(const char *name)
+@@ -175,7 +259,7 @@
+ {
+ 	uint32_t idx, phase, n, k;
+ 
+-	if (depth == 0 || depth > 1024)
++	if (depth == 0 || depth > DEPTH_MAX)
+ 		return;
+ 	idx = raw & 0x3ffu;
+ 	if (idx >= depth) {
+@@ -254,19 +338,140 @@
+ 	st->last_phase = phase;
+ }
+ 
++static void read_channel_regs(int ch, uint32_t *ctrl, uint32_t *base, uint32_t *depth,
++			      uint32_t *prod, uint32_t *cons)
++{
++	uint32_t off = SR_BLOCK_OFF + (uint32_t)ch * SR_STRIDE;
++	*ctrl = *base = *depth = *prod = *cons = 0;
++	win_read32(off + REG_CTRL, ctrl);
++	win_read32(off + REG_BASE, base);
++	win_read32(off + REG_DEPTH, depth);
++	win_read32(off + REG_PROD, prod);
++	win_read32(off + REG_CONS, cons);
++}
++
++static int do_selftest(void)
++{
++	int pass = 0, total = 0;
++	struct { uint32_t base, depth; int want; } rings[] = {
++		{ 0x00000000u, 0x0000001fu, 0 },
++		{ 0xfffffffeu, 0x00000000u, 0 },
++		{ 0x848f6000u, 0x00000000u, 0 },
++		{ 0x848f6000u, 0x00000401u, 0 },
++		{ 0x848f6000u, 0x0000001fu, 1 },
++		{ 0x83a52000u, 0x0000001fu, 1 },
++		{ 0x80600000u, 0x00000001u, 1 },
++		{ 0x87ffffffu, 0x00000400u, 1 },
++		{ 0x87ffffffu, 0x00000401u, 0 },
++	};
++	size_t i;
++
++	for (i = 0; i < sizeof(rings) / sizeof(rings[0]); i++) {
++		total++;
++		if (ring_valid(rings[i].base, rings[i].depth) == rings[i].want)
++			pass++;
++		else
++			printf("SELFTEST FAIL ring base=0x%08x depth=0x%x want=%d\n",
++			       rings[i].base, rings[i].depth, rings[i].want);
++	}
++
++	/* windows: BAR0 base + region-3 offset 0x3b8000 + (ETE CA 0x4003a000 - base 0x40000000) */
++	{
++		struct { uint32_t bar0, want; } wins[] = {
++			{ 0x58000000u, 0x583f2000u },   /* EP1 */
++			{ 0x40000000u, 0x403f2000u },   /* EP0 */
++		};
++		for (i = 0; i < sizeof(wins) / sizeof(wins[0]); i++) {
++			total++;
++			if (wins[i].bar0 + 0x3f2000u == wins[i].want)
++				pass++;
++			else
++				printf("SELFTEST FAIL window bar0=0x%08x\n", wins[i].bar0);
++		}
++	}
++
++	/* SR ch0 register offsets inside the window */
++	{
++		struct { uint32_t off, want; } regs[] = {
++			{ SR_BLOCK_OFF + REG_CTRL, 0x408u },
++			{ SR_BLOCK_OFF + REG_BASE, 0x410u },
++			{ SR_BLOCK_OFF + REG_DEPTH, 0x414u },
++			{ SR_BLOCK_OFF + REG_PROD, 0x418u },
++			{ SR_BLOCK_OFF + REG_CONS, 0x41cu },
++			{ SR_BLOCK_OFF + SR_STRIDE + REG_BASE, 0x460u },
++		};
++		for (i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
++			total++;
++			if (regs[i].off == regs[i].want)
++				pass++;
++			else
++				printf("SELFTEST FAIL reg off=0x%x want=0x%x\n", regs[i].off, regs[i].want);
++		}
++	}
++
++	printf("SELFTEST: %d/%d PASS\n", pass, total);
++	return pass == total ? 0 : 1;
++}
++
++/* -p: read-only probe. Exit 0 if SR0 looks like a live ring, 1 otherwise. */
++static int do_probe(uint32_t window)
++{
++	uint32_t base, depth, prod, cons, ctrl;
++	int i;
++
++	printf("omo-h2dsampler v2 probe window=0x%08x access=%s\n",
++	       window, win_is_fake ? "file-fake" : "mmap");
++	for (i = 0; i < SR_CHANNELS; i++) {
++		read_channel_regs(i, &ctrl, &base, &depth, &prod, &cons);
++		printf("SR ch%d ctrl=0x%08x base=0x%08x depth=0x%08x prod=0x%08x cons=0x%08x ring=%s\n",
++		       i, ctrl, base, depth, prod, cons,
++		       (i == 0 && ring_valid(base, depth)) ? "YES" : (depth ? "PARTIAL" : "NO"));
++	}
++	read_channel_regs(0, &ctrl, &base, &depth, &prod, &cons);
++
++	/* The v1 control: pread() the SAME base register. Expected to fail with
++	 * EFAULT (below PHYS_OFFSET) or, in fake mode, with EBADF/no /dev/mem. */
++	{
++		uint32_t v = 0;
++		int rc = -1, saved = 0;
++		if (mem_fd >= 0) {
++			ssize_t n = pread(mem_fd, &v, sizeof(v), (off_t)(window + SR_BLOCK_OFF + REG_BASE));
++			if (n == (ssize_t)sizeof(v))
++				rc = 0;
++			else
++				saved = errno;
++		} else {
++			saved = EBADF;
++		}
++		if (rc == 0)
++			printf("pread_control=OK value=0x%08x (kernel allows read() here; check REPORT §2)\n", v);
++		else
++			printf("pread_control=FAIL errno=%d (%s) -- expected: v1's read() cannot reach MMIO below RAM\n",
++			       saved, strerror(saved));
++	}
++	printf("probe: ring=%s\n", ring_valid(base, depth) ? "YES" : "NO");
++	fflush(stdout);
++	return ring_valid(base, depth) ? 0 : 1;
++}
++
+ int main(int argc, char **argv)
+ {
+ 	const char *log_path = "/overlay/h2d-trace.log";
+ 	const char *module = "hi5622v100_plat";
+ 	const char *stop_path = "/overlay/h2d-trace.stop";
+ 	uint32_t window = ETE_DEFAULT_WINDOW;
+-	unsigned duration = 180, period_ms = 20, wait_max = 120;
++	unsigned duration = 240, period_ms = 20, wait_max = 180;
+ 	uint64_t ts0, ts_ring = 0, last_state = 0;
+ 	struct chan_state st[SR_CHANNELS];
+-	int opt, i, ring_seen = 0;
++	int opt, i, ring_seen = 0, probe_mode = 0;
++	int probe_last_logged = 0;
+ 
+ 	memset(st, 0, sizeof(st));
+-	while ((opt = getopt(argc, argv, "o:t:r:w:m:s:W:qh")) != -1) {
++	/* --selftest is host-side only; handle it before getopt (no long options). */
++	for (i = 1; i < argc; i++)
++		if (!strcmp(argv[i], "--selftest"))
++			return do_selftest();
++	while ((opt = getopt(argc, argv, "o:t:r:w:m:s:W:pqh")) != -1) {
+ 		switch (opt) {
+ 		case 'o': log_path = optarg; break;
+ 		case 't': duration = (unsigned)strtoul(optarg, NULL, 0); break;
+@@ -275,51 +480,83 @@
+ 		case 'm': module = optarg; break;
+ 		case 's': stop_path = optarg; break;
+ 		case 'W': wait_max = (unsigned)strtoul(optarg, NULL, 0); break;
++		case 'p': probe_mode = 1; break;
+ 		case 'q': quiet = 1; break;
+ 		default:
+ 			fprintf(stderr,
+ 				"usage: %s [-o log] [-t sec] [-r ms] [-w phys] [-m module] "
+-				"[-s stopfile] [-W waitsec] [-q]\n", argv[0]);
++				"[-s stopfile] [-W waitsec] [-p] [--selftest] [-q]\n", argv[0]);
+ 			return 2;
+ 		}
+ 	}
++	(void)probe_last_logged;
+ 	if (period_ms < 1)
+ 		period_ms = 1;
+ 
++	mem_fd = open("/dev/mem", O_RDONLY | O_SYNC);
++	if (mem_fd < 0) {
++		const char *fake = getenv("OMO_H2D_FAKE_WIN");
++		if (!(fake && *fake)) {
++			fprintf(stderr, "omo-h2dsampler: /dev/mem open failed: %s\n", strerror(errno));
++			return 3;
++		}
++	}
++	if (window_map_open(window)) {
++		fprintf(stderr, "omo-h2dsampler: window mmap failed (window=0x%08x): %s\n",
++			window, strerror(errno));
++		if (probe_mode)
++			printf("window_mmap=FAIL window=0x%08x errno=%d (%s)\n",
++			       window, errno, strerror(errno));
++		if (mem_fd >= 0)
++			close(mem_fd);
++		return 5;
++	}
++
++	if (probe_mode) {
++		int rc = do_probe(window);
++		if (mem_fd >= 0)
++			close(mem_fd);
++		return rc;
++	}
++
+ 	log_fp = fopen(log_path, "a");
+ 	if (!log_fp) {
+ 		fprintf(stderr, "omo-h2dsampler: cannot open %s: %s\n", log_path, strerror(errno));
++		if (mem_fd >= 0)
++			close(mem_fd);
++		munmap(win_map, WIN_MAP_SIZE);
+ 		return 3;
+ 	}
+ 	setvbuf(log_fp, NULL, _IOLBF, 0);
+ 
+-	mem_fd = open("/dev/mem", O_RDONLY | O_SYNC);
+-	if (mem_fd < 0) {
+-		log_line("E ts_ms=%llu msg=devmem-open-failed errno=%d", (unsigned long long)now_ms(), errno);
+-		fprintf(stderr, "omo-h2dsampler: /dev/mem open failed: %s\n", strerror(errno));
+-		fclose(log_fp);
+-		return 3;
+-	}
+-
+ 	signal(SIGTERM, on_signal);
+ 	signal(SIGINT, on_signal);
+ 
+ 	ts0 = now_ms();
+-	log_line("# omo_h2dsampler v1 ts0=%llu window=0x%08x module=%s duration=%u period_ms=%u",
+-		 (unsigned long long)ts0, window, module, duration, period_ms);
++	log_line("# omo_h2dsampler v2 ts0=%llu window=0x%08x module=%s duration=%u period_ms=%u access=%s",
++		 (unsigned long long)ts0, window, module, duration, period_ms,
++		 win_is_fake ? "file-fake" : "mmap");
+ 	if (!quiet)
+-		fprintf(stderr, "omo-h2dsampler: waiting for module %s (window 0x%08x)\n",
++		fprintf(stderr, "omo-h2dsampler v2: waiting for module %s (window 0x%08x, mmap)\n",
+ 			module, window);
+ 
+-	/* Wait for the vendor platform module and for the SR ring to be programmed. */
++	/* Wait for the vendor platform module and for the SR ring to be programmed.
++	 * In the OMO_H2D_FAKE_WIN host-test mode there is no vendor module: treat it as
++	 * loaded so the window/ring logic itself is exercised. */
+ 	while (!g_stop && now_ms() - ts0 < (uint64_t)wait_max * 1000u) {
+-		int loaded = module_loaded(module);
+-		uint32_t base = 0, depth = 0;
++		int loaded = win_is_fake ? 1 : module_loaded(module);
++		uint32_t base = 0, depth = 0, prod = 0, cons = 0, ctrl = 0;
+ 
+ 		if (loaded > 0) {
+-			read32(window + SR_BLOCK_OFF + REG_BASE, &base);
+-			read32(window + SR_BLOCK_OFF + REG_DEPTH, &depth);
+-			if (base != 0 && depth != 0) {
++			read_channel_regs(0, &ctrl, &base, &depth, &prod, &cons);
++			if (!probe_last_logged) {
++				log_line("E ts_ms=%llu msg=win-probe base=0x%08x depth=0x%08x "
++					 "prod=0x%08x cons=0x%08x ctrl=0x%08x ring=%s",
++					 (unsigned long long)now_ms(), base, depth, prod, cons, ctrl,
++					 ring_valid(base, depth) ? "yes" : "no");
++				probe_last_logged = 1;
++			}
++			if (ring_valid(base, depth)) {
+ 				ring_seen = 1;
+ 				break;
+ 			}
+@@ -327,16 +564,24 @@
+ 		usleep(5000);
+ 	}
+ 	if (!ring_seen && !g_stop) {
+-		log_line("E ts_ms=%llu msg=ring-not-seen wait_sec=%u module_loaded=%d",
+-			 (unsigned long long)now_ms(), wait_max, module_loaded(module));
+-		fprintf(stderr, "omo-h2dsampler: ring not seen within %u s\n", wait_max);
++		uint32_t base = 0, depth = 0, prod = 0, cons = 0, ctrl = 0;
++		read_channel_regs(0, &ctrl, &base, &depth, &prod, &cons);
++		log_line("E ts_ms=%llu msg=ring-not-seen wait_sec=%u module_loaded=%d "
++			 "last=base=0x%08x depth=0x%08x prod=0x%08x win_err=%llu misreads=%llu",
++			 (unsigned long long)now_ms(), wait_max,
++			 win_is_fake ? 1 : module_loaded(module),
++			 base, depth, prod, g_win_misreads, g_dram_misreads);
++		fprintf(stderr, "omo-h2dsampler: ring not seen within %u s (last base=0x%08x depth=0x%08x)\n",
++			wait_max, base, depth);
+ 		fclose(log_fp);
+-		close(mem_fd);
++		if (mem_fd >= 0)
++			close(mem_fd);
++		munmap(win_map, WIN_MAP_SIZE);
+ 		return 4;
+ 	}
+ 	ts_ring = now_ms();
+-	log_line("E ts_ms=%llu msg=ring-seen dt_wait_ms=%llu", (unsigned long long)ts_ring,
+-		 (unsigned long long)(ts_ring - ts0));
++	log_line("E ts_ms=%llu msg=ring-seen dt_wait_ms=%llu",
++		 (unsigned long long)ts_ring, (unsigned long long)(ts_ring - ts0));
+ 	if (!quiet)
+ 		fprintf(stderr, "omo-h2dsampler: ring seen after %llu ms; capturing %u s\n",
+ 			(unsigned long long)(ts_ring - ts0), duration);
+@@ -350,27 +595,24 @@
+ 			break;
+ 
+ 		for (i = 0; i < SR_CHANNELS; i++) {
+-			uint32_t off = window + SR_BLOCK_OFF + (uint32_t)i * SR_STRIDE;
+ 			uint32_t ctrl, base, depth, prod, cons;
+ 
+-			if (read32(off + REG_CTRL, &ctrl) ||
+-			    read32(off + REG_BASE, &base) ||
+-			    read32(off + REG_DEPTH, &depth) ||
+-			    read32(off + REG_PROD, &prod) ||
+-			    read32(off + REG_CONS, &cons))
+-				continue;
++			read_channel_regs(i, &ctrl, &base, &depth, &prod, &cons);
+ 			if (!base || !depth)
+ 				continue;
+-			if ((now - last_state) > 1000u) {
+-				log_line("R ts_ms=%llu ch=%d ctrl=0x%08x base=0x%08x depth=0x%x "
+-					 "prod=0x%08x cons=0x%08x",
+-					 (unsigned long long)now, i, ctrl, base, depth, prod, cons);
++			if (ring_valid(base, depth)) {
++				if ((now - last_state) > 1000u) {
++					log_line("R ts_ms=%llu ch=%d ctrl=0x%08x base=0x%08x depth=0x%x "
++						 "prod=0x%08x cons=0x%08x",
++						 (unsigned long long)now, i, ctrl, base, depth, prod, cons);
++				}
++				drain_channel(i, base, depth, prod, &st[i]);
+ 			}
+-			drain_channel(i, base, depth, prod, &st[i]);
+ 		}
+ 		if (now - last_state > 1000u) {
+ 			last_state = now;
+-			log_line("E ts_ms=%llu msg=heartbeat", (unsigned long long)now);
++			log_line("E ts_ms=%llu msg=heartbeat misreads=%llu win_err=%llu",
++				 (unsigned long long)now, g_dram_misreads, g_win_misreads);
+ 		}
+ 		usleep(period_ms * 1000u);
+ 	}
+@@ -378,6 +620,8 @@
+ 	if (!quiet)
+ 		fprintf(stderr, "omo-h2dsampler: done; log=%s\n", log_path);
+ 	fclose(log_fp);
+-	close(mem_fd);
++	if (mem_fd >= 0)
++		close(mem_fd);
++	munmap(win_map, WIN_MAP_SIZE);
+ 	return 0;
+ }

@@ -1,0 +1,13 @@
+$ tools/build-sampler-mmap.sh
+CC=/home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-muslgnueabi-gcc
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-window/omo_h2dsampler-mmap: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped
+-rwxr-xr-x 1 shibbityshwab shibbityshwab 54364 พ.ย.  25 22:38 /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-window/omo_h2dsampler-mmap
+cb03ee1b85feb7fdd0a81b3b7a4d97461a8ad2eb1a9459134426ddbbbf352805  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-h2d-window/omo_h2dsampler-mmap
+
+$ file build/wifi-rx-h2d-window/omo_h2dsampler-mmap
+build/wifi-rx-h2d-window/omo_h2dsampler-mmap: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), statically linked, stripped
+
+$ sha256sum build/wifi-rx-h2d-window/omo_h2dsampler-mmap
+cb03ee1b85feb7fdd0a81b3b7a4d97461a8ad2eb1a9459134426ddbbbf352805  build/wifi-rx-h2d-window/omo_h2dsampler-mmap
+
+NOTE: the binary itself is a build/ artifact (gitignored, never committed); only this log is committed.
