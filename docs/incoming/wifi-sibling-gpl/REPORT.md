@@ -89,10 +89,30 @@ Evidence markers: **[V]** verified in a fetched public source (raw path + lines 
    vendor does the same on the data path.  So EAPOL RX rides on the same data-ring drain that is
    currently empty - another reason full association (or any associated data source) is required
    before expecting ring captures.
-10. **No public source documents our exact chip** (no hi5622/luofu register map); the sibling
+11. **Follow-up (Lead request): the mgmt-TX device carrier is now decoded and
+    implemented** - raw HCC group 0 id 6 control message (48-byte device TX
+    control + inline frame), completion via the DMAC->HMAC config-syn event
+    0x01F3; a corrected patch (5 files, applies to the final association tree,
+    builds with 0 warnings) and a 41/41 host test are in
+    [MGMT-CARRIER-CORRECTION.md](MGMT-CARRIER-CORRECTION.md).  The
+    public-research2 "SET_RX_FILTER" hypothesis is refuted for luofu by static
+    evidence (no sender exists in either vendor module).
+12. **No public source documents our exact chip** (no hi5622/luofu register map); the sibling
     value is architectural.  The concrete deliverables are: this report + TABLES.md, a
     host-tested RX refinement proposal (P1/P3), an association-ordering guard proposal (P2), and
     a bench ladder that tests the *right* path (D2H mgmt events) instead of the data ring.
+
+> **Lane follow-up (Lead request, 2026-11-25):** the management-TX carrier was
+> corrected after this report's first version.  The device-facing message is a
+> **raw HCC group 0 / id 6 control message** (frame inline after a 48-byte
+> device TX-control block; completion = DMAC->HMAC config-syn event 0x01F3),
+> **not** the WAL cfg-event 0x01F2 (which is the host-internal WAL->HMAC
+> request).  Full decode, corrected builder, compiled patch, host test and the
+> new fire recipe are in [MGMT-CARRIER-CORRECTION.md](MGMT-CARRIER-CORRECTION.md).
+> The same follow-up finds the luofu **SET_RX_FILTER message does not exist**
+> (an evidence-backed negative) and confirms the g1 id13 management-RX decode.
+> The RX-analysis sections 0-11 below remain valid; read item 11 of the TL;DR
+> with the correction file.
 
 ---
 

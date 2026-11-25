@@ -1,0 +1,366 @@
+--- a/hi5622_mgmt_logic.h
++++ b/hi5622_mgmt_logic.h
+@@ -65,12 +65,56 @@
+  * cookie[4], wal{id[4], pad[2], data_len[2], seq[4]}, {cmd[2], len[2]}, body */
+ #define HIMG_WAL_OVERHEAD	32u
+ #define HIMG_WAL_MSG_CFG	1u	/* wal_cfg_event type/op byte 1 [V] */
+-/* Vendor WAL cfg command for cfg80211 .mgmt_tx [V: 2.4.15 and 2.5.24 emit
+- * the identical TLV; the firmware g0 static config-key table A has no row
+- * for it, so this carrier is the vendor WAL path, not the g0 path]. */
++/* DEPRECATED carrier (kept for the record): wifi-ap-mgmt (task-143) decoded
++ * the vendor cfg80211 .mgmt_tx as WAL cfg-event cmd 0x01F2.  The sibling-gpl
++ * lane (task-151) established that 0x01F2 is the HOST-INTERNAL WAL->HMAC
++ * request; the device-facing message is the raw HCC mgmt control message
++ * below (vendor hmac_wpas_mgmt_tx -> helper @0x3fe68 -> hcc_msg_alloc /
++ * hcc_msg_tx).  This builder must not be used as the device carrier. */
+ #define HIMG_WAL_CMD_MGMT_TX	0x01F2u
+-#define HIMG_WAL_CMD_MGMT_TX_BODY 12u	/* 12-byte descriptor [V] */
+-#define HIMG_MAX_FRAME_TX	588u	/* vendor memcpy_s bound 0x24c [V] */
++#define HIMG_WAL_CMD_MGMT_TX_BODY 12u	/* 12-byte descriptor [V host-internal] */
++
++/* ===================================================================
++ * 1b. CORRECTED management-TX carrier: raw HCC control message [V]
++ *
++ * Vendor evidence (our 2.5.24 module; sibling-gpl lane task-151):
++ *   hmac_wpas_mgmt_tx (0x4050c) copies the 802.11 frame into an skb and
++ *   fills the tx control block, then calls a local helper (@0x3fe68) that
++ *   calls hcc_msg_alloc(len+48) and hcc_msg_tx(msg).  The helper builds the
++ *   12-byte HCC header in place: hdr[0] group nibble 0, hdr[1] alloc 1 |
++ *   chip/band<<4, hdr[2]/hdr[3] = VAP object bytes 1/0, hdr[4..5] =
++ *   payload+12, hdr[6..7] = message id 6, hdr[9] = chip/dst (hcc_msg_tx),
++ *   hdr[10..11] = 0x5a5a transport tag.  The payload is 48 bytes of device
++ *   TX control followed by the frame:
++ *     +0x00 u16 mpdu_len = frame_len - 24
++ *     +0x02 u8  frame_header_length = 24
++ *     +0x06 u8  flags (vendor value 3)
++ *     +0x08 u8  (cookie & 0xf) << 4
++ *     +0x09 u16 user/assoc id (0x0fff = no user; mgmt TX needs none)
++ *     +0x30 frame bytes (wire offset 60)
++ *   The firmware receive table has group 0 / id 6 (wifi-h2d-catalog
++ *   Appendix A) - the receiver is already in the decoded contract.
++ *   Completion: DMAC->HMAC config-syn event 0x01F3 in the vendor handler
++ *   table; the vendor relays it to WAL as the host-internal HCC g2 id 13
++ *   message {u32 frame_id; u8 status} (hmac_mgmt_tx_event_status).
++ * =================================================================== */
++#define HIMG_HCC_GROUP_CHIP	0u	/* g0 = chip/HMAC group [V] */
++#define HIMG_HCC_ID_MGMT	6u	/* group-0 mgmt control message [V] */
++#define HIMG_MGMT_TX_CTL_LEN	48u
++#define HIMG_MGMT_TX_FRAME_OFF	(HIMG_HCC_HDR_LEN + HIMG_MGMT_TX_CTL_LEN)
++#define HIMG_MGMT_TX_HDR_LEN	24u	/* 802.11 header assumed by the control */
++#define HIMG_MGMT_TX_MIN_FRAME	26u	/* vendor refuses frame_len <= 25 [V] */
++#define HIMG_MGMT_TX_MAX_FRAME	588u	/* vendor host memcpy bound 0x24c [V] */
++#define HIMG_MGMT_TX_MAX_TOTAL	\
++	(HIMG_HCC_HDR_LEN + HIMG_MGMT_TX_CTL_LEN + HIMG_MGMT_TX_MAX_FRAME)
++#define HIMG_CTL_MPDU_LEN	0x00u
++#define HIMG_CTL_HDR_LEN	0x02u
++#define HIMG_CTL_FLAGS		0x06u
++#define HIMG_CTL_FLAGS_VAL	0x03u	/* vendor value 3 [V] */
++#define HIMG_CTL_COOKIE		0x08u
++#define HIMG_CTL_USER		0x09u
++#define HIMG_CTL_INVALID_USER	0x0fffu	/* vendor no-user value [V] */
++#define HIMG_MAX_FRAME_TX	1612u	/* max frame in one g0 id6 message */
+ #define HIMG_MIN_MGMT_FRAME	24u	/* 802.11 header only */
+ 
+ /* ===================================================================
+@@ -99,9 +143,17 @@
+ 	himg_u32	channel;
+ 	himg_u8		cookie_idx;
+ 	himg_u16	len;
+-	himg_u32	frame_addr;
+-	himg_u32	seq;		/* WAL cfg-event sequence number */
++	himg_u32	frame_addr;	/* deprecated (WAL descriptor carrier) */
++	himg_u32	seq;		/* post sequence number / cookie */
+ 	himg_u8		dst;		/* HCC dst nibble (0 for the AP VAP) */
++	/* corrected g0 id6 control-message fields */
++	const himg_u8	*frame;		/* 802.11 management frame bytes */
++	himg_u16	frame_len;
++	himg_u8		band;		/* hdr[1] high nibble (0 = 2.4 GHz/band 0) */
++	himg_u8		hdr2;		/* hdr[2] (vendor VAP byte 1; 0) */
++	himg_u8		vap_id;		/* hdr[3] (vendor VAP id) */
++	himg_u16	cookie;		/* 4-bit tx cookie echoed by the device */
++	himg_u16	user_id;	/* assoc/user id, 0 = none -> 0x0fff */
+ };
+ 
+ struct himg_rx_frame {
+@@ -124,10 +176,17 @@
+ int himg_build_tx_desc(himg_u8 *desc, size_t cap,
+ 		       const struct himg_tx_desc *d);
+ 
+-/* Full vendor HCC wire frame for the WAL mgmt-tx carrier; 0 = valid. */
++/* Deprecated: full vendor HCC wire frame for the WAL mgmt-tx carrier.
++ * This is the host-internal WAL request, not a device message. */
+ int himg_build_wal_mgmt_tx(himg_u8 *wire, size_t cap, size_t *out_len,
+ 			   const struct himg_tx_params *p);
+ 
++/* CORRECTED device-facing carrier: raw HCC group 0 id 6 control message,
++ * payload = 48-byte device TX control + 802.11 management frame [V].
++ * 0 = built; -EINVAL/-ENOSPC on refusal. */
++int himg_build_hcc_mgmt_tx(himg_u8 *wire, size_t cap, size_t *out_len,
++			   const struct himg_tx_params *p);
++
+ /* 802.11 management-frame sanity (protocol 0, type management, sane length).
+  * 0 = acceptable to hand to the TX carrier. */
+ int himg_mgmt_frame_ok(const himg_u8 *frame, size_t len);
+--- a/hi5622_mgmt_logic.c
++++ b/hi5622_mgmt_logic.c
+@@ -147,6 +147,68 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* 2b. CORRECTED device-facing mgmt-TX carrier: g0 id 6 control msg  */
++/* ------------------------------------------------------------------ */
++/* Derived in the sibling-gpl lane (task-151) from our own vendor 2.5.24
++ * module: hmac_wpas_mgmt_tx (0x4050c) -> helper (0x3fe68) -> hcc_msg_alloc /
++ * hcc_msg_tx.  The helper writes the 12-byte HCC header in place and lays out
++ * a 48-byte device TX-control block followed by the 802.11 frame.  See
++ * hi5622_mgmt_logic.h section 1b for the byte map and the completion event. */
++int himg_build_hcc_mgmt_tx(himg_u8 *wire, size_t cap, size_t *out_len,
++			   const struct himg_tx_params *p)
++{
++	size_t total;
++	himg_u8 *ctl;
++
++	if (!wire || !out_len || !p)
++		return -EINVAL;
++	if (!p->frame || p->frame_len == 0u)
++		return -EINVAL;
++	if (p->dst > 0x0fu || p->vap_id > 0x0fu || p->band > 0x0fu)
++		return -EINVAL;
++	if (p->frame_len < HIMG_MGMT_TX_MIN_FRAME ||
++	    p->frame_len > HIMG_MGMT_TX_MAX_FRAME)
++		return -EINVAL;
++	if (himg_mgmt_frame_ok(p->frame, p->frame_len))
++		return -EINVAL;
++	total = (size_t)HIMG_HCC_HDR_LEN + HIMG_MGMT_TX_CTL_LEN +
++		(size_t)p->frame_len;
++	if (total > cap || total > 0xffffu)
++		return -ENOSPC;
++
++	memset(wire, 0, total);
++	/* 12-byte HCC header (same convention as the established g0 builders):
++	 * group 0, alloc nibble 1 | band/chip<<4, hdr2, vap id, total, id 6,
++	 * fc 0, dst, tag 0x5a5a. */
++	wire[0] = (himg_u8)(HIMG_HCC_GROUP_CHIP & 0x0fu);
++	wire[1] = (himg_u8)(HIMG_ALLOC_NIBBLE | ((p->band & 0x0fu) << 4));
++	wire[2] = p->hdr2;
++	wire[3] = (himg_u8)(p->vap_id & 0x0fu);
++	hg_put16(wire + 4, (himg_u16)total);
++	hg_put16(wire + 6, HIMG_HCC_ID_MGMT);
++	wire[8] = 0u;
++	wire[9] = (himg_u8)(p->dst & 0x0fu);
++	hg_put16(wire + 10, HIMG_HCC_TAG);
++
++	/* 48-byte device TX-control block; only the vendor-filled fields are
++	 * set, everything else stays zero (the vendor copies a zeroed host
++	 * cb prefix).  mpdu_len excludes the 24-byte 802.11 header; the user id
++	 * is 0x0fff when no station context exists (auth/assoc responses). */
++	ctl = wire + HIMG_HCC_HDR_LEN;
++	hg_put16(ctl + HIMG_CTL_MPDU_LEN,
++		 (himg_u16)(p->frame_len - HIMG_MGMT_TX_HDR_LEN));
++	ctl[HIMG_CTL_HDR_LEN] = (himg_u8)HIMG_MGMT_TX_HDR_LEN;
++	ctl[HIMG_CTL_FLAGS] = (himg_u8)HIMG_CTL_FLAGS_VAL;
++	ctl[HIMG_CTL_COOKIE] = (himg_u8)((p->cookie & 0x0fu) << 4);
++	hg_put16(ctl + HIMG_CTL_USER,
++		 (himg_u16)(p->user_id ? p->user_id : HIMG_CTL_INVALID_USER));
++
++	memcpy(wire + HIMG_MGMT_TX_FRAME_OFF, p->frame, (size_t)p->frame_len);
++	*out_len = total;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
+ /* 3. 802.11 management-frame sanity                                  */
+ /* ------------------------------------------------------------------ */
+ int himg_mgmt_frame_ok(const himg_u8 *frame, size_t len)
+--- a/hi5622_frames_api.h
++++ b/hi5622_frames_api.h
+@@ -362,9 +362,19 @@
+ 	u32	channel;	/* channel number the AP transmits on */
+ 	u8	cookie_idx;	/* vendor cookie-array slot [I] */
+ 	u16	len;		/* 802.11 management frame length */
+-	u32	frame_devaddr;	/* device-visible host-DRAM address of the frame */
+-	u32	seq;		/* WAL cfg-event sequence number */
++	u32	frame_devaddr;	/* deprecated: WAL descriptor carrier address */
++	u32	seq;		/* post sequence number / cookie */
+ 	u8	dst;		/* HCC dst nibble (0 for the single AP VAP) */
++	/* CORRECTED carrier (sibling-gpl task-151): raw HCC g0 id 6 control
++	 * message with the 802.11 frame carried inline after a 48-byte device
++	 * TX-control block - no device-visible frame address is needed. */
++	const u8 *frame;	/* 802.11 management frame bytes */
++	u16	frame_len;	/* == len */
++	u16	cookie;		/* 4-bit tx cookie echoed by the device */
++	u16	user_id;	/* assoc/user id, 0 = none (0x0fff) */
++	u8	vap_id;		/* header[3] VAP id */
++	u8	band;		/* header[1] high nibble (0 = 2.4 GHz/band 0) */
++	u8	hdr2;		/* header[2] (vendor VAP byte 1; 0) */
+ };
+ 
+ struct hi5622_frame_ops {
+--- a/hi5622_vapscan_provider.c
++++ b/hi5622_vapscan_provider.c
+@@ -538,10 +538,19 @@
+ 	hp.channel = p->channel;
+ 	hp.cookie_idx = p->cookie_idx;
+ 	hp.len = p->len;
+-	hp.frame_addr = p->frame_devaddr;
+ 	hp.seq = p->seq;
+ 	hp.dst = p->dst & 0x0fu;
+-	rc = himg_build_wal_mgmt_tx(wire, cap, out_len, &hp);
++	/* CORRECTED device carrier (sibling-gpl task-151): the frame travels
++	 * inline in the HCC g0 id 6 control message; the old WAL 0x01F2
++	 * descriptor (host-internal request) is not a device message. */
++	hp.frame = p->frame;
++	hp.frame_len = p->frame_len;
++	hp.cookie = p->cookie;
++	hp.user_id = p->user_id;
++	hp.vap_id = p->vap_id;
++	hp.band = p->band;
++	hp.hdr2 = p->hdr2;
++	rc = himg_build_hcc_mgmt_tx(wire, cap, out_len, &hp);
+ 	if (rc)
+ 		return rc;
+ 	return 0;
+--- a/hi5622_mgmt.c
++++ b/hi5622_mgmt.c
+@@ -7,8 +7,13 @@
+  * See hi5622_mgmt_logic.h for the decoded vendor wire layouts and
+  * ../REPORT.md / ../TABLES.md for the evidence behind every constant.
+  *
+- * SAFETY: this file allocates one coherent frame buffer (only when mgmt_tx=1
+- * actually posts), never writes a device register itself, and routes every
++ * CARRIER (corrected, sibling-gpl task-151): the device-facing management-TX
++ * message is a raw HCC group 0 / id 6 control message carrying a 48-byte
++ * device TX-control block followed by the 802.11 frame; the WAL cfg-event
++ * 0x01F2 decoded by wifi-ap-mgmt is the host-internal WAL->HMAC request, not
++ * a device message, and is no longer used here.
++ *
++ * SAFETY: this file never writes a device register itself, and routes every
+  * H2D byte through hi5622_frame_post() (allow_frames budget, inter-frame gap,
+  * armed/released/ACTIVE lane gates, h2d_frames validator incl. the WAL
+  * cfg-event family allowlist).  The RX path is read-only: decode + cfg80211
+@@ -29,6 +34,7 @@
+ #include "hi5622_frames_api.h"
+ #include "hi5622_mgmt.h"
+ #include "hi5622_mgmt_logic.h"
++#include "hi5622_sta_ops_logic.h"
+ 
+ /* Management-frame TX carrier (wifi-ap-mgmt, task-143).  Default 0 keeps the
+  * .mgmt_tx op exactly as fail-closed as the bench-proven image: hostapd's
+@@ -37,7 +43,7 @@
+ static unsigned int hi5622_mgmt_tx;
+ module_param_named(mgmt_tx, hi5622_mgmt_tx, uint, 0644);
+ MODULE_PARM_DESC(mgmt_tx,
+-		 "management frame TX: 0=fail-closed default (-EOPNOTSUPP), 1=vendor WAL cfg-event carrier cmd 0x01F2 (needs allow_frames budget + armed/ACTIVE lane)");
++		 "management frame TX: 0=fail-closed default (-EOPNOTSUPP), 1=vendor HCC g0 id 6 mgmt control message (frame inline; needs allow_frames budget + armed/ACTIVE lane)");
+ /* Management-frame RX decode/delivery.  Default 0 = count only. */
+ static unsigned int hi5622_mgmt_rx;
+ module_param_named(mgmt_rx, hi5622_mgmt_rx, uint, 0644);
+@@ -66,45 +72,11 @@
+ 	.lock = __MUTEX_INITIALIZER(mgmt_state.lock),
+ };
+ 
+-/* Allocate the single mgmt-frame DMA buffer (the descriptor hands the firmware
+- * a device-visible host-DRAM address; the vendor relies on its 2 GiB/2 GiB
+- * VMSPLIT identity that this kernel does not have - see REPORT section 6). */
+-static int hi5622_mgmt_ensure_buf(struct hi5622_pci *ctx)
+-{
+-	struct device *dev;
+-	void *buf;
+-	dma_addr_t dma;
+-
+-	if (mgmt_state.tx_buf) {
+-		if (mgmt_state.ctx != ctx)
+-			return -EBUSY;
+-		return 0;
+-	}
+-	if (!ctx || !ctx->pdev)
+-		return -ENODEV;
+-	dev = &ctx->pdev->dev;
+-	buf = dma_alloc_coherent(dev, HIMG_MAX_FRAME_TX, &dma, GFP_KERNEL);
+-	if (!buf)
+-		return -ENOMEM;
+-	if ((u64)dma < (u64)HI5622_HOST_DMA_LO ||
+-	    (u64)dma > (u64)HI5622_HOST_DMA_HI) {
+-		dev_err(dev,
+-			"mgmt_tx: frame buffer DMA 0x%llx outside the host DMA window 0x%08x..0x%08x - refusing the vendor descriptor carrier\n",
+-			(unsigned long long)dma,
+-			(unsigned int)HI5622_HOST_DMA_LO,
+-			(unsigned int)HI5622_HOST_DMA_HI);
+-		dma_free_coherent(dev, HIMG_MAX_FRAME_TX, buf, dma);
+-		return -ERANGE;
+-	}
+-	mgmt_state.ctx = ctx;
+-	mgmt_state.tx_buf = buf;
+-	mgmt_state.tx_dma = dma;
+-	dev_info(dev,
+-		 "mgmt_tx: DMA frame buffer %u B (devva 0x%08x) - WAL cfg-event carrier cmd 0x%04x\n",
+-		 (unsigned int)HIMG_MAX_FRAME_TX, (unsigned int)dma,
+-		 (unsigned int)HIMG_WAL_CMD_MGMT_TX);
+-	return 0;
+-}
++/* The corrected carrier (sibling-gpl task-151) carries the 802.11 frame
++ * INLINE in the HCC g0 id 6 control message, so no device-visible host-DRAM
++ * frame address is needed and no coherent buffer is allocated.  The old WAL
++ * 0x01F2 descriptor carrier (which needed the vendor 2G/2G VMSPLIT identity)
++ * is retained below only as documentation. */
+ 
+ /* cfg80211_ops.mgmt_tx.  Fail-closed order: parameter sanity -> param gate ->
+  * AP-only policy -> provider capability -> build -> post gate.  Nothing is
+@@ -115,7 +87,9 @@
+ 	struct hi5622_cfg80211 *c;
+ 	const struct hi5622_frame_ops *ops;
+ 	struct hi5622_mgmt_tx_params p;
+-	u8 wire[HIMG_WAL_OVERHEAD + HIMG_WAL_CMD_MGMT_TX_BODY];
++	struct hsop_sta *st;
++	u8 peer[6];
++	u8 wire[HIMG_MGMT_TX_MAX_TOTAL];
+ 	size_t wire_len = 0;
+ 	u64 ck = 0;
+ 	bool ack = false;
+@@ -150,11 +124,6 @@
+ 		return -ENODEV;
+ 
+ 	mutex_lock(&mgmt_state.lock);
+-	rc = hi5622_mgmt_ensure_buf(c->ctx);
+-	if (rc) {
+-		mgmt_state.tx_refused++;
+-		goto out_unlock;
+-	}
+ 	ops = hi5622_frame_ops_get();
+ 	if (!ops || !(ops->caps & HI5622_FRAME_CAP_MGMT_TX) ||
+ 	    !ops->build_mgmt_tx) {
+@@ -162,16 +131,29 @@
+ 		rc = -EOPNOTSUPP;
+ 		goto out_unlock;
+ 	}
+-	/* The frame must live in the coherent buffer the descriptor points at;
+-	 * the cfg80211 buffer itself is not device-visible in this kernel. */
+-	memcpy(mgmt_state.tx_buf, params->buf, params->len);
++	/* CORRECTED carrier (sibling-gpl task-151): raw HCC group 0 id 6 control
++	 * message; the frame travels inline after the 48-byte device TX control.
++	 * The 4-bit cookie is echoed in the control block; the cfg80211 cookie
++	 * remains the local sequence number.  A station context is not needed
++	 * for mgmt TX (the vendor sets the no-user value 0x0fff); when the peer
++	 * is already in our station table its assoc/user id is passed along. */
++	/* cfg80211_mgmt_tx_params has no destination field in 6.18: the peer is
++	 * addr1 of the 802.11 management header (frame bytes +4..+9). */
++	memcpy(peer, params->buf + 4, sizeof(peer));
++	st = hsop_sta_find(&c->sta_table, peer);
+ 	memset(&p, 0, sizeof(p));
+ 	p.channel = params->chan->hw_value;
+-	p.cookie_idx = 0u;	/* vendor cookie-array slot; firmware echoes it */
++	p.cookie_idx = 0u;
+ 	p.len = (u16)params->len;
+-	p.frame_devaddr = (u32)mgmt_state.tx_dma;
+ 	p.seq = ++mgmt_state.seq;
+ 	p.dst = 0u;		/* single AP VAP -> dst nibble 0 [V] */
++	p.frame = params->buf;
++	p.frame_len = (u16)params->len;
++	p.cookie = (u16)(p.seq & 0x0fu);
++	p.user_id = st ? st->aid : 0u;
++	p.vap_id = 0u;		/* single AP VAP */
++	p.band = 0u;		/* 2.4 GHz/band 0, matching the AP start frames */
++	p.hdr2 = 0u;
+ 	rc = ops->build_mgmt_tx(wire, sizeof(wire), &wire_len, &p);
+ 	if (rc) {
+ 		mgmt_state.tx_errors++;

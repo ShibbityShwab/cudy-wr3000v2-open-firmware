@@ -3,6 +3,21 @@
 **Lane:** wifi-ap-mgmt (task-143), host-only.  **Status:** design; the Lead
 fires it.  This lane did not contact the bench router.
 
+> **CORRECTION (2026-11-25, lane wifi-sibling-gpl task-151): DO NOT FIRE THE
+> M2 RUNG AS WRITTEN.**  The device-facing management-TX message is **not** the
+> WAL cfg-event TLV `0x01F2`: that TLV is the host-internal WAL->HMAC request.
+> The vendor device message is a **raw HCC group 0 / id 6 control message**
+> (48-byte device TX-control block + inline 802.11 frame; completion is the
+> DMAC->HMAC config-syn event `0x01F3`, not the host-internal g2 id13 relay).
+> Full decode, corrected builder, patch (applies to this ladder's base tree),
+> host test (41/41) and the new fire recipe are in
+> [../wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md](../wifi-sibling-gpl/MGMT-CARRIER-CORRECTION.md).
+> The M1 (mgmt RX g1 id13) rung keeps its value; M2 must be re-run from the
+> corrected patch, not from `patches/0001-mgmt-tx-rx.patch`'s TX carrier, and
+> the SET_RX_FILTER rung proposed by public-research2 is **withdrawn** for
+> luofu (no such host message exists in the vendor modules - evidence in the
+> same correction file, T2).
+
 Base image: the FINAL all-patch module (stability commit `008aca5`) **plus**
 [patches/0001-mgmt-tx-rx.patch](patches/0001-mgmt-tx-rx.patch) - 49 params
 (47 + `mgmt_tx` + `mgmt_rx`).  The proven fire recipe, the boot ladder
@@ -65,7 +80,14 @@ FAIL/record: malformed decode (the "rx_malformed" counter in the refactor
 log), wrong channel/frequency, no delivery.  Never scale a decode failure
 into a TX attempt in the same boot.
 
-### M2 - full mgmt TX carrier: `mgmt_tx=1 mgmt_rx=1`
+### M2 - full mgmt TX carrier: `mgmt_tx=1 mgmt_rx=1`  [SUPERSEDED - see correction block above]
+
+> The text below documents the **old** WAL 0x01F2 assumption for the record.
+> Use the corrected device carrier (HCC g0 id 6) from
+> [../wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch](../wifi-sibling-gpl/patches/0001-mgmt-tx-hcc-g0id6-carrier.patch)
+> and the M2' rung in the correction file.  Keep the same preconditions and
+> stop conditions; the "DMA-read the frame" question below is obsolete (the
+> frame is inline, no device-visible address is passed).
 Purpose: decide the [U] - does the PD4 WAL group-2 dispatch accept the vendor
 cmd 0x01F2 and **DMA-read the frame** from the descriptor address?
 1. AP start as M1 with `mgmt_tx=1`.

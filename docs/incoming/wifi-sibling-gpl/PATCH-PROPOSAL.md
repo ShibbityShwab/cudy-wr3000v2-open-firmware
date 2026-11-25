@@ -1,5 +1,11 @@
 # PATCH PROPOSAL - RX consumer hardening + association ordering guard
 
+> **Update (Lead follow-up, 2026-11-25):** the mgmt/assoc part of this file is
+> superseded by [MGMT-CARRIER-CORRECTION.md](MGMT-CARRIER-CORRECTION.md), which
+> replaces the WAL 0x01F2 carrier with the decoded raw HCC g0 id 6 device
+> message and ships [patches/0001-mgmt-tx-hcc-g0id6-carrier.patch](patches/0001-mgmt-tx-hcc-g0id6-carrier.patch).
+> The P1/P3 RX consumer items below remain valid and are unchanged.
+
 **Lane:** wifi-sibling-gpl (task-151), host-only.  **Status:** proposal + host-tested model;
 **not applied to the project build tree** and **not fired on hardware**.  Target base: the final
 association module tree (base artifact `/tmp/wifi-assoc-artifact/hi5622_wifi.ko`, 344,472 B,

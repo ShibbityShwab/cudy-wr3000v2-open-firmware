@@ -1,0 +1,8 @@
+make: Entering directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+make[1]: Entering directory '/tmp/sibling-mgmt-fix'
+  CC [M]  hi5622_mgmt_logic.o
+  LD [M]  hi5622_wifi.o
+  MODPOST Module.symvers
+  LD [M]  hi5622_wifi.ko
+make[1]: Leaving directory '/tmp/sibling-mgmt-fix'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'

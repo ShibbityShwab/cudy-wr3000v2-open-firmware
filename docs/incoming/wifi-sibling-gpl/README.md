@@ -10,6 +10,10 @@ analysis; no bench contact, no device access).  **Written:** 2026-11-25.
 | [REPORT.md](REPORT.md) | full analysis: source set, Hi3881V100 RX/mgmt paths, Hi1105 PCIe/HAL/N-API paths, our-model comparison, ranked RX root-cause hypotheses, concrete patch proposal, ladder |
 | [TABLES.md](TABLES.md) | the decoded constants and side-by-side tables (T1-T9) with source line citations |
 | [PATCH-PROPOSAL.md](PATCH-PROPOSAL.md) | concrete, host-tested proposal: completion-entry validity wait + clear-after-read + RX stall classification (RX), station-before-assoc-response ordering guard (mgmt/assoc) |
+| [MGMT-CARRIER-CORRECTION.md](MGMT-CARRIER-CORRECTION.md) | **task-151 follow-up requested by the Lead:** the device mgmt-TX carrier is a raw HCC g0 id 6 control message (not WAL 0x01F2) - full static decode, corrected builder/patch (builds 0 warnings), the luofu SET_RX_FILTER negative result, g1 id13 RX assessment, EAPOL watermark note, and the M2' fire recipe |
+| [patches/0001-mgmt-tx-hcc-g0id6-carrier.patch](patches/0001-mgmt-tx-hcc-g0id6-carrier.patch) | corrected mgmt-TX carrier patch against the final association tree (applies cleanly; 5 files) |
+| [src/hi5622_mgmt_logic.*](src/) | reference implementation of the corrected builder (same code as the patch, host-compilable) |
+| [tools/mgmt_ctrl_selftest.c](tools/mgmt_ctrl_selftest.c) | 41/41 host checks for the corrected carrier + g1 id13 RX decode |
 | [tools/verify_quotes.py](tools/verify_quotes.py) | host tool that re-fetches every cited raw URL and re-checks the quoted snippets/line numbers (no vendor bytes stored) |
 | [tools/rx_model_selftest.c](tools/rx_model_selftest.c) | strict-C99 host test for the proposed RX credit/validity/stall model (original clean-room code) |
 

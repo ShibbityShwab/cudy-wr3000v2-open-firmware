@@ -1,0 +1,17 @@
+patch: patches/0001-mgmt-tx-hcc-g0id6-carrier.patch
+366 patches/0001-mgmt-tx-hcc-g0id6-carrier.patch
+apply dry-run against pristine /tmp/wifi-assoc-build/integ:
+checking file hi5622_mgmt_logic.h
+checking file hi5622_mgmt_logic.c
+checking file hi5622_frames_api.h
+checking file hi5622_vapscan_provider.c
+checking file hi5622_mgmt.c
+artifact identity (patched kernel build, luofu 6.18.60):
+-rw-r--r-- 1 shibbityshwab shibbityshwab 1324532 พ.ย.  25 12:18 /tmp/sibling-mgmt-fix/hi5622_wifi.ko
+-rw-r--r-- 1 shibbityshwab shibbityshwab  344372 พ.ย.  25 12:18 /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+2d9c3f116ff50f884a278f76d3ef903fccf708d477c5ace059377b332b85bc54  /tmp/sibling-mgmt-fix/hi5622_wifi.ko
+ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e  /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+params: 56
+depends:        cfg80211
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+build: 0 warnings, 0 errors (evidence/mgmt-carrier-build.log)
