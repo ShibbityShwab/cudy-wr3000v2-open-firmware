@@ -1,0 +1,444 @@
+{
+ "041": {
+  "source": "041-net-gmac-macconf-nodoorbell.patch",
+  "hunks": [
+   {
+    "hunk": 1,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -117,6 +117,32 @@",
+    "missing_context": 2,
+    "missing_removed": 0,
+    "l0_providers": [
+     "040"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "#define LUOFU_GMAC_FRAME_OVERHEAD\t14\t/* [I] Ethernet header without FCS */",
+     "#define LUOFU_GMAC_MAX_FRAME_SLACK\t18\t/* [V] header + hi_mac_hw_mtu +4 */"
+    ]
+   },
+   {
+    "hunk": 2,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -191,6 +217,14 @@",
+    "missing_context": 4,
+    "missing_removed": 0,
+    "l0_providers": [
+     "040"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "module_param_named(trace, luofu_gmac_trace_gate, bool, 0444);",
+     "MODULE_PARM_DESC(trace, \"Attended hang instrumentation: log MAC control/max-frame/port-mode registers around every GMAC xmit (default off)\");",
+     "* W9 is split into a read-only diagnostic and an explicit write step after the"
+    ]
+   },
+   {
+    "hunk": 4,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -381,6 +460,13 @@",
+    "missing_context": 4,
+    "missing_removed": 0,
+    "l0_providers": [
+     "040"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "ret = luofu_pie_xmit(skb, ndev, g->port);",
+     "if (luofu_gmac_trace_gate && n <= 32)",
+     "pr_info(\"gmac-trace %s port=%u len=%u post: ctrl=%#x maxframe=%#x port_mode=%#x\\n\","
+    ]
+   },
+   {
+    "hunk": 6,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -563,6 +575,7 @@",
+    "missing_context": 2,
+    "missing_removed": 0,
+    "l0_providers": [
+     "030"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "static atomic_t luofu_pie_trace_tx = ATOMIC_INIT(0);",
+     "static atomic_t luofu_pie_trace_rx = ATOMIC_INIT(0);"
+    ]
+   },
+   {
+    "hunk": 7,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -1280,7 +1293,14 @@",
+    "missing_context": 1,
+    "missing_removed": 0,
+    "l0_providers": [
+     "030"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "pr_info(\"pie-trace TX doorbell=%u\\n\", ring->wptr & ring_mask);"
+    ]
+   }
+  ]
+ },
+ "046": {
+  "source": "046-net-lsw-ifc-fix-eps-ext.patch",
+  "hunks": [
+   {
+    "hunk": 1,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -242,6 +242,10 @@",
+    "missing_context": 3,
+    "missing_removed": 0,
+    "l0_providers": [
+     "045"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "static bool luofu_switch_dump_gate;",
+     "module_param_named(dump, luofu_switch_dump_gate, bool, 0444);",
+     "MODULE_PARM_DESC(dump, \"Attended W11 diagnostic: after the armed path prints a read-only LSW state dump for the stock-vs-ours comparison (no hardware writes; default off)\");"
+    ]
+   },
+   {
+    "hunk": 9,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -2904,7 +2916,7 @@",
+    "missing_context": 6,
+    "missing_removed": 1,
+    "l0_providers": [
+     "045"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "{ LUOFU_SWITCH_WIN_L2,\t\t0x20000, 0x20 },",
+     "/* classifier defaults (W10) and the general ifc config area */",
+     "{ LUOFU_SWITCH_WIN_IFC,\t\t0x0000, 0x80 },"
+    ]
+   },
+   {
+    "hunk": 10,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -2954,6 +2966,136 @@",
+    "missing_context": 1,
+    "missing_removed": 0,
+    "l0_providers": [
+     "045"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "\"W11: state dump complete; compare these lines with the same ranges read from a stock boot\\n\");"
+    ]
+   },
+   {
+    "hunk": 12,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -3174,12 +3317,30 @@",
+    "missing_context": 2,
+    "missing_removed": 0,
+    "l0_providers": [
+     "045"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "if (luofu_switch_dump_gate)",
+     "luofu_switch_dump(lsw);"
+    ]
+   },
+   {
+    "hunk": 14,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch-regs.h",
+    "header": "@@ -3251,5 +3414,5 @@",
+    "missing_context": 2,
+    "missing_removed": 1,
+    "l0_providers": [
+     "004",
+     "005",
+     "006",
+     "007",
+     "008",
+     "009",
+     "010",
+     "011",
+     "012",
+     "013",
+     "015",
+     "016",
+     "017",
+     "021",
+     "043"
+    ],
+    "v1_providers": [
+     "0004",
+     "0005",
+     "0006",
+     "0007",
+     "0008",
+     "0009",
+     "0010",
+     "0011",
+     "0012",
+     "0013",
+     "0015",
+     "0016",
+     "0017",
+     "0021"
+    ],
+    "sample_context": [
+     "module_platform_driver(luofu_switch_driver);",
+     "MODULE_LICENSE(\"GPL\");"
+    ]
+   },
+   {
+    "hunk": 15,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -553,7 +553,31 @@",
+    "missing_context": 4,
+    "missing_removed": 2,
+    "l0_providers": [
+     "021",
+     "043"
+    ],
+    "v1_providers": [
+     "0021"
+    ],
+    "sample_context": [
+     "#define LUOFU_SWITCH_IFC_ENTRIES\t8",
+     "#define LUOFU_SWITCH_IFC_ENTRY_WORDS\t5",
+     "#define LUOFU_SWITCH_IFC_TAB_WORDS\t4"
+    ]
+   }
+  ]
+ },
+ "048": {
+  "source": "048-net-pie-rxcfg-w13.patch",
+  "hunks": [
+   {
+    "hunk": 1,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -417,6 +417,67 @@",
+    "missing_context": 3,
+    "missing_removed": 0,
+    "l0_providers": [
+     "041"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "* Patch 041: hang-bisection gate.  With nodoorbell=1 the TX descriptor is built",
+     "* and published to the ring but the channel doorbell write pointer is NOT",
+     "* updated, so the engine never processes the descriptor.  If the box survives"
+    ]
+   },
+   {
+    "hunk": 2,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -1611,6 +1672,17 @@",
+    "missing_context": 5,
+    "missing_removed": 0,
+    "l0_providers": [
+     "020",
+     "048"
+    ],
+    "v1_providers": [
+     "0020"
+    ],
+    "sample_context": [
+     "* vector (ch4-7) stays masked.  The measured vendor boot leaves the",
+     "* inactive ch2/3 masked too, which this matches.",
+     "WRITE_ONCE(pie->armed, true);"
+    ]
+   },
+   {
+    "hunk": 3,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -394,6 +394,14 @@",
+    "missing_context": 1,
+    "missing_removed": 0,
+    "l0_providers": [
+     "041"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "if (!luofu_gmac_macconf_gate)"
+    ]
+   },
+   {
+    "hunk": 4,
+    "file": "drivers/net/ethernet/hisilicon/luofu-gmac.c",
+    "header": "@@ -438,8 +446,6 @@",
+    "missing_context": 2,
+    "missing_removed": 2,
+    "l0_providers": [
+     "041",
+     "047",
+     "048"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "readl(g->base + LUOFU_GMAC_PORT_MODE),",
+     "readl(g->base + LUOFU_GMAC_CTRL), code, cfg);"
+    ]
+   }
+  ]
+ },
+ "053": {
+  "source": "053-net-pie-rxdecode-vendor-exact.patch",
+  "hunks": [
+   {
+    "hunk": 1,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -519,6 +519,23 @@",
+    "missing_context": 4,
+    "missing_removed": 0,
+    "l0_providers": [
+     "047",
+     "052"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "MODULE_PARM_DESC(rxtrace, \"Attended RX-path diagnosis: log the first 32 RX completions with raw descriptor words and decode/drop result\");",
+     "* Patch 047 (diagnostic): read-only PIE RX/TX state dump for the stock-vs-ours",
+     "* RX comparison.  The stock boot inventory (PIE-DATAPATH 4.5) measured the"
+    ]
+   }
+  ]
+ },
+ "059": {
+  "source": "059-net-lsw-napt-init.patch",
+  "hunks": [
+   {
+    "hunk": 2,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -514,6 +521,50 @@",
+    "missing_context": 3,
+    "missing_removed": 0,
+    "l0_providers": [
+     "036",
+     "043"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "#define LUOFU_SWITCH_PFE_WRITES\t\t4\t/* [V] four direct words */",
+     "* W10: IFC default-classification table (patch 043).",
+     "* The vendor hi_lsw_pfe module initialises the classifier in hi_pfe_ifc_init:"
+    ]
+   },
+   {
+    "hunk": 3,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -242,6 +242,10 @@",
+    "missing_context": 1,
+    "missing_removed": 0,
+    "l0_providers": [
+     "046"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "static bool luofu_switch_ext_gate;"
+    ]
+   },
+   {
+    "hunk": 6,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -474,6 +480,8 @@",
+    "missing_context": 4,
+    "missing_removed": 0,
+    "l0_providers": [
+     "046",
+     "054",
+     "056"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "bool ext_ready;",
+     "u32 mirror_snap[4];",
+     "bool mirror_valid;"
+    ]
+   },
+   {
+    "hunk": 10,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -3759,7 +4041,7 @@",
+    "missing_context": 3,
+    "missing_removed": 1,
+    "l0_providers": [
+     "045",
+     "046"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "lsw->ext_ready = true;",
+     "if (luofu_switch_dump_gate)",
+     "luofu_switch_dump(lsw);"
+    ]
+   },
+   {
+    "hunk": 12,
+    "file": "drivers/net/ethernet/hisilicon/luofu-switch.c",
+    "header": "@@ -3820,6 +4106,8 @@",
+    "missing_context": 1,
+    "missing_removed": 0,
+    "l0_providers": [
+     "046"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "luofu_switch_ext_restore(lsw);"
+    ]
+   }
+  ]
+ },
+ "060": {
+  "source": "060-net-pie-exception-delivery.patch",
+  "hunks": [
+   {
+    "hunk": 1,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -520,21 +520,22 @@",
+    "missing_context": 6,
+    "missing_removed": 9,
+    "l0_providers": [
+     "053",
+     "055"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "* Patch 053 diagnostics: rxdiag prints the whole completion descriptor for the",
+     "static bool luofu_pie_rxdiag_gate;",
+     "module_param_named(rxdiag, luofu_pie_rxdiag_gate, bool, 0444);"
+    ]
+   },
+   {
+    "hunk": 2,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -557,8 +558,9 @@",
+    "missing_context": 5,
+    "missing_removed": 2,
+    "l0_providers": [
+     "057"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "* the bench they are the host frames arriving through the mirror.  This gate",
+     "* delivers them to the net_device registered for the mirror source port",
+     "* (luofu_pie.cpucopy_port, default 11 = eth2) instead of dropping them, and"
+    ]
+   },
+   {
+    "hunk": 3,
+    "file": "drivers/net/ethernet/hisilicon/luofu-pie.c",
+    "header": "@@ -1470,17 +1472,10 @@",
+    "missing_context": 2,
+    "missing_removed": 6,
+    "l0_providers": [
+     "053",
+     "060"
+    ],
+    "v1_providers": [],
+    "sample_context": [
+     "compl.vlan, w[0], w[1], w[2], w[3],",
+     "w[4], w[5], w[6], w[7]);"
+    ]
+   }
+  ]
+ }
+}

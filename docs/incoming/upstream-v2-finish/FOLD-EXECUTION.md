@@ -19,7 +19,12 @@ host*.
    of the frozen v1 tree** (nothing forced) and records which compose.
    Output: [`validation/fold-sequence.json`](validation/fold-sequence.json),
    [`validation/fold-sequence.md`](validation/fold-sequence.md).
-3. The composing fold deltas were re-emitted against the composed tree into
+3. `tools/fold-blockers.py` explains the 6 failures without guessing: for
+   every hunk of those sources it finds the context/removed lines absent from
+   the composed tree and attributes them to the L0 patch (and v1 entry) that
+   adds them.  Output: [`validation/fold-blockers.md`](validation/fold-blockers.md),
+   [`validation/fold-blockers.json`](validation/fold-blockers.json).
+4. The composing fold deltas were re-emitted against the composed tree into
    [`artifacts/fold-overlays/`](artifacts/fold-overlays/); the one entry fold
    that is fully mechanical was executed into
    [`artifacts/folded-entries/`](artifacts/folded-entries/).
