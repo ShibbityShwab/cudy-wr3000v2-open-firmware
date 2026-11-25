@@ -97,7 +97,7 @@ chk "required list has regulatory.db"    "grep -q 'lib/firmware/regulatory.db' '
 
 # ---- policy: no binaries / no secrets in this deliverable ----------------
 chk "no binaries committed in lane dir"  "! find '$ROOT' -path '$ROOT/build-evidence/work' -prune -o -type f \( -name '*.ko' -o -name '*.o' -o -name '*.apk' -o -name '*.bin' -o -name '*.ubi' -o -name '*.squashfs' \) -print | grep -q ."
-chk "no private key material"            "! grep -rIl --exclude=selftest.sh --exclude-dir=work 'BEGIN RSA PRIVATE KEY\|BEGIN OPENSSH PRIVATE KEY\|BEGIN EC PRIVATE KEY' '$ROOT' 2>/dev/null | grep -q ."
+chk "no private key material"            "! grep -rIl --exclude=selftest.sh --exclude-dir=work 'BEGIN RSA PRIVATE[ ]KEY\|BEGIN OPENSSH PRIVATE[ ]KEY\|BEGIN EC PRIVATE[ ]KEY' '$ROOT' 2>/dev/null | grep -q ."
 
 echo
 echo "wifi-image-integration selftest: $PASS checks PASS, $FAIL failed"

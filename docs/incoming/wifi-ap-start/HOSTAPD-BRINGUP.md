@@ -8,7 +8,7 @@ this lane; the lead's fire produced the observations below.
 
 | # | observation | root cause | status |
 | --- | --- | --- | --- |
-| 1 | hostapd-mini fails at startup: "Error loading ucode: Unable to resolve path for module 'common'" | the image ships hostapd-mini but not the OpenWrt wifi-scripts package (its /usr/share/hostap/*.uc modules) | bench workaround pushed by the lead; image fix documented in [../image/wifi-scripts-ucode.md](../image/wifi-scripts-ucode.md) and [tools/push-hostapd-ucode.sh](../tools/push-hostapd-ucode.sh) |
+| 1 | hostapd-mini fails at startup: "Error loading ucode: Unable to resolve path for module 'common'" | the image ships hostapd-mini but not the OpenWrt wifi-scripts package (its /usr/share/hostap/*.uc modules) | bench workaround pushed by the lead; image fix documented in [../image/wifi-scripts-ucode.md](image/wifi-scripts-ucode.md) and [tools/push-hostapd-ucode.sh](tools/push-hostapd-ucode.sh) |
 | 2 | with ucode present: "nl80211: Driver does not support authentication/association or connect commands; ... driver initialization failed; wlan0: AP-DISABLED" | cfg80211 advertises NL80211_CMD_AUTHENTICATE only when cfg80211_ops.auth exists, and NL80211_CMD_CONNECT only when cfg80211_ops.connect/auth exists (net/wireless/nl80211.c nl80211_add_commands_unsplit).  hostapd's shared init gate (driver_nl80211_capa.c wpa_driver_nl80211_get_info) errors out when neither is advertised - before any AP op. | **fixed in module v2**: a fail-closed .connect op is registered so NETLINK advertises CONNECT; hostapd's AP path never calls it |
 | 3 | .start_ap was the M3 stub (-EOPNOTSUPP) | the fired module predated this lane's provider patch (no AP_START capability) | **fixed in module v2**: the AP-start provider patch is in the built module; .start_ap posts the 4-message vendor sequence (g0 carrier default: ap_ssid -> ap_cfg) |
 | 4 | hostapd may need the interface switched to AP (SET_INTERFACE) | hi5622_cfg11_change_virtual_intf refused every type change | **fixed in module v2**: STATION<->AP<->MONITOR changes are accepted by the M1 netdev model (cfg80211 core updates the wdev iftype); preferred flow still creates the interface as AP directly |
@@ -36,7 +36,7 @@ loading and EXPORT_SYMBOL; build-bench-module.sh prints exactly this size/sha.
     evidence : H2D/core/provider files byte-identical to the fired base;
                deployable .text byte-identical to the unstripped build
 
-Reproduce: [../tools/build-bench-module.sh](../tools/build-bench-module.sh)
+Reproduce: [../tools/build-bench-module.sh](tools/build-bench-module.sh)
 (prints size/sha; the .ko is local evidence only and is never committed).
 
 Copy to the box (host side, attended session):
@@ -71,7 +71,7 @@ so the HCC core must be ACTIVE (ctx-create + TXQ sync) before hostapd starts.
     # 4. hostapd-mini, foreground, verbose; config pushed to /tmp first
     /usr/sbin/hostapd -dd -t /tmp/hostapd-open.conf 2>&1 | tee /tmp/hostapd.log
 
-Config: [../recipes/hostapd-open.conf](../recipes/hostapd-open.conf)
+Config: [../recipes/hostapd-open.conf](recipes/hostapd-open.conf)
 (2.4 GHz ch 6, OPEN, no HT/WMM: the first rung needs no add_key, no txq
 params and no HT capabilities in the wiphy).  Keep it running in the
 foreground; Ctrl-C stops the AP (stop_ap is a separate provider capability,
@@ -143,7 +143,7 @@ never post mailbox id 5, never send group 1/4.
 ## 7. Known gaps / next
 
 * WPA2 key installation (add_key / set_key) is M3: the OPEN rung is the
-  supported first fire; [../recipes/hostapd-wpa2.conf](../recipes/hostapd-wpa2.conf)
+  supported first fire; [../recipes/hostapd-wpa2.conf](recipes/hostapd-wpa2.conf)
   documents the target config for that later rung.
 * SET_BEACON/change_beacon (running-AP updates) is not registered; only
   NEW_BEACON is wired.  A start_ap sequence uses the AP-config body with

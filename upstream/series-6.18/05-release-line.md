@@ -18,8 +18,8 @@ release line is the target patch stack that built and booted the verified image.
 
 | layer | what it is | size |
 | --- | --- | --- |
-| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 66 patch files (001-060 + 062-067; no duplicate numbers) |
-| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries | **55 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
+| **L0 lab patch stack** | every file in `../../target-skeleton/target/linux/hisilicon/patches-6.18/`, applied in filename order by the OpenWrt target build | 67 patch files (001-060 + 062-067 plus `013a`; no duplicate numbers) |
+| **L1 release line** | L0 minus the bench-only SMP diagnostic patches (section 6); this is the series a release/publish snapshot carries.  **v3 2026-11-29: 013a (the load-bearing GP1 endpoint-reset pulse) is included, so L1 is 56** (section 13) | **56 patch files** (`release-line/INCLUDED.txt`, manifest `release-line/manifest.tsv`) |
 | **L2 upstream review form** | the kernel-only submission form in `series/` plus `00-06` docs | 26 patches (001-026), grouped merge-intent / RFC / do-not-merge |
 | **L3 DTS series entry (DTS-0001)** | the companion DTS patch the kernel-only form cannot carry: the board DTS with the two loader hand-off nodes required by 0018 | 1 patch, `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` (section 2, `06-dts-series-dependency.md`) |
 
@@ -279,7 +279,7 @@ remains reproducible; L1 is the publication/release classification.
   enabled by the canonical command line.
 - **D - excluded bench diagnostics (11):** section 6.
 
-Counts: 27 + 22 + 6 = 55, plus 11 excluded = 66 L0 files.
+Counts: 27 + 22 + 6 = 55 (the 2026-11-29 v3 L1 adds `013a`, so 56 included, plus 11 excluded = 67 L0 files).
 
 Ordering notes (both items fixed 2026-11-21):
 
@@ -515,3 +515,56 @@ section 32.
   `target-skeleton/docs/port-notes/smp-decode/SUMMARY.md`.
 - Parent live state: `STATUS.md` (2026-11-21 FINAL SMP entry) and
   `EVIDENCE-INDEX.md` (SMP rows).
+
+## 13. v3 update (2026-11-29): L1 grows to 56 with the GP1 endpoint-reset patch
+
+**This section supersedes the 55-patch numbers above; the older dated records stay as
+history.** The 2026-11-24 GP1 work made the committed
+`013a-arm-pci-luofu-endpoint-reset-pulse.patch` load-bearing: without the RC0
+GPIO0 20/21/28 assert/release pulse the endpoint mask ROM never runs S0/S1 and
+the link never trains (parent ledger 2026-11-24 GP1; `STATUS.md` section 3c).
+The release line therefore had to grow 55 -> 56; it was missing the very patch
+the hardware-validated line boots with.
+
+**What was changed (host-only, no device, no kernel build):**
+
+- `release-line/manifest.tsv`: added the `include` row for `013a` (class A,
+  sha256 `d4b544a398099e23793e39e4cebc9b81533b749bea1498cae9ef3d5f4636386b`,
+  "PCIe endpoint reset pulse at RC0 probe (GP1, load-bearing)") after the 013
+  row; 56 included / 11 excluded; new manifest sha256
+  `17d714be7733af092eb4859b1e0830a3283e0c5c5ca9ef7b8732e01de14e4cf4`.
+- `release-line/INCLUDED.txt`: added `013a-...` after `013-...` (56 lines);
+  new sha256 `da4966aac90448cfe4e903f52792da18b6df4f0f2b01f73d53ba8a440c1511e4`.
+- `dts-series/0001-...patch`: regenerated from the current single-source DTS
+  (see `06-dts-series-dependency.md` section 4) so the DTS-series entry no
+  longer carries the retired `wifi-pcie-hog`.
+
+**Validation result (`tools/check-release-line.sh --use-tree`, pristine
+linux-6.18.60, host-only): PASS.**
+
+    56 included / 11 excluded
+    patch(1): 56/56 patches RC=0, 153 file events, 5 hunks with offset,
+              0 hunks with fuzz, 0 rejects
+    strict git apply: all 56 patches apply without fuzz
+    board DTS: cpp RC=0, dtc RC=0, stderr 0/0, DTB 12722 B
+               sha256 40b71de5...; unaligned -> pad 12728 B
+    DTS contract: console=/serial@1010f000
+               flashinfo-compatible=hisilicon,luofu-flashinfo hsan,flashinfo_reserved
+               reg=80600000 4000 atag-offset=1000
+               enable-method=hisilicon,luofu-smp
+    DTS series: patch apply RC=0; board DTS byte-identical to the filtered
+               target DTS; DTB 12554 B sha256 4f2e0e8d...; pad 12560 B;
+               same hand-off contract; no W23 leak; no wifi-pcie-hog
+    PASS
+
+Logs: `validation/release-line-v3/` (19 files, 132 KB: summary, patch/git-apply
+logs, offsets, DTS cpp/dtc stderr, the compiled DTBs and the filter log).  The
+dtc used is the host system `dtc` v1.8.1, which produces smaller blobs than the
+kernel `scripts/dtc` build used for the 2026-11-22 figures above; compare DTB
+sizes/hashes only within one validator run.
+
+**Remaining (not done here):** the L2 review form is still the frozen 26-patch
+v1 and the planned 30-patch v2 is still not generated: the only remaining
+content decision is the `013a` -> DT `reset-gpios` fold in patch 0013 (+ PCIe
+binding + DTS + one attended boot).  Nothing was sent anywhere.
+

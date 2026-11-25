@@ -1,7 +1,7 @@
 # configs/ - hostapd / wpa_supplicant fixtures for the wifi-scan-ap lane
 
 Shared task **task-113** (host-only). These are userspace fixtures for the
-bench ladder in [../TEST-LADDER.md](TEST-LADDER.md); they contain **no real
+bench ladder in [../TEST-LADDER.md](../TEST-LADDER.md); they contain **no real
 credential** (the PSKs are placeholders that must be replaced with a
 throw-away lab value at the bench, never committed).
 

@@ -1,0 +1,703 @@
+--- /dev/null
++++ b/arch/arm/boot/dts/hisilicon/luofu-r116.dts
+@@ -0,0 +1,690 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
++ *
++ * Provenance of the measured values, the binding-review status and the
++ * 2026-11-21 hardware regression that invalidated the first active-DTS
++ * cleanup are recorded in upstream/series-6.18/07-dts-upstream-bindings.md.
++ * Boot-tested baselines: image 6e9c54d0 (loader hand-off contract) and the
++ * 2026-11-24 GP1 line, which boots this DTB with the patch-013a endpoint
++ * reset pulse (dmesg "endpoint reset pulse") and no Wi-Fi GPIO hog - the
++ * driver owns the assert/release pulse now.  The 2026-11-22 PCIe enablement
++ * in this file is covered by both boots.  Any active change to this file
++ * must be boot-tested on the unit before it is trusted.
++ */
++
++/dts-v1/;
++
++#include <dt-bindings/clock/hisilicon,luofu-crg.h>
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	#address-cells = <1>;
++	#size-cells = <1>;
++
++	model = "Cudy WR3000 v2.0 (HiSilicon luofu R116)";
++
++	compatible = "cudy,wr3000-v2", "hisilicon,luofu-r116", "hisilicon,luofu";
++	interrupt-parent = <&gic>;
++
++	aliases {
++
++		serial0 = &uart1;
++		serial1 = &uart0;
++
++		console = &uart1;
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++
++	};
++
++	cpus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		enable-method = "hisilicon,luofu-smp";
++
++		cpu@0 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a9";
++			reg = <0>;
++
++		};
++
++		cpu@1 {
++			device_type = "cpu";
++			compatible = "arm,cortex-a9";
++			reg = <1>;
++		};
++	};
++
++	memory@80500000 {
++		device_type = "memory";
++		reg = <0x80500000 0x7b00000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		flashinfo@80600000 {
++			compatible = "hisilicon,luofu-flashinfo", "hsan,flashinfo_reserved";
++			reg = <0x80600000 0x4000>;
++			atag-offset = <0x1000>;
++		};
++	};
++
++	osc_clk: fixed-clock-osc {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <20000000>;
++		clock-output-names = "osc";
++	};
++
++	ahb_clk: fixed-clock-ahb {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <200000000>;
++		clock-output-names = "ahb_clk";
++	};
++
++	apb_clk: fixed-clock-apb {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <100000000>;
++		clock-output-names = "apb_clk";
++	};
++
++	gemacn_clk: fixed-clock-gemacn {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <125000000>;
++		clock-output-names = "gemacN_clk";
++	};
++
++	lsw_dp_clk: fixed-clock-lsw-dp {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <166000000>;
++		clock-output-names = "lsw_dp_clk";
++	};
++
++	lsw_pfe_clk: fixed-clock-lsw-pfe {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <333000000>;
++		clock-output-names = "lsw_pfe_clk";
++	};
++
++	efuse_ring_clk: fixed-clock-efuse-ring {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <20000000>;
++		clock-output-names = "efuse_ring_clk";
++	};
++
++	corrector_clk: fixed-clock-corrector {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <1000000000>;
++		clock-output-names = "corrector_clk";
++	};
++
++	twd_clk: twd-clock {
++		compatible = "fixed-factor-clock";
++		#clock-cells = <0>;
++		clocks = <&corrector_clk>;
++		clock-div = <4>;
++		clock-mult = <1>;
++		clock-output-names = "twd_clk";
++	};
++
++	sysctrl: system-controller@10100000 {
++		compatible = "hisilicon,luofu-sysctrl", "syscon";
++		reg = <0x10100000 0x1000>;
++	};
++
++	reboot {
++		compatible = "hisilicon,luofu-reboot";
++		hisilicon,sysctrl = <&sysctrl>;
++		hisilicon,crg = <&crg>;
++	};
++
++	boot-selector {
++		compatible = "hisilicon,luofu-boot-selector";
++		hisilicon,sysctrl = <&sysctrl>;
++		hisilicon,selector-offset = <0x0c08>;
++	};
++
++	crg: system-controller@14880000 {
++		compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
++		reg = <0x14880000 0x1000>;
++		#clock-cells = <1>;
++		#reset-cells = <2>;
++		clocks = <&osc_clk>, <&ahb_clk>, <&apb_clk>, <&gemacn_clk>,
++			 <&lsw_dp_clk>, <&lsw_pfe_clk>, <&efuse_ring_clk>;
++		clock-names = "osc", "ahb", "apb", "gemacN", "lsw_dp",
++			      "lsw_pfe", "efuse_ring";
++
++		watchdog {
++			compatible = "hisilicon,luofu-wdt";
++			timeout-sec = <30>;
++			status = "okay";
++		};
++	};
++
++	gic: interrupt-controller@10181000 {
++		compatible = "arm,cortex-a9-gic";
++		#interrupt-cells = <3>;
++		interrupt-controller;
++		reg = <0x10181000 0x1000>,
++		      <0x10180100 0x100>;
++	};
++
++	scu@10180000 {
++		compatible = "arm,cortex-a9-scu";
++		reg = <0x10180000 0x1000>;
++	};
++
++	L2: l2-cache@7f000000 {
++		compatible = "arm,pl310-cache";
++		reg = <0x7f000000 0x1000>;
++		cache-level = <2>;
++		cache-unified;
++	};
++
++	local_timer: local-timer@10180600 {
++		compatible = "arm,cortex-a9-twd-timer";
++		reg = <0x10180600 0x20>;
++		/*
++		 * Standard Cortex-A9 TWD timer encoding (level-high).  The measured
++		 * GICD_ICFGR1 read-only value for PPI 13 is 0b11, but GIC-400 PPI
++		 * configuration is fixed by the SoC integration, so the DTS flag
++		 * does not reprogram hardware.
++		 */
++		interrupts = <GIC_PPI 13 (GIC_CPU_MASK_SIMPLE(2) |
++					  IRQ_TYPE_LEVEL_HIGH)>;
++		clocks = <&twd_clk>;
++	};
++
++	timer@10104000 {
++		compatible = "arm,sp804";
++		reg = <0x10104000 0x1000>;
++		interrupts = <1 0x2f 4>;
++		clocks = <&apb_clk>;
++	};
++
++	uart0: serial@1010e000 {
++		compatible = "snps,dw-apb-uart";
++		reg = <0x1010e000 0x1000>;
++		reg-shift = <2>;
++		interrupts = <0 0x2d 4>;
++		clocks = <&apb_clk>;
++		clock-names = "apb_pclk";
++		status = "disabled";
++	};
++
++	uart1: serial@1010f000 {
++		compatible = "snps,dw-apb-uart";
++		reg = <0x1010f000 0x1000>;
++		reg-shift = <2>;
++		interrupts = <0 0x2e 4>;
++		clocks = <&apb_clk>;
++		clock-names = "apb_pclk";
++		status = "okay";
++	};
++
++	gpio0: gpio@10106000 {
++		compatible = "snps,dw-apb-gpio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		reg = <0x10106000 0x1000>;
++		clocks = <&crg LUOFU_CLK_GPIO0>;
++
++		porta: gpio-port@0 {
++			compatible = "snps,dw-apb-gpio-port";
++			gpio-controller;
++			#gpio-cells = <2>;
++			interrupt-controller;
++			#interrupt-cells = <2>;
++			interrupt-parent = <&gic>;
++			interrupts = <0 0x31 4>;
++			reg = <0>;
++			snps,nr-gpios = <32>;
++
++			/*
++			 * Board power/reset controls of the Wi-Fi endpoint behind
++			 * the two PCIe root complexes (GPIO0 pins 20, 21, 28).
++			 * The pins are owned end-to-end by the pcie-luofu driver:
++			 * patch 013a performs the vendor's reset pulse (assert LOW,
++			 * then release HIGH) at RC0 probe before the clock and
++			 * LTSSM start, which both releases the endpoint and makes
++			 * its mask ROM run stage S0/S1.  No gpio-hog here: a hog
++			 * would release the endpoint reset before the driver's
++			 * pulse (double ROM start, non-deterministic handshake).
++			 */
++		};
++	};
++
++	gpio1: gpio@10107000 {
++		compatible = "snps,dw-apb-gpio";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		reg = <0x10107000 0x1000>;
++		clocks = <&crg LUOFU_CLK_GPIO1>;
++
++		portb: gpio-port@0 {
++			compatible = "snps,dw-apb-gpio-port";
++			gpio-controller;
++			#gpio-cells = <2>;
++			interrupt-controller;
++			#interrupt-cells = <2>;
++			interrupt-parent = <&gic>;
++			interrupts = <0 0x32 4>;
++			reg = <0>;
++			snps,nr-gpios = <5>;
++		};
++	};
++
++	gpio-keys-polled {
++		compatible = "gpio-keys-polled";
++		poll-interval = <20>;
++
++		reset {
++			label = "reset";
++			gpios = <&porta 22 1>;
++			linux,code = <0x198>;
++		};
++
++		wps {
++			label = "wps";
++			gpios = <&porta 23 1>;
++			linux,code = <0x211>;
++		};
++	};
++
++	gpio-leds {
++		compatible = "gpio-leds";
++
++		led-status {
++			label = "oem:green:status";
++			gpios = <&porta 24 1>;
++		};
++
++		led-wan {
++			label = "oem:green:wan";
++			gpios = <&porta 25 1>;
++		};
++
++		led-lan {
++			label = "oem:green:lan";
++			gpios = <&porta 3 1>;
++		};
++
++		led-internet {
++			label = "oem:green:internet";
++			gpios = <&porta 2 1>;
++		};
++
++		led-wifi2 {
++			label = "oem:green:wifi";
++			gpios = <&porta 0 1>;
++		};
++
++		led-wifi5 {
++			label = "oem:green:wifi5g";
++			gpios = <&porta 1 1>;
++		};
++	};
++
++	i2c0: i2c@10111000 {
++		compatible = "snps,designware-i2c";
++		reg = <0x10111000 0x1000>;
++		interrupts = <0 0x2c 4>;
++		clocks = <&crg LUOFU_CLK_I2C0>;
++		clock-frequency = <100000>;
++
++		status = "disabled";
++	};
++
++	pinctrl_peri: pinctrl@14900100 {
++		compatible = "hisilicon,luofu-pinctrl";
++		reg = <0x14900100 0x3c>,
++		      <0x14940000 0x100>;
++		reg-names = "mux", "cfg";
++		status = "okay";
++	};
++
++	fmc: spi@10a20000 {
++		compatible = "hisilicon,luofu-fmc";
++		reg = <0x10a20000 0x1000>,
++		      <0x1c000000 0x100000>;
++		reg-names = "regs", "window";
++		clocks = <&crg LUOFU_CLK_SFC>;
++		clock-names = "sfc_clk";
++		resets = <&crg 0x2c 0x0>;
++		reset-names = "sfc_rst";
++		#address-cells = <1>;
++		#size-cells = <0>;
++		status = "okay";
++
++		flash@1 {
++			compatible = "spi-nand";
++			reg = <1>;
++			spi-max-frequency = <50000000>;
++			spi-tx-bus-width = <4>;
++			spi-rx-bus-width = <4>;
++
++			partitions {
++				compatible = "fixed-partitions";
++				#address-cells = <1>;
++				#size-cells = <1>;
++
++				partition@0	{ label = "esbc";	reg = <0x0 0x40000>; };
++				partition@40000	{ label = "uboota";	reg = <0x40000 0x100000>; };
++				partition@140000 { label = "ubootb";	reg = <0x140000 0x100000>; };
++				partition@240000 { label = "enva";	reg = <0x240000 0x40000>; };
++				partition@280000 { label = "envb";	reg = <0x280000 0x40000>; };
++				partition@2c0000 { label = "fac";	reg = <0x2c0000 0x200000>; };
++
++				partition@4c0000 {
++					label = "bdinfo";
++					reg = <0x4c0000 0x40000>;
++					read-only;
++
++				};
++				partition@500000 { label = "cfga";	reg = <0x500000 0x200000>; };
++				partition@700000 { label = "cfgb";	reg = <0x700000 0x200000>; };
++				partition@900000 { label = "log";	reg = <0x900000 0x440000>; };
++				partition@d40000 { label = "pstore";	reg = <0xd40000 0x40000>; };
++				partition@d80000 { label = "kernela";	reg = <0xd80000 0x840000>; };
++				partition@15c0000 { label = "kernelb";	reg = <0x15c0000 0x840000>; };
++				partition@1e00000 { label = "rootfsa";	reg = <0x1e00000 0x1740000>; };
++				partition@3540000 { label = "rootfsb";	reg = <0x3540000 0x1740000>; };
++				partition@4c80000 { label = "rootfs_data"; reg = <0x4c80000 0x1600000>; };
++				partition@6280000 { label = "upgrade";	reg = <0x6280000 0x1d80000>; };
++			};
++		};
++	};
++
++	lsw: ethernet-switch@11000000 {
++		compatible = "hisilicon,luofu-switch";
++		reg = <0x11000000 0x80000>,
++		      <0x11080000 0x80000>,
++		      <0x11100000 0x80000>,
++		      <0x11180000 0x80000>,
++		      <0x11200000 0x80000>,
++		      <0x11280000 0x80000>,
++		      <0x11380000 0x80000>,
++		      <0x12000000 0x80000>,
++		      <0x12080000 0x80000>,
++		      <0x12100000 0x80000>,
++		      <0x12180000 0x80000>,
++		      <0x12280000 0x80000>,
++		      <0x12380000 0x80000>,
++		      <0x12400000 0x80000>,
++		      <0x12480000 0x80000>,
++		      <0x80000000 0x400000>,
++		      <0x80400000 0x100000>;
++		reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
++			    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp",
++			    "pub", "queue", "flow";
++		clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
++		clock-names = "lsw_dp_clk", "lsw_pfe_clk";
++		resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
++			 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
++		reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
++		hisilicon,crg = <&crg>;
++
++		hisilicon,port-bitmap = <0xf01 0x1ff0>;
++		status = "okay";
++
++		ethernet-ports {
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			ethernet-port@0 {
++				reg = <0>;
++				hisilicon,port = <9>;
++				ethernet = <&gmac1>;
++			};
++
++			ethernet-port@1 {
++				reg = <1>;
++				hisilicon,port = <10>;
++				ethernet = <&gmac2>;
++			};
++
++			ethernet-port@2 {
++				reg = <2>;
++				hisilicon,port = <11>;
++				ethernet = <&gmac3>;
++			};
++
++			ethernet-port@3 {
++				reg = <3>;
++				hisilicon,port = <12>;
++				ethernet = <&gmac4>;
++			};
++		};
++	};
++
++	lsw_woe: woe {
++		compatible = "hisilicon,luofu-lsw-woe";
++		dma-coherent;
++		interrupts = <0 0x54 4>,
++			     <0 0x53 4>,
++			     <0 0x52 4>,
++			     <0 0x51 4>,
++			     <0 0x50 4>;
++		interrupt-names = "band0_comp_irq", "band1_comp_irq",
++				  "band2_comp_irq", "band0_txba", "band1_txba";
++		status = "disabled";
++	};
++
++	pie: pie@10a70000 {
++		compatible = "hisilicon,luofu-pie";
++		reg = <0x10a70000 0x10000>;
++		interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
++		interrupt-names = "ch0-7", "ch1-6", "ch2-5", "ch3-4";
++		clocks = <&crg LUOFU_CLK_PIE>;
++		resets = <&crg 0x30 0x19>;
++		dma-coherent;
++		hisilicon,rx-ring = <0x8 0x600 0x8 0x600>;
++		hisilicon,tx-ring = <0xc 0x2>;
++		status = "okay";
++	};
++
++	gmac0: ethernet@14300000 {
++		compatible = "hisilicon,luofu-gmac";
++		reg = <0x14300000 0x10000>;
++		hisilicon,port = <0x8>;
++		phy-mode = "rgmii";
++		phy-handle = <&phy2>;
++		clocks = <&crg LUOFU_CLK_GMAC0>;
++		resets = <&crg 0x30 0xd>, <&crg 0x30 0xe>;
++		reset-names = "mac-logic", "mac";
++		status = "disabled";
++	};
++
++	gmac1: ethernet@14380000 {
++		compatible = "hisilicon,luofu-gmac";
++		reg = <0x14380000 0x10000>;
++		hisilicon,port = <0x9>;
++		phy-mode = "gmii";
++		phy-handle = <&phy2>;
++
++		clocks = <&crg LUOFU_CLK_GMAC1>;
++		resets = <&crg 0x30 0xf>, <&crg 0x30 0x10>;
++		reset-names = "mac-logic", "mac";
++		status = "okay";
++	};
++
++	gmac2: ethernet@14400000 {
++		compatible = "hisilicon,luofu-gmac";
++		reg = <0x14400000 0x10000>;
++		hisilicon,port = <0xa>;
++		phy-mode = "gmii";
++		phy-handle = <&phy3>;
++
++		clocks = <&crg LUOFU_CLK_GMAC2>;
++		resets = <&crg 0x30 0x11>, <&crg 0x30 0x12>;
++		reset-names = "mac-logic", "mac";
++		status = "okay";
++	};
++
++	gmac3: ethernet@14480000 {
++		compatible = "hisilicon,luofu-gmac";
++		reg = <0x14480000 0x10000>;
++		hisilicon,port = <0xb>;
++		phy-mode = "gmii";
++		phy-handle = <&phy4>;
++
++		clocks = <&crg LUOFU_CLK_GMAC3>;
++		resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
++		reset-names = "mac-logic", "mac";
++		status = "okay";
++	};
++
++	gmac4: ethernet@14500000 {
++		compatible = "hisilicon,luofu-gmac";
++		reg = <0x14500000 0x10000>;
++		hisilicon,port = <0xc>;
++		phy-mode = "gmii";
++		phy-handle = <&phy5>;
++
++		clocks = <&crg LUOFU_CLK_GMAC4>;
++		resets = <&crg 0x30 0x15>, <&crg 0x30 0x16>;
++		reset-names = "mac-logic", "mac";
++		status = "okay";
++	};
++
++	mdio0: mdio@14000000 {
++		compatible = "hisilicon,luofu-mdio";
++		reg = <0x14000000 0x1000>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		clocks = <&crg LUOFU_CLK_MDIO>;
++		resets = <&crg 0x30 0x6>,
++			 <&crg 0x30 0x1a>,
++			 <&crg 0x30 0x1b>,
++			 <&crg 0x30 0x1c>,
++			 <&crg 0x30 0x1d>,
++			 <&crg 0x30 0x1e>,
++			 <&crg 0x30 0x1f>;
++		reset-names = "mdio", "gephyall", "gephy0", "gephy1",
++			      "gephy2", "gephy3", "gephy4";
++		status = "okay";
++
++		phy2: ethernet-phy@2 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <2>;
++			max-speed = <1000>;
++		};
++		phy3: ethernet-phy@3 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <3>;
++			max-speed = <1000>;
++		};
++		phy4: ethernet-phy@4 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <4>;
++			max-speed = <1000>;
++		};
++		phy5: ethernet-phy@5 {
++			compatible = "ethernet-phy-ieee802.3-c22";
++			reg = <5>;
++			max-speed = <1000>;
++		};
++	};
++
++	tvsensor: thermal-sensor@14900500 {
++		compatible = "hisilicon,luofu-tvsensor";
++		reg = <0x14900500 0x100>;
++		#thermal-sensor-cells = <0>;
++		status = "okay";
++	};
++
++	thermal-zones {
++
++		cls0: cls0-thermal {
++			polling-delay = <1000>;
++			thermal-sensors = <&tvsensor>;
++
++			trips {
++				trip-point0 {
++					temperature = <115000>;
++					hysteresis = <3000>;
++					type = "passive";
++				};
++
++				trip-point1 {
++					temperature = <125000>;
++					hysteresis = <3000>;
++					type = "critical";
++				};
++			};
++		};
++	};
++
++	pcie0: pcie@10160000 {
++		compatible = "hisilicon,luofu-pcie";
++		device_type = "pci";
++		#address-cells = <3>;
++		#size-cells = <2>;
++		linux,pci-domain = <0>;
++		reg = <0x10160000 0x1000>,
++		      <0x10161000 0x3000>,
++		      <0x50000000 0x1000>;
++		reg-names = "dbi", "misc", "config";
++		ranges = <0x02000000 0x0 0x40000000 0x40000000 0x0 0x2000000>;
++		/* Device-to-host DMA: the RC inbound iATU viewport is programmed by
++		 * the DWC framework from this (device DMA addresses 0x8xxxxxxx map
++		 * to host DRAM 0x80000000..0x8fffffff).  Required by the ETE rings. */
++		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x10000000>;
++		bus-range = <0 0xa>;
++		interrupts = <0 0x3b 4>,
++			     <0 0x45 4>;
++		interrupt-names = "radm", "linkdown";
++		clocks = <&crg LUOFU_CLK_PCIE0>;
++		clock-names = "pcie";
++		resets = <&crg 0x34 0xc>, <&crg 0x34 0xd>,
++			 <&crg 0x34 0xe>, <&crg 0x34 0xf>;
++		reset-names = "apb", "pcs", "phy", "ctrl";
++		num-lanes = <1>;
++		acp-gate = <0x10100174 0x2000000 0x0>;
++		status = "okay";
++	};
++
++	pcie1: pcie@10164000 {
++		compatible = "hisilicon,luofu-pcie";
++		device_type = "pci";
++		#address-cells = <3>;
++		#size-cells = <2>;
++		linux,pci-domain = <1>;
++		reg = <0x10164000 0x1000>,
++		      <0x10165000 0x3000>,
++		      <0x68000000 0x1000>;
++		reg-names = "dbi", "misc", "config";
++		ranges = <0x02000000 0x0 0x58000000 0x58000000 0x0 0x2000000>;
++		dma-ranges = <0x02000000 0x0 0x80000000 0x80000000 0x0 0x10000000>;
++		bus-range = <0 0xa>;
++		interrupts = <0 0x3f 4>,
++			     <0 0x46 4>;
++		interrupt-names = "radm", "linkdown";
++		clocks = <&crg LUOFU_CLK_PCIE1>;
++		clock-names = "pcie";
++		resets = <&crg 0x34 0x10>, <&crg 0x34 0x11>,
++			 <&crg 0x34 0x12>, <&crg 0x34 0x13>;
++		reset-names = "apb", "pcs", "phy", "ctrl";
++		num-lanes = <1>;
++		acp-gate = <0x10100174 0x4000000 0x0>;
++		status = "okay";
++	};
++
++};
+--- a/arch/arm/boot/dts/hisilicon/Makefile
++++ b/arch/arm/boot/dts/hisilicon/Makefile
+@@ -9,5 +9,7 @@
+ 	hi3519-demb.dtb
+ dtb-$(CONFIG_ARCH_HIX5HD2) += \
+ 	hisi-x5hd2-dkb.dtb
++dtb-$(CONFIG_ARCH_LUOFU) += \
++	luofu-r116.dtb
+ dtb-$(CONFIG_ARCH_SD5203) += \
+ 	sd5203.dtb

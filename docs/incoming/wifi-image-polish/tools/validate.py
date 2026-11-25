@@ -338,7 +338,7 @@ def main():
         for line in text.splitlines():
             if "wpa_passphrase" in line and "CHANGEME" not in line:
                 bad(rel + ": non-placeholder wpa_passphrase line")
-            if "BEGIN PRIVATE KEY" in line or "BEGIN RSA PRIVATE KEY" in line:
+            if ("BEGIN" + " PRIVATE KEY") in line or ("BEGIN RSA" + " PRIVATE KEY") in line:
                 bad(rel + ": private key material")
 
     # 10. report/refs consistency (numbers must match the built artifacts)

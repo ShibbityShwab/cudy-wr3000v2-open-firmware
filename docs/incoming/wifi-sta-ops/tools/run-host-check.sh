@@ -71,7 +71,7 @@ say "== 4. fail-closed policy + no secret/no vendor binary"
 must_grep "$LANE_DIR/src/hi5622_sta_ops.c" "module_param_named(sta_ops" "sta_ops module param"
 must_grep "$LANE_DIR/src/hi5622_sta_ops.c" "module_param_named(eapol_rx" "eapol_rx module param"
 must_grep "$LANE_DIR/src/hi5622_sta_ops.c" "fails closed" "fail-closed default documented"
-must_not_grep "$LANE_DIR/patches/0001-sta-ops.patch" "BEGIN RSA PRIVATE KEY" "patch has no private key"
+must_not_grep "$LANE_DIR/patches/0001-sta-ops.patch" "BEGIN RSA PRIVATE[ ]KEY" "patch has no private key"
 if find "$LANE_DIR" -type f \( -name '*.ko' -o -name '*.bin' -o -name '*.o' \) | grep -q .; then
 	say "  FAIL lane contains a binary artifact"
 	fail=1

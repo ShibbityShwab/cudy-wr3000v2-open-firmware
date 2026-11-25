@@ -1,0 +1,214 @@
+patching file arch/arm/mach-hisilicon/Kconfig
+patching file arch/arm/mach-hisilicon/Makefile
+patching file arch/arm/mach-hisilicon/luofu.c
+RC[001-arm-mach-hisilicon-luofu.patch]=0
+patching file arch/arm/Kconfig
+patching file arch/arm/Makefile
+RC[002-arm-kconfig-textofs.patch]=0
+patching file arch/arm/kernel/head.S
+patching file arch/arm/boot/compressed/head.S
+RC[003-arm-textofs-nonimmediate.patch]=0
+patching file drivers/clk/hisilicon/Kconfig
+patching file drivers/clk/hisilicon/Makefile
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file include/dt-bindings/clock/hisilicon,luofu-crg.h
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+RC[004-arm-clk-reset-luofu-crg.patch]=0
+patching file drivers/watchdog/Kconfig
+patching file drivers/watchdog/Makefile
+patching file drivers/watchdog/luofu-wdt.c
+patching file Documentation/devicetree/bindings/watchdog/hisilicon,luofu-wdt.yaml
+RC[005-arm-watchdog-luofu-wdt.patch]=0
+patching file drivers/spi/Kconfig
+patching file drivers/spi/Makefile
+patching file drivers/spi/spi-luofu-fmc.c
+patching file Documentation/devicetree/bindings/mtd/hisilicon,luofu-fmc.yaml
+RC[006-arm-mtd-nand-luofu-fmc.patch]=0
+patching file drivers/net/mdio/Kconfig
+patching file drivers/net/mdio/Makefile
+patching file drivers/net/mdio/mdio-luofu.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-mdio.yaml
+RC[007-net-mdio-luofu.patch]=0
+patching file drivers/net/phy/Kconfig
+Hunk #1 succeeded at 253 (offset -75 lines).
+patching file drivers/net/phy/Makefile
+Hunk #1 succeeded at 63 (offset -12 lines).
+patching file drivers/net/phy/luofu-phy.c
+RC[008-net-phy-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+RC[009-net-gmac-luofu.patch]=0
+patching file drivers/power/reset/Kconfig
+patching file drivers/power/reset/Makefile
+patching file drivers/power/reset/luofu-reboot.c
+patching file Documentation/devicetree/bindings/power/reset/hisilicon,luofu-reboot.yaml
+patching file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-sysctrl.yaml
+RC[010-arm-luofu-restart.patch]=0
+patching file drivers/pinctrl/Kconfig
+patching file drivers/pinctrl/Makefile
+patching file drivers/pinctrl/hisilicon/Kconfig
+patching file drivers/pinctrl/hisilicon/Makefile
+patching file drivers/pinctrl/hisilicon/pinctrl-luofu.c
+patching file Documentation/devicetree/bindings/pinctrl/hisilicon,luofu-pinctrl.yaml
+RC[011-pinctrl-luofu.patch]=0
+patching file drivers/thermal/Kconfig
+patching file drivers/thermal/Makefile
+patching file drivers/thermal/luofu_tvsensor.c
+patching file Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml
+RC[012-arm-thermal-luofu-tvsensor.patch]=0
+patching file drivers/pci/controller/dwc/Kconfig
+patching file drivers/pci/controller/dwc/Makefile
+patching file drivers/pci/controller/dwc/pcie-luofu.c
+patching file Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml
+RC[013-arm-pci-luofu-host.patch]=0
+patching file drivers/pci/controller/dwc/pcie-luofu.c
+Hunk #1 succeeded at 506 (offset 17 lines).
+Hunk #2 succeeded at 600 (offset 17 lines).
+RC[013a-arm-pci-luofu-endpoint-reset-pulse.patch]=0
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+RC[014-arm-crg-reset-polarity.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+RC[015-net-pie-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/Makefile
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+RC[016-net-lsw-luofu.patch]=0
+patching file drivers/soc/hisilicon/Kconfig
+patching file drivers/soc/hisilicon/Makefile
+patching file drivers/soc/hisilicon/luofu-selector.c
+patching file Documentation/devicetree/bindings/soc/hisilicon/hisilicon,luofu-boot-selector.yaml
+patching file Documentation/ABI/testing/sysfs-driver-luofu-selector
+RC[017-soc-luofu-boot-selector.patch]=0
+patching file arch/arm/mach-hisilicon/Kconfig
+patching file arch/arm/mach-hisilicon/Makefile
+patching file arch/arm/mach-hisilicon/luofu.c
+patching file arch/arm/mach-hisilicon/platsmp.c
+RC[018-arm-mach-hisilicon-smp.patch]=0
+patching file Documentation/devicetree/bindings/clock/hisilicon,luofu-crg.yaml
+patching file drivers/clk/hisilicon/crg-luofu.c
+patching file include/dt-bindings/clock/hisilicon,luofu-crg.h
+RC[019-arm-clk-luofu-clock-tree.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+RC[020-net-pie-datapath-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+Hunk #1 succeeded at 188 (offset 6 lines).
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+RC[021-net-lsw-init-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-switch.yaml
+RC[022-net-lsw-qidmap-write-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+RC[023-net-gmac-netdev-connect-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-pie.yaml
+RC[024-net-pie-completion-decode-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/Kconfig
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[025-net-lsw-egress-luofu.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file Documentation/devicetree/bindings/net/hisilicon,luofu-gmac.yaml
+RC[026-net-gmac-bdinfo-mac-nvmem.patch]=0
+patching file drivers/clk/hisilicon/crg-luofu.c
+RC[027-arm-clk-luofu-readonly-mux-fix.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[030-net-pie-txrx-trace.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[031-net-lsw-eps-channel-map.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[032-net-lsw-eqm-qminit.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[036-net-lsw-pfe-init.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[038-net-gmac-maxframe-init.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[040-net-gmac-w9-diag.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[041-net-gmac-macconf-nodoorbell.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[042-net-gmac-w9-master-off.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[043-net-lsw-ifc-default-table.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[044-net-lsw-ifc-gate-token-fix.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[045-net-lsw-state-dump.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[046-net-lsw-ifc-fix-eps-ext.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[047-net-pie-gmac-rxstate-dump.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[048-net-pie-rxcfg-w13.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[049-net-lsw-pie-page-scan.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[050-net-lsw-pagedump-w15.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[051-net-gmac-macregs-w16.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[052-net-pie-rxcompletion-trace.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[053-net-pie-rxdecode-vendor-exact.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[054-net-lsw-mirror-cputest-w17.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[055-net-lsw-mirror-stable-rxstroke.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch.h
+patching file drivers/net/ethernet/hisilicon/luofu-gmac.c
+RC[056-net-lsw-mirror-postlink-w19.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[057-net-pie-cpucopy-w20.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[058-net-luofu-canonical-bench-config.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-switch-regs.h
+patching file drivers/net/ethernet/hisilicon/luofu-switch.c
+RC[059-net-lsw-napt-init.patch]=0
+patching file drivers/net/ethernet/hisilicon/luofu-pie.c
+RC[060-net-pie-exception-delivery.patch]=0
+patching file drivers/thermal/Kconfig
+patching file drivers/thermal/luofu_tvsensor.c
+RC[066-thermal-luofu-tvsensor-w23.patch]=0
+patching file Documentation/devicetree/bindings/thermal/hisilicon,luofu-tvsensor.yaml
+RC[067-dt-bindings-thermal-luofu-tvsensor-w23.patch]=0

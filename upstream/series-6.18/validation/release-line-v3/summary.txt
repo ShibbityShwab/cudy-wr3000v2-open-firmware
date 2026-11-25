@@ -1,0 +1,14 @@
+release line: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/release-line/manifest.tsv
+workdir: /tmp/upstream-v3-release-line
+pristine version: 6.18.60
+manifest: 56 included, 11 excluded
+patch(1): 56/56 patches RC=0, 153 file events, 5 hunks with offset, 0 hunks with fuzz, 0 rejects
+strict git apply: all 56 patches apply without fuzz
+board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12722 B sha256 40b71de5d63b4b670375de87f740f45576ef94d948c01e4644d398d890240077
+target DTS: DTB totalsize 12722 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12728 B and keeps the hand-off contract
+DTS contract: console=/serial@1010f000 flashinfo-compatible=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+DTS series: board DTS byte-identical to the filtered target DTS (release-line-only W23 thermal delta stripped)
+DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 12554 B sha256 4f2e0e8d27d7bc627102f9e38d9bf2e7fcb32502083c67c48011799520a038df
+DTS series: DTB totalsize 12554 B is NOT 8-byte aligned -> the image build MUST run Build/luofu-pad-dtb (TRAILER-FORMAT.md section 11); pad-dtb.py pads it to 12560 B and keeps the hand-off contract
+DTS series contract: console=/serial@1010f000 flashinfo=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+PASS: release line applies and the loader hand-off DTS contract is present. No hardware and no kernel build was involved.

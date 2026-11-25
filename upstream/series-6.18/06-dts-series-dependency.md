@@ -14,9 +14,9 @@ its validation.
 | --- | --- |
 | id | **DTS-0001** (DTS series patch 1; independent of the kernel `series/0001-0026` numbering) |
 | file | `dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` |
-| sha256 | `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa` (current final 2026-11-22: the 2026-11-21 board DTS content above **plus** the 2026-11-22 additions - enabled PCIe root complexes, the `wifi-pcie-hog` for GPIO0 20/21/28, the identity PCIe `dma-ranges` - with the release-line-only W23 thermal delta removed by `tools/dts-upstream-filter.py`; previous sha `886f3ad0...`, and before that `c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
+| sha256 | `1fd1d10ac39fad233e8e2dfa682bc84446536a39c8221e44394563e8d16c0117` (**v3, current 2026-11-29**: the 2026-11-21 board DTS content above **plus** the 2026-11-22 enabled-PCIe/`dma-ranges` additions, with the retired 2026-11-22 `wifi-pcie-hog` gone since the 2026-11-24 GP1 line and the release-line-only W23 thermal delta removed by `tools/dts-upstream-filter.py`; the previous 2026-11-22 v2 entry was `33956380...` and still carried the retired hog; before that `886f3ad0...`/`c029fd44...`; the superseded active cleanup `d8afee63...` did not boot and was reverted) |
 | applies to | pristine linux-6.18.60 (same baseline as the kernel form), after the kernel series for compilation because it uses the CRG clock-ID header added by kernel patch 0004 |
-| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**699 lines**, byte-identical to the current single-source target DTS after the release-line W23 filter: 2026-11-21 board features + buttons/LEDs + loader hand-off contract + the 2026-11-22 PCIe/GPIO-hog/dma-ranges additions) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
+| adds | `arch/arm/boot/dts/hisilicon/luofu-r116.dts` (**690 lines**, byte-identical to the current single-source target DTS (702 lines) after the release-line W23 filter: 2026-11-21 board features + buttons/LEDs + loader hand-off contract + the 2026-11-22 enabled-PCIe/`dma-ranges` additions, with the retired 2026-11-22 `wifi-pcie-hog` gone since the 2026-11-24 GP1 line) and the `dtb-$(CONFIG_ARCH_LUOFU) += luofu-r116.dtb` entry in `arch/arm/boot/dts/hisilicon/Makefile` |
 | status | **DRAFT DTS SERIES ENTRY** - the board DTS is hardware-verified: the conservative prose-only step compiled byte-identically to the known-good DTB, and all five active deltas were individually boot-tested (images f6685b80, c3ef2a50 and 6e9c54d0; the 6e9c54d0 boot-test closed the flashinfo loader binding).  **Zero upstream blockers remain**; the remaining in-series driver/YAML review items are normal RFC submission content.  The two loader hand-off nodes are final and measured (SMP-RE.md section 24) |
 
 The two nodes that make this entry release-critical for SMP:
@@ -118,9 +118,15 @@ pair.  The image recipe therefore runs **`Build/luofu-pad-dtb`**
 `append-dtb`: it pads to an 8-byte boundary, folds the padding into the
 FDT totalsize, and asserts `len(dtb) == totalsize` and
 `totalsize % 8 == 0`, so an unaligned blob cannot reach a trailer again.
-For the current (2026-11-22) DTS the measured sizes are **12,865 B -> 12,872 B**
+For the 2026-11-22 DTS the measured sizes were **12,865 B -> 12,872 B**
 (target DTB sha256 `d8b41ac3...`) and **12,697 B -> 12,704 B** for the filtered
-DTS-0001 payload (sha256 `288a5c3f...`).  The 2026-11-21 values were
+DTS-0001 payload (sha256 `288a5c3f...`).  The **2026-11-29 v3**
+regeneration re-measured both with the host system dtc (v1.8.1 - a different
+dtc build from the 2026-11-22 kernel-dtc figures above, so compare the v3
+numbers within a run): the release-line target DTB is **12,722 B** sha256
+`40b71de5...` -> pad **12,728 B**, and the filtered DTS-0001 payload is
+**12,554 B** sha256 `4f2e0e8d...` -> pad **12,560 B**; both totalsizes are still
+unaligned, so the `Build/luofu-pad-dtb` step remains mandatory.  The 2026-11-21 values were
 **12,678 B -> 12,680 B** (DTB sha256 `62574b11...`, pad sha256 `8d79794e...`);
 the conservative step was byte-identical to the pre-clean DTB `49fe5c47...`,
 and the five 2026-11-21 active deltas were boot-tested as images f6685b80 (TWD),
@@ -154,7 +160,21 @@ target-DTS checks:
    `reg = 80600000 4000`, `atag-offset = 1000`,
    `enable-method = "hisilicon,luofu-smp"`.
 
-**2026-11-22 result (current):** L1 release line 55/55 patch(1) RC=0, 3 offset
+**2026-11-29 v3 result (current):** L1 release line **56/56** patch(1) RC=0
+(56 include / 11 exclude; 153 file events; 5 offset hunks, 0 fuzz, 0 rejects;
+strict `git apply` **all 56 without fuzz**), logs `validation/release-line-v3/`;
+DTS-0001 sha256 `1fd1d10a...` (703 lines, **690-line** filtered payload) applies
+RC=0 to the L1 tree, is **byte-identical to the filtered target DTS**, compiles
+(cpp+dtc RC=0, 0/0 stderr, DTB **12,554 B** sha256 `4f2e0e8d...`, pad
+**12,560 B**), passes the hand-off contract checks, leak check clean, and the
+added DTS has no `wifi-pcie-hog`; release-line manifest sha256 `17d714be...`,
+`INCLUDED.txt` sha256 `da4966aa...` (013a added, 55 -> 56).  The L2 review form
+re-ran unchanged: 26/26 `patch(1)` and `git am`, identical trees, 3 offset
+hunks, 0 fuzz, checkpatch 0 errors / 73 warnings, `gen-series.py --check` clean.
+Nothing was sent; the v2 30-patch form is still not generated (the 013a -> DT
+`reset-gpios` fold is the remaining content decision).
+
+**2026-11-22 result (historical):** L1 release line 55/55 patch(1) RC=0, 3 offset
 hunks, 0 fuzz, 0 rejects, strict `git apply` 55/55; target board DTS compiles
 (cpp+dtc RC=0, 0 stderr, DTB **12,865 B** sha256 `d8b41ac3...`, unaligned ->
 pad **12,872 B**); **DTS-0001** (sha256 `33956380...`, 712 lines, 699-line

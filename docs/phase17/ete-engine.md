@@ -418,7 +418,7 @@ submitted, and Part B does not try.**
 | # | step | layer | evidence |
 |---|---|---|---|
 | 1 | `firmware_file_send(chip, 0x01240000+off, buf, n)` | plat | phase 16 A.9 |
-| 2 | `bal_write` tail-calls `[bus_ctx+0x38](handle, ...)` | BAL | A.1 |
+| 2 | `bal_write` tail-calls `[bus_ctx+0x38]`(handle, ...) | BAL | A.1 |
 | 3 | HCC TX thread -> `hcc_queue_tx_process` -> `bal_port_start_xfer` -> `[ctx+0x18]` | HCC | A.2 |
 | 4 | skb -> ETE node: `{dev_addr, len<<16 | 0x6d2b}` in the 8-byte ring array | ETE | A.5 |
 | 5 | `pcie_msg_send(chip, 3)`: pending mask -> `0x40039010`, doorbell -> `0x400392d4` | MSG | A.7 |

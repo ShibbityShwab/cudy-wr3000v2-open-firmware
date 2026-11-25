@@ -1,0 +1,4 @@
+/tmp/upstream-v3-release-line/tree-patch/drivers/pci/controller/dwc/pcie-luofu.c.orig
+/tmp/upstream-v3-release-line/tree-patch/drivers/net/phy/Makefile.orig
+/tmp/upstream-v3-release-line/tree-patch/drivers/net/phy/Kconfig.orig
+/tmp/upstream-v3-release-line/tree-patch/drivers/net/ethernet/hisilicon/Kconfig.orig

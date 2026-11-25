@@ -87,7 +87,7 @@ while IFS= read -r f; do
 	case "$f" in *.ko|*.o|*.bin|*.fw) bad "binary-looking payload file: $f"; BIN_FOUND=1 ;; esac
 done < <(find "$LANE" -type f ! -path "$LANE/build-evidence/work/*")
 [ "$BIN_FOUND" -eq 0 ] && ok "no ELF/.ko/.bin/.fw file in the lane (build artefacts stay local)"
-if grep -rn -e 'BEGIN RSA PRIVATE KEY' -e 'BEGIN OPENSSH PRIVATE KEY' -e 'BEGIN EC PRIVATE KEY' -e 'BEGIN PRIVATE KEY' "$LANE" \
+if grep -rn -e 'BEGIN RSA PRIVATE[ ]KEY' -e 'BEGIN OPENSSH PRIVATE[ ]KEY' -e 'BEGIN EC PRIVATE[ ]KEY' -e 'BEGIN PRIVATE[ ]KEY' "$LANE" \
 	--include='*.md' --include='*.txt' --include='*.conf' --include='*.sh' \
 	--exclude='selftest.sh' 2>/dev/null | grep -q .; then
 	bad "private key material in the lane"

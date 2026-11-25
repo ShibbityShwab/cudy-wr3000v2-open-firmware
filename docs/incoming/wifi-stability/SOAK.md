@@ -64,7 +64,7 @@ The sampler does no device writes, no rmmod, no reboot, no network.
 | duration/coverage/gaps | span >= 98%, samples >= 95%, no gap > 3x interval | FAIL-SAMPLING |
 
 A verdict is PASS only if all checks pass.  Result template:
-[results/RESULT-TEMPLATE.md](../results/RESULT-TEMPLATE.md).
+[results/RESULT-TEMPLATE.md](results/RESULT-TEMPLATE.md).
 
 ## 4b. Console noise
 

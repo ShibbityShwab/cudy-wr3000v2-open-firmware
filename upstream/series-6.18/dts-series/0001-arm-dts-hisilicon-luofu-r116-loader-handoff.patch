@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/arch/arm/boot/dts/hisilicon/luofu-r116.dts
-@@ -0,0 +1,699 @@
+@@ -0,0 +1,690 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Cudy WR3000 v2.0 (HiSilicon Hi5671Y "luofu", board R116) board devicetree.
@@ -8,12 +8,12 @@
 + * Provenance of the measured values, the binding-review status and the
 + * 2026-11-21 hardware regression that invalidated the first active-DTS
 + * cleanup are recorded in upstream/series-6.18/07-dts-upstream-bindings.md.
-+ * The base DTB built from this source is boot-tested up to the 2026-11-21
-+ * baselines (loader hand-off contract: image 6e9c54d0).  The 2026-11-22
-+ * additions below - the enabled PCIe root complexes and the Wi-Fi control-pin
-+ * GPIO hog - are hardware-derived, but the compiled DTB that carries them has
-+ * not yet been re-flashed and boot-tested as a unit.  Any active change to
-+ * this file must be boot-tested before it is trusted.
++ * Boot-tested baselines: image 6e9c54d0 (loader hand-off contract) and the
++ * 2026-11-24 GP1 line, which boots this DTB with the patch-013a endpoint
++ * reset pulse (dmesg "endpoint reset pulse") and no Wi-Fi GPIO hog - the
++ * driver owns the assert/release pulse now.  The 2026-11-22 PCIe enablement
++ * in this file is covered by both boots.  Any active change to this file
++ * must be boot-tested on the unit before it is trusted.
 + */
 +
 +/dts-v1/;
@@ -262,24 +262,15 @@
 +
 +			/*
 +			 * Board power/reset controls of the Wi-Fi endpoint behind
-+			 * the two PCIe root complexes.  Hardware-verified
-+			 * 2026-11-22: the endpoint only trains when GPIO0 pins 20,
-+			 * 21 and 28 are outputs driven high (the stock vendor
-+			 * kernel leaves GPIO0 at DDR=0x1330000f /
-+			 * DATA=0x12300004, i.e. all three high).  The individual
-+			 * roles were not decoded, so this hog records only the
-+			 * proven required state.  The pcie-luofu driver carries a
-+			 * temporary hardcoded equivalent until this hog has been
-+			 * boot-tested on its own (patch 013, host_init).
++			 * the two PCIe root complexes (GPIO0 pins 20, 21, 28).
++			 * The pins are owned end-to-end by the pcie-luofu driver:
++			 * patch 013a performs the vendor's reset pulse (assert LOW,
++			 * then release HIGH) at RC0 probe before the clock and
++			 * LTSSM start, which both releases the endpoint and makes
++			 * its mask ROM run stage S0/S1.  No gpio-hog here: a hog
++			 * would release the endpoint reset before the driver's
++			 * pulse (double ROM start, non-deterministic handshake).
 +			 */
-+			wifi-pcie-hog {
-+				gpio-hog;
-+				gpios = <20 GPIO_ACTIVE_HIGH>,
-+					<21 GPIO_ACTIVE_HIGH>,
-+					<28 GPIO_ACTIVE_HIGH>;
-+				output-high;
-+				line-name = "wifi-pcie-ctl";
-+			};
 +		};
 +	};
 +

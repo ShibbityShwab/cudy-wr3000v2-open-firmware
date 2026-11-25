@@ -211,7 +211,7 @@ consumer is a separate path: message id 3 -> `pcie_ete_transfer_done_handle` -> 
 ```
 
 `pcie_ete_d2h_isr_handle` @ `0x15c1c` walks the set bits of the mask and calls
-`[ete+0x1c](ete, bit)`:
+`[ete+0x1c]`(ete, bit):
 ```
   0x015c50: ldr  r7, [r6, #0x1c]       ; fn installed by pcie_ete_intr_init
   0x015c54: rbit r5, r4 ; clz r5, r5   ; lowest set bit = channel

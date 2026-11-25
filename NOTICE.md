@@ -18,16 +18,19 @@ them in the repository.
 ### Publication status (2026-11-17)
 
 This tree is **not ready to publish** yet. See `docs/PUBLISH-READINESS.md` for the full
-checklist. Two facts to keep straight:
+checklist and `docs/PUBLISH-PREP.md` for the blocker map and the owner-approval release
+sequence. Two facts to keep straight:
 
 - Ten vendor `.o` files from a TR6560 BSP build were tracked under `lab/luofu-kernel/nand/`
   until 2026-11-17; they are removed from the current tree but **remain in the published
   history** until it is purged. Do not treat the "no vendor binaries" statement above as true
   for history before that purge.
-- Licensing is split: scripts/documentation are MIT (`LICENSE`), kernel code under `lab/` is
-  GPL-2.0. A GPL-2.0 license text and per-file copyright notices are still to be added. The
-  drivers were derived by reverse-engineering the vendor's GPL binaries, so the submission must
-  state GPL-2.0 provenance rather than "clean-room".
+- Licensing is split: scripts/documentation are MIT (`LICENSE`), kernel code under `lab/`,
+  `target-skeleton/` and `upstream/` is GPL-2.0. The GPL-2.0 text is now `COPYING` and the
+  contribution convention (SPDX + Developer Certificate of Origin sign-off) is
+  `CONTRIBUTING.md`; per-file copyright notices and sign-offs for the pre-existing history are
+  still open (owner decision). The drivers were derived by reverse-engineering the vendor's GPL
+  binaries, so the submission must state GPL-2.0 provenance rather than "clean-room".
 
 ## GPL note
 

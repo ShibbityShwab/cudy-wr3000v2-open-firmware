@@ -1,5 +1,7 @@
 # sha256 of the commit-ready series files and of the source target-skeleton patches.
-# Regenerated on the author host on 2026-11-22 after the hardware PCIe GPIO fix
+# Regenerated on the author host on 2026-11-22; DTS-0001 entry refreshed 2026-11-29
+# (v3: current single-source board DTS, retired wifi-pcie-hog removed; L1 013a row is
+#  recorded in release-line/ and validated in validation/release-line-v3/).
 # (patch 013 final: workaround removed after the W27b hog-only boot), the
 # review-form regeneration (new 0013 message) and the DTS-0001 regeneration from
 # the release-line-filtered single-source board DTS.
@@ -104,7 +106,7 @@ c2a4697559a22fe3c3867b58b85382f95c3dd2b04a987a1c698174696c3253cc  ../../target-s
 197bb74aad60a4d8caacc22dacc91399a8dc967c28d6b8a5ef98a4727ef7ee9c  ../../target-skeleton/target/linux/hisilicon/patches-6.18/067-dt-bindings-thermal-luofu-tvsensor-w23.patch
 
 ## upstream DTS series entry (DTS-0001; companion to the kernel patch 0018)
-33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
+1fd1d10ac39fad233e8e2dfa682bc84446536a39c8221e44394563e8d16c0117  dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch
 
 ## kernel tarball used for validation (not stored in this repo)
 # sha256 3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e  linux-6.18.60.tar.xz

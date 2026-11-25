@@ -7,7 +7,7 @@
 
 The FINAL ALL-PATCH module tree (hardware-validated on 2026-11-29:
 `opensource` 008aca5, stripped **308,080 B sha256 `5b587949...`**, 47
-params) plus this lane's [patches/0001-band5g.patch](../patches/0001-band5g.patch):
+params) plus this lane's [patches/0001-band5g.patch](patches/0001-band5g.patch):
 
 | file | change |
 | --- | --- |
@@ -19,7 +19,7 @@ params) plus this lane's [patches/0001-band5g.patch](../patches/0001-band5g.patc
 
 The patch is a plain `diff -u` with `a/`/`b/` labels and applies with
 `patch -p1` (verified `--dry-run` on the regenerated final all-patch
-tree: [evidence/patch-apply.txt](../evidence/patch-apply.txt)).
+tree: [evidence/patch-apply.txt](evidence/patch-apply.txt)).
 
 ## 2. Reproduce
 
@@ -59,8 +59,8 @@ The stripped sha256 is **build-path dependent** (the vendor-style
 directory; same caveat as wifi-stability/FINAL-INTEGRATION.md).  The canonical
 number above is from `/tmp/wifi-band5g-build`; a rebuild in another directory
 keeps the size/params and changes only the sha.  Evidence:
-[evidence/artifact-identity.txt](../evidence/artifact-identity.txt),
-[evidence/build-verify.txt](../evidence/build-verify.txt).
+[evidence/artifact-identity.txt](evidence/artifact-identity.txt),
+[evidence/build-verify.txt](evidence/build-verify.txt).
 
 ## 4. Toolchain
 
@@ -76,5 +76,5 @@ system `gcc` with `-std=c99 -Wall -Wextra -Werror -pedantic`.
   contained in this directory.  The vendor artifacts are referenced by local
   path only; `evidence/` holds derived facts (addresses/counts/words) and
   test logs.
-* The module artifact is local only (gitignored); see [.gitignore](../.gitignore).
+* The module artifact is local only (gitignored); see [.gitignore](.gitignore).
 * The ladder is a design document: this lane did not contact the bench router.

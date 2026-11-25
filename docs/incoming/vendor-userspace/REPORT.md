@@ -13,8 +13,8 @@ extraction and the notebook's gitignored build area.
 
 Related prior notebook work (not repeated here, cross-referenced):
 [systime RCE writeup](../../systime-rce-writeup.md),
-[MQTT/JWT command chain gist](../../../../gist-cudy-wr3000v2-mqtt-jwt.md),
-[live MQTT command-chain report](../../../../dumps/router-20261108/mqtt-command-chain-report.md),
+`MQTT/JWT command chain gist` (`../../../../gist-cudy-wr3000v2-mqtt-jwt.md`),
+`live MQTT command-chain report` (`../../../../dumps/router-20261108/mqtt-command-chain-report.md`),
 [vendor stack on mainline kernel](../../VENDOR-STACK-ON-MAINLINE.md).
 
 ---
@@ -41,7 +41,7 @@ failures**:
    headless** (`analyzeHeadless … -postScript DumpDecomp.java`). Ghidra output for
    `cmagent`, `cmsd`, `libbdinfo.so`, `hyctl` was the primary evidence for those binaries.
 
-The existing notebook disassembler [tools/luadump.py](../../../../tools/luadump.py) works on the
+The existing notebook disassembler `tools/luadump.py` (`../../../../tools/luadump.py`) works on the
 same files but without the type-9 patch it silently mis-decodes a number of functions (e.g. the
 `string.format` call sites in `apprpc/system.lua`); prefer the 32-bit/luac route when exactness
 matters.
@@ -530,8 +530,8 @@ total size   : 0xDE96 = 56982 bytes (mtd partition read whole)
   to `sha256(bdinfo fuuid + bdinfo hmac)` unless `bdinfo dbg == OK` or `system.ttylogin==1`.
   Both inputs are bdinfo fields; on units where those fields are shared/derivable this yields a
   predictable root password (§10.6).
-- Recovery tooling in the notebook: [tools/decrypt_bdinfo.py](../../../../tools/decrypt_bdinfo.py),
-  [tools/mk_fake_bdinfo.py](../../../../tools/mk_fake_bdinfo.py).
+- Recovery tooling in the notebook: `tools/decrypt_bdinfo.py` (`../../../../tools/decrypt_bdinfo.py`),
+  `tools/mk_fake_bdinfo.py` (`../../../../tools/mk_fake_bdinfo.py`).
 
 ### 6.5 hdb / hi_* / misc helpers
 
@@ -767,15 +767,15 @@ kernel phases.
   not committed.
 - Cross-disassembly: `build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-objdump`;
   Ghidra 12.2 headless `DumpDecomp.java` (scripts temporary).
-- Existing notebook tooling used/cross-checked: [tools/luadump.py](../../../../tools/luadump.py),
-  [tools/decrypt_bdinfo.py](../../../../tools/decrypt_bdinfo.py),
-  [tools/mk_fake_bdinfo.py](../../../../tools/mk_fake_bdinfo.py),
-  [tools/forge_jwt.py](../../../../tools/forge_jwt.py),
-  [tools/mqtt_takeover.py](../../../../tools/mqtt_takeover.py).
+- Existing notebook tooling used/cross-checked: `tools/luadump.py` (`../../../../tools/luadump.py`),
+  `tools/decrypt_bdinfo.py` (`../../../../tools/decrypt_bdinfo.py`),
+  `tools/mk_fake_bdinfo.py` (`../../../../tools/mk_fake_bdinfo.py`),
+  `tools/forge_jwt.py` (`../../../../tools/forge_jwt.py`),
+  `tools/mqtt_takeover.py` (`../../../../tools/mqtt_takeover.py`).
 - Prior writeups cross-checked: [systime RCE](../../systime-rce-writeup.md),
-  [MQTT/JWT gist](../../../../gist-cudy-wr3000v2-mqtt-jwt.md),
-  [live command-chain report](../../../../dumps/router-20261108/mqtt-command-chain-report.md),
+  `MQTT/JWT gist` (`../../../../gist-cudy-wr3000v2-mqtt-jwt.md`),
+  `live command-chain report` (`../../../../dumps/router-20261108/mqtt-command-chain-report.md`),
   [vendor stack](../../VENDOR-STACK-ON-MAINLINE.md).
 - All findings are static, against firmware 2.4.15. No device interaction was performed for this
-  report; the bench remains read-only per [AGENTS.md](../../../../AGENTS.md) and
-  [BENCH-FACTS.md](../../../../BENCH-FACTS.md).
+  report; the bench remains read-only per `AGENTS.md` (`../../../../AGENTS.md`) and
+  `BENCH-FACTS.md` (`../../../../BENCH-FACTS.md`).

@@ -3,25 +3,33 @@
 **Status: DOCUMENTATION-ONLY PACKAGE / RFC.  Nothing has been submitted
 anywhere.**  This directory is a dry-run hand-off bundle for the owner to review
 and, if they choose, send manually; it contains no accounts, no email transport
-and no list subscription.  Package form: **v3 submission-form revision**,
-regenerated 2026-11-22 from the current tree after the hardware PCIe GPIO fix
-(patch 0013) and the board-DTS 2026-11-22 additions (see git log for the exact
-commit).
+and no list subscription.  Package form: **v3 submission-form revision**
+(2026-11-22 base; **v3 partial regeneration 2026-11-29** - see the note below).
 
-## Current state (2026-11-22)
+> **v3 update 2026-11-29 (host-only; nothing was sent).** The DTS-series entry
+> DTS-0001 was regenerated from the current single source (the retired
+> `wifi-pcie-hog` is gone) and the release line L1 now includes the committed,
+> load-bearing `013a` endpoint-reset patch (55 -> 56); the release-line validator
+> re-ran **PASS** and its logs are in `../validation/release-line-v3/`.  The
+> kernel review form itself is still the **frozen 26-patch v1**: the planned
+> 30-patch v2 form is NOT generated because its one remaining content decision
+> is the `013a` -> DT `reset-gpios` fold in patch 0013 (+ PCIe binding + DTS),
+> which also needs one attended boot.  **Do not send this package as-is.**
+
+## Current state (v3 update 2026-11-29; previous full pass 2026-11-22)
 
 | item | value |
 | --- | --- |
-| kernel review form | 26 patches in `../series/` (RFC / do-not-merge split; see `../00-cover-letter.md`) |
-| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa` (712 lines, 699-line payload = the single-source DTS after the release-line W23 filter; `tools/dts-upstream-filter.py`) |
-| single-source board DTS | **711 lines** sha256 `f24451ca5dd6b79724af05df8c4f978fc670bfe230b8931adaedd941cfb543c7` (2026-11-21 history: 691 lines 7ae18f2 -> 700 lines 5b401c1 -> 681 lines 6c2cc2f -> 681 lines 71b2167, sha 381b2e8c...; the 2026-11-22 additions are the enabled PCIe nodes, the `wifi-pcie-hog` and the identity `dma-ranges`) |
-| compiled board DTB | **12,865 B** sha256 `d8b41ac37ec68a10ccaf2e68db0675dd6f28a83c1bb603603bbd97cc68af3ce3`; unaligned totalsize, `pad-dtb.py` pads to **12,872 B**.  DTS-0001 compiled from the filtered copy: **12,697 B** sha256 `288a5c3f3841572ecede2dc1aa223c06772c8bb2459cde31a95203cc1761763f`, pad **12,704 B** (2026-11-21 history: 12,678 B 62574b11... -> 12,680 B 8d79794e...) |
-| current DTS-purpose hardware image | **W27b** (2026-11-22, image sha256 `4af1d1fa...`): built from the current board DTS (`wifi-pcie-hog`, enabled PCIe nodes, `dma-ranges`) with patch 0013 containing **no board-GPIO code**; booted with both RC links trained (LTSSM 0x11), both endpoints enumerated and GPIO0 DDR/DATA = 0x1330000f - the devicetree hog alone drives pins 20/21/28.  Boot-tested DTS-purpose baseline before the 2026-11-22 additions: **6e9c54d0** (2026-11-21) |
-| release-line validator | PASS (2026-11-22 final): 55 include / 11 exclude, 55/55 patch(1) RC=0, 3 offset hunks, **0 fuzz**, strict git apply 55/55; DTS contract and DTS-0001-vs-filtered-target identity OK; manifest sha256 `98931166...`; logs `../validation/release-line/` |
-| review form checks | 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, 0 fuzz; checkpatch **0 errors / 73 warnings** (patch 0013 alone: 0 errors / 17 warnings - block-comment style + the known binding-split warning); PCIe `dt_binding_check` RC=0 (dtschema 2026.9); `gen-series.py --check` clean |
-| current devicetree final | 2026-11-21 content: submodule commit **71b2167** (conservative cleanup 7ae18f2 + boot-tested TWD level-high + MAC/switch/compatible deltas + boot-tested flashinfo compatible-first; the superseded active cleanup **538377c** is regressed and NOT current).  2026-11-22 additions: **32d44e6** (wifi-pcie-hog + PCIe-stub cleanup), **5a6a500** (dma-ranges), **4e959f2** (patch 0013 hardware notes) |
-| patch 0013 | **hardware-verified 2026-11-22 without board-GPIO driver code** - W25d/W26a trained the link and enumerated both endpoints; W27b (image sha256 `4af1d1fa...`) proves the DTS `wifi-pcie-hog` alone drives GPIO0 20/21/28, so the hardcoded workaround was removed (commit `ad711d1`) and the submission notes restored; still RFC: no MSI/INTx, single-function CFG0 topology, ACP gate is a bring-up workaround, binding split owed |
-| remaining upstream blockers | **ZERO** for the 2026-11-21 documented blocker list - all active-DTS/code blockers closed; the drafted flashinfo binding remains maintainer-facing documentation only.  The 2026-11-22 DTS additions are hardware-derived pending one unit regression boot (not a new external blocker) |
+| kernel review form | 26 patches in `../series/` (RFC / do-not-merge split; see `../00-cover-letter.md`).  **Unchanged since 2026-11-22**; the planned 30-patch v2 is still not generated (the `013a` -> DT `reset-gpios` fold is the single remaining content decision). |
+| DTS-series entry | **DTS-0001** `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch`, sha256 `1fd1d10a...` (703 lines, **690-line** payload = the current 702-line single-source DTS after the release-line W23 filter; the retired `wifi-pcie-hog` is removed; `tools/dts-upstream-filter.py`) |
+| single-source board DTS | **702 lines** sha256 `df0d8e59...` (2026-11-24 GP1 line: `wifi-pcie-hog` retired, no `reset-gpios` yet; the 2026-11-22 additions - enabled PCIe nodes, identity `dma-ranges` - are retained; history: 711 lines f24451ca -> 702 lines df0d8e59) |
+| compiled board DTB | **12,722 B** sha256 `40b71de5...`; unaligned totalsize, `pad-dtb.py` pads to **12,728 B**.  DTS-0001 compiled from the filtered copy: **12,554 B** sha256 `4f2e0e8d...`, pad **12,560 B** (host system dtc v1.8.1, 2026-11-29; the 2026-11-22 kernel-dtc figures 12,865/12,697 were a different dtc build - compare only within a run) |
+| current DTS-purpose hardware image | **GP1 line (2026-11-24, installed on pair B)**: the boot-validated path now uses the committed `013a` RC0 endpoint reset pulse (GPIO0 20/21/28 assert 20 ms / release 100 ms) with **no devicetree hog**; the 2026-11-22 W27b image (`4af1d1fa...`) proved the earlier hog-only path (both RC links trained, both endpoints enumerated).  The hog was retired because it defeats the pulse. |
+| release-line validator | PASS (**2026-11-29 v3 final**): **56 include / 11 exclude**, 56/56 patch(1) RC=0, 153 file events, 5 offset hunks, **0 fuzz, 0 rejects**, strict git apply **all 56 without fuzz**; DTS contract and DTS-0001-vs-filtered-target identity OK (no hog, no W23 leak); manifest sha256 `17d714be...`, INCLUDED sha256 `da4966aa...`; logs `../validation/release-line-v3/` |
+| review form checks | 26/26 patch(1) and `git am`, identical trees, 3 offset hunks, 0 fuzz; checkpatch **0 errors / 73 warnings** (2026-11-22 run; patch bytes unchanged - `gen-series.py --check` clean again 2026-11-29); PCIe `dt_binding_check` RC=0 (dtschema 2026.9, 2026-11-22; bindings unchanged) |
+| current devicetree final | 2026-11-24 GP1 line (submodule commit for the 013a pulse + target fixes) is the hardware-validated board state; 2026-11-22 additions were **32d44e6** (wifi-pcie-hog + PCIe-stub cleanup), **5a6a500** (dma-ranges), **4e959f2** (patch 0013 hardware notes); the hog is retired. |
+| patch 0013 | RFC: the validated boot uses the **separate committed `013a` pulse patch** (L1 included since v3) because the upstream form wants the board lines as DT data; the fold of `013a` into 0013 as `reset-gpios` (+ binding + DTS + one attended boot) is the open content decision.  Still RFC: no MSI/INTx, single-function CFG0 topology, ACP gate is a bring-up workaround, binding split owed. |
+| remaining upstream blockers | **ZERO external** blockers for the platform group.  Remaining **local** work: (1) the `013a` -> DT `reset-gpios` fold (0013 + binding + DTS) and its one attended boot; (2) generate the 30-patch v2 review form and refresh all manifests (this v3 pass refreshed only the DTS-series entry and L1); (3) owner publication decisions (history purge or curated repos, COPYING/CONTRIBUTING/DCO, link fixes).  Nothing has been sent anywhere. |
 
 ## What is in this package
 
@@ -36,14 +44,14 @@ commit).
 
 | artifact | sha256 | role |
 | --- | --- | --- |
-| `../../../target-skeleton/dts/luofu-r116.dts` | `f24451ca5dd6b79724af05df8c4f978fc670bfe230b8931adaedd941cfb543c7` | single-source board DTS (outside the package tree) |
+| `../../../target-skeleton/dts/luofu-r116.dts` | `df0d8e591329bf370727c1cc22b9adf08c388f193dd7cd9d60034534d7486557` | single-source board DTS (outside the package tree) |
 | `../00-cover-letter.md` | `c8d6cc83fe7fd6241f8ac45e7bc196942c9d04b59971ce6a0cb7558aa3efddbb` | submission document |
 | `../01-commit-messages.md` | `898f3b6ad426ba7c154b01ea4e37480e4311d8318bebd994b9e1f972fd369122` | submission document |
 | `../02-maintainers-proposal.md` | `30ae8a95b2786b3d60153f26fc4b8bf7b0c4b38b78e06e82e60b4a7f26d05c31` | submission document |
 | `../03-rationale-tree-placement.md` | `7fdf3c34343a6004d69fc8cd55a055db02b0e471f363c91270e54889179350fa` | submission document |
 | `../04-validation.md` | `2ce48b4ba668ac838333d7ad339f9b7be9a7036f4fb765219e815372ba972f8b` | submission document |
-| `../05-release-line.md` | `d625d662ec1c047691f0c7fc8760e5323df4afa59f4976f032b312f99758608f` | submission document |
-| `../06-dts-series-dependency.md` | `ab4303c403b2e8d07c69d271e80b15061b59f95fe4ca38704c36a89832d4a064` | submission document |
+| `../05-release-line.md` | `c446e8e29d12b06886d5a64a5274714f79d3a1342628bad98cf1bd869aef6338` | submission document |
+| `../06-dts-series-dependency.md` | `9ada4d2258f76684b29ea29ef4fe9b208557cc594d3534596b518b29eef61163` | submission document |
 | `../07-dts-upstream-bindings.md` | `a06fc7b78b6fa455e9d16634ae87cca89c5b3f6e77197cafeab256cc2e090284` | submission document |
 | `../README.md` | `5ef44678e93f23f8286c507c29811f77e90274d334824f6336605e0ccd5b1c2f` | submission document |
 | `../commit-messages/0001-arm-mach-hisilicon-luofu.txt` | `766990284609fe095e6d971fc1414972899aa2d5f8d0ff6048a9e1a4415b2ad5` | per-patch commit-message draft (provenance) |
@@ -72,10 +80,10 @@ commit).
 | `../commit-messages/0024-net-pie-completion-decode-luofu.txt` | `4f0ed10cb5849f9ecc27eb523714f4a04c833f668a6773fd8b91fd88e5938814` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0025-net-lsw-egress-luofu.txt` | `18f99bae18c640b3b7c2e6248469f9e16c4de2eba8f20f2b75354c0249c74204` | per-patch commit-message draft (provenance) |
 | `../commit-messages/0026-net-gmac-bdinfo-mac-nvmem.txt` | `bc31ff38703abd5e0c9e1d835943dfd41f5a3209448d4232beb07c1d915a6db8` | per-patch commit-message draft (provenance) |
-| `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | `33956380db9ca5c7b91404596d6078d2f35e4a349978e41e4a1c5d5b9b5155fa` | DTS-series entry DTS-0001 (companion of 0018) |
+| `../dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch` | `1fd1d10ac39fad233e8e2dfa682bc84446536a39c8221e44394563e8d16c0117` | DTS-series entry DTS-0001 (companion of 0018) |
 | `../release-line/EXCLUDED.txt` | `35501a8366bb3404faaf6a3c3b0bb5bce684ebd6e36a2cee03a95a31b1b6895e` | release-line manifest/classification |
-| `../release-line/INCLUDED.txt` | `cd7ae90c8791700661bf017742f7f46b3c66d12865fdadb05a7b9fab89351b2e` | release-line manifest/classification |
-| `../release-line/manifest.tsv` | `9893116668b68d7f8bd3b52b9f3b9e7b2e2ac9e4e2a9be56e9b5e6cff45821fe` | release-line manifest/classification |
+| `../release-line/INCLUDED.txt` | `da4966aac90448cfe4e903f52792da18b6df4f0f2b01f73d53ba8a440c1511e4` | release-line manifest/classification |
+| `../release-line/manifest.tsv` | `17d714be7733af092eb4859b1e0830a3283e0c5c5ca9ef7b8732e01de14e4cf4` | release-line manifest/classification |
 | `../series/0001-arm-mach-hisilicon-luofu.patch` | `c5eef73ce928b2e9f1bd0f397c3164d6b7a108fc930ccf7e537b184c81eee08b` | kernel review-form patch |
 | `../series/0002-arm-kconfig-textofs.patch` | `bbb0266e2230d1c7e11ea616cd2f5591e1e3e043f042a62bc0c871f802597ad5` | kernel review-form patch |
 | `../series/0003-arm-textofs-nonimmediate.patch` | `3bdcf2bcee6c8a6ceece7ca1ec357702230b979eae79578d0d67cc479c05befe` | kernel review-form patch |
@@ -138,7 +146,7 @@ commit).
 | `../validation/tree-diff.log` | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` | validation log |
 | `../validation/tree-equivalence.txt` | `7a399c88d8c6aad4e39f3553c6c4b56986823f6c666bc87c35be41d74845b2a2` | validation log |
 | `../validation/version.txt` | `fca6872c788884dd9df279d37e972d76924f2426be56259c9c451a47ae93f95e` | validation log |
-| `README.md` | `5d61026019a1c20ff1663d4220cdfb309d493a6718d7c79aa18fbcfd90b63a69` | submission document |
+| `README.md` | `508eba105fdde02fced68865ea69d03fbd9ee4e732aa25bb325de394ee130caa` | submission document |
 | `TESTED-BY-POLICY.md` | `7ca6265ab90389437cab7b21ea4280aa50d8be467fca35b379b59579fb0e4071` | submission document |
 | `cover-email-draft.md` | `2f01e0a34c28fbe4a1beb715849ccb3ea2cdd576fa4f0f22a1cb2e05d640b1b8` | submission document |
 
@@ -149,7 +157,7 @@ commit).
     # 2. kernel review form (mbox files carry mail headers)
     git am ../series/*.patch                    # 26/26, identical trees
     # or: patch -p1 -i each patch                # 26/26, 3 offsets, 0 fuzz
-    # 3. release line (55 patches; drops the 11 bench-only SMP diagnostics)
+    # 3. release line (56 patches; drops the 11 bench-only SMP diagnostics)
     ../tools/check-release-line.sh --use-tree <pristine> <workdir>
     # 4. review-form replay + checkpatch + tree equivalence
     ../tools/run-validation.sh --use-tree <pristine> <workdir>
@@ -167,6 +175,9 @@ commit).
     # 7. regenerate the hash inventories, then verify this package's manifest
     #    (validation/sha256sums.txt: 93 entries; MANIFEST.sha256: 105 entries)
     (cd submission && sha256sum -c MANIFEST.sha256)
+    # v3 release-line evidence (not part of the hand-off manifest):
+    #    ../validation/release-line-v3/ (19 logs: summary, patch/git-apply,
+    #    offsets, DTS cpp/dtc stderr, compiled DTBs, W23 filter log)
 
 ## Tested-by policy (summary; full text in TESTED-BY-POLICY.md)
 

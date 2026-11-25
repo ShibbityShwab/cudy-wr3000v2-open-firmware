@@ -78,7 +78,7 @@ must_grep "$LANE/src/hi5622_data_tx.c" "module_param_named(data_tx_protect," "da
 must_grep "$LANE/src/hi5622_data_tx.c" "module_param_named(data_tx_timeout_ms," "data_tx_timeout_ms module param"
 must_grep "$LANE/src/hi5622_data_tx.c" "fail-closed default" "fail-closed default documented in code"
 must_not_grep "$LANE/src/hi5622_data_tx.c" "hi5622_data_tx_enable = 1" "data_tx default is not 1"
-must_not_grep "$P" "BEGIN RSA PRIVATE KEY" "patch has no private key"
+must_not_grep "$P" "BEGIN RSA PRIVATE[ ]KEY" "patch has no private key"
 must_not_grep "$P" "wpa_hexdump\|print_hex_dump\|%*phN" "patch never hexdumps a frame/key"
 if find "$LANE" -type f \( -name '*.ko' -o -name '*.bin' -o -name '*.o' -o -name '*.fw' \) | grep -q .; then
 	say "  FAIL lane contains a binary artifact"

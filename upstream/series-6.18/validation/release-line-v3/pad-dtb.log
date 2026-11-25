@@ -1,0 +1,2 @@
+pad-dtb: /tmp/upstream-v3-release-line/logs/luofu-r116.dtb.padded -> 12728 bytes (8-byte aligned totalsize)
+pad-dtb: /tmp/upstream-v3-release-line/logs/luofu-r116.series.dtb.padded -> 12560 bytes (8-byte aligned totalsize)
