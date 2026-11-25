@@ -37,6 +37,17 @@ hashes the pre-strip DWARF `comp_dir`) depends on the build directory. Rebuilds
 in another directory are code/param identical but carry a different sha - quote
 the sha of the exact baked file.
 
+**Image integration (cross-lane, NOT fired):** this exact artifact was baked
+into FINAL IMAGE #2 by the task-159 lane (opensource `58e3abb`; container
+`8ba1ad22...`, rootfs UBI `31e7a39c...`, kernel slice `13e81214...` unchanged,
+verify 84/84).  The copy installed in the image is the rstrip/symtab-stripped
+form: 328,788 B sha256 `b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e`
+(same `.text`, same 57 params).  The image uci policy carries
+`hi5622.main.rx_refill_wm=75` (inert until the attended `dp_rx_arm`) and its
+39-arg insmod line with the association gates fail-closed.  See
+[BUILD-NOTES.md](BUILD-NOTES.md) section 7 and
+[evidence/image-integration.txt](evidence/image-integration.txt).
+
 ## New module parameter
 
 ```

@@ -239,6 +239,16 @@ Independent rebuild at a different host path: `.text`, `.rodata` and modinfo
 params byte-identical; only the 20-byte GNU build-id differs (path hash embedded
 in the pre-strip DWARF). Quote the sha of the exact baked file.
 
+**Image integration (cross-lane, not fired):** the task-159 lane baked this
+artifact into FINAL IMAGE #2 (opensource `58e3abb`; container `8ba1ad22...`,
+rootfs UBI `31e7a39c...`, kernel slice `13e81214...` unchanged, verify 84/84,
+3 bakes byte-identical).  Installed rootfs copy: 328,788 B sha
+`b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e` - the
+rstrip/symtab-stripped form of this artifact (`.text` identical, same params).
+The image policy passes `rx_refill_wm=75` explicitly and keeps the association
+gates fail-closed; full record in
+[BUILD-NOTES.md](BUILD-NOTES.md) section 7.
+
 ---
 
 ## 7. Bench ladder and tuning (the Lead fires)

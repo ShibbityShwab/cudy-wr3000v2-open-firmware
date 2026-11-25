@@ -10,6 +10,17 @@ stripped **347,388 B sha256 `d2c608e7...`**, 57 params (identity in
 [BUILD-NOTES.md](BUILD-NOTES.md)); new param `rx_refill_wm` (percent of ring
 depth, default 75, 0 = off, >100 clamps to 100).
 
+**Delivery path (cross-lane):** the same artifact is baked into FINAL IMAGE #2
+(task-159, opensource `58e3abb`, verify 84/84) as the rstrip/symtab form
+328,788 B sha `b4c076bf...` (`.text` identical).  The image's uci policy
+`/etc/config/hi5622` already carries `option rx_refill_wm '75'` and the full
+39-arg insmod line, so a bench session from the image does **not** need to add
+the parameter by hand: boot with `autoload=0` (bench default), run
+`/etc/init.d/hi5622-wifi start` (or `hi5622-load`) for the attended load, then
+use the rungs below.  The association gates remain fail-closed 0 in the image
+policy; the RX consumer still needs the explicit `dp_rx_arm` write.  See
+[BUILD-NOTES.md](BUILD-NOTES.md) section 7 / [../wifi-final-image-2/](../wifi-final-image-2/).
+
 ## 1. Host ladder (automated, this lane; all PASS)
 
 Run `./tools/run-host-tests.sh` - **127 checks, 0 failures** (log:

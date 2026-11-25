@@ -1,0 +1,75 @@
+# Image integration record - wifi-rx-watermark artifact -> FINAL IMAGE #2
+# Cross-lane: task-156 (this lane) produced/verified the module; task-159
+# (wifi-final-image-2 lane) baked it into the image and verified the image.
+# Host-only: nothing was flashed, booted or written to a device by either lane.
+# Source records (committed):
+#   opensource/docs/incoming/wifi-final-image-2/HASHES.txt
+#   opensource/docs/incoming/wifi-final-image-2/VERIFY.txt
+#   opensource/docs/incoming/wifi-final-image-2/build-evidence/
+
+image              = FINAL IMAGE #2 (wifi-final-image-2, task-159)
+image_docs_commit  = opensource 58e3abb (docs/incoming/wifi-final-image-2/)
+superseded_image   = 0d9429ec... (same image with the pre-watermark ab9e18a4 module)
+image_verify       = 84/84 PASS; 3 recorded bakes byte-identical
+
+container_size     = 7,188,799 B
+container_sha256   = 8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
+rootfs_ubi_size    = 3,801,088 B
+rootfs_ubi_sha256  = 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
+kernel_slice_size  = 3,372,638 B (UNCHANGED)
+kernel_slice_sha256= 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_slot_sha256 = 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e
+                     (8,650,752 B kernelb/mtd12; NOT a container member,
+                      NOT written by a rootfs-only flash)
+
+module_artifact_path = /tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko
+                       (durable gitignored copy: build/wifi-rx-watermark/)
+module_artifact_size = 347,388 B
+module_artifact_sha  = d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6
+module_artifact_params = 57 (baseline 56 + rx_refill_wm)
+module_installed_path = /lib/modules/6.18.60/hi5622_wifi.ko
+module_installed_size = 328,788 B
+module_installed_sha  = b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
+module_text_size      = 146,448 B (.text; installed == artifact, only symbols/debug
+                       removed by the image's rstrip/symtab strip)
+module_carrier        = corrected mgmt-TX carrier (raw HCC g0 id6: 12-B HCC header
+                        + 48-B device TX control + inline frame); superseded
+                        host-internal WAL 0x01F2 carrier log string ABSENT
+
+boot_policy = uci /etc/config/hi5622:
+              option autoload '0'        (bench default: attended load only)
+              option rx_enable '1'
+              option rx_refill_wm '75'   (percent of ring depth; inert until the
+                                          operator writes dp_rx_arm - fail-closed)
+              association gates mgmt_tx/mgmt_rx/sta_ops/eapol_rx/sta_user_del/
+              data_tx = 0 (fail-closed)
+              full 39-arg insmod policy in /etc/modprobe.d/hi5622-wifi.conf
+              (rx_refill_wm=75 already included; + /usr/sbin/hi5622-load maps
+              uci -> insmod and verifies the param)
+
+which_sha_to_quote = module_artifact_sha for the module/source identity;
+                     module_installed_sha for the image/rootfs artifact.
+                     Same code (compare .text) under different strip levels.
+
+nothing_fired = true
+
+# ===========================================================================
+# INDEPENDENT RE-HASH BY THIS LANE (host-only, no device; 2026-11-25)
+# Source artifact directory: /home/shibbityshwab/wifi-final-image-2-artifacts/
+# (the image lane's local, never-committed bake products)
+# ===========================================================================
+rehash_container     = 8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8
+                       (7,188,799 B) MATCHES the image record
+rehash_rootfs_ubi    = 31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d
+                       (3,801,088 B) MATCHES
+rehash_kernel_slice  = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+                       (3,372,638 B, UNCHANGED) MATCHES
+rehash_installed_mod = b4c076bf37099b21bcb5055f23678ffee38e86da9b3975e36d5c50025b31065e
+                       (328,788 B) MATCHES
+installed_module_text = 146,448 B .text, byte-identical to
+                       /tmp/wifi-rx-watermark-artifact/hi5622_wifi.stripped.ko .text
+installed_module_params = 57; 'rx_refill_wm: (uint)' present
+installed_module_strings = 'RX watermark:' and 'watermark refill' present
+verdict = the baked module is this lane's watermark build (code identical), the
+          image members match the task-159 records, and the kernel slice is the
+          unchanged 13e81214 slice (rootfs-only change).
