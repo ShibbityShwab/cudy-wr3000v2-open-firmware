@@ -1,0 +1,91 @@
+PASS  firmware sha256 pinned
+PASS  firmware length pinned
+PASS  table A key 0x0124 -> worker 0x841B9
+PASS  dispatcher prologue/header fetch window
+PASS  dispatcher reads module index payload[3]
+PASS  dispatcher key read u16 payload+0x14
+PASS  dispatcher passes subkey u8 payload+0x16 and body payload+0x18
+PASS  dispatcher status return (0 ok, non-zero logged/returned)
+PASS  table A/B literals in the dispatcher
+PASS  worker prologue
+PASS  worker per-link gate module+0x4B0
+PASS  worker return 0x64 when per-link is NULL
+PASS  worker validate call args (band=body[0], channel=body[2], &index)
+PASS  worker return 0x3E8 after a validation failure
+PASS  worker store window (body[2]->+0x10, body[0]->+0x11, idx->+0x13, body[1]->+0x12)
+PASS  worker post-store call sequence (FDCE4, F4FD8, C40684, optional C97008)
+PASS  worker clears ctx+0x17 and returns 0
+PASS  sibling worker CA 0x84261 = table A key 0x03E4
+PASS  validate helper window
+PASS  validate band-0 count = 14
+PASS  validate band-1 count = 29
+PASS  validate failure return 0x3E8
+PASS  validate table literals (band1 then band0)
+PASS  band-0 channel table = 1..14
+PASS  band-1 channel table = 36,40,...,196
+PASS  table stride is 4 bytes (word rows)
+PASS  chan_index(band1,ch36) == 0
+PASS  chan_index(band1,ch40) == 1
+PASS  chan_index(band1,ch196) == 28
+PASS  chan_index(band0,ch1) == 0
+PASS  chan_index(band0,ch6) == 5
+PASS  chan_index(band0,ch14) == 13
+PASS  chan_index rejects band1 ch37 / band0 ch15
+PASS  ch36 word = 0x00000124
+PASS  ch40 word = 0x01000128
+PASS  ctx word field decode 0x00000124 = channel 36 band 1 field 0 index 0
+PASS  OLD gate (byte+0x13==1) REFUSES the real ch36 store
+PASS  OLD gate PASSES ch40 (index 1) - the zero-rebuild control
+PASS  CORRECTED gate accepts the real ch36 store
+PASS  CORRECTED gate rejects a stale/zero word
+PASS  CORRECTED gate rejects a wrong-channel word
+PASS  0xFDCE4 window (band/field class -> VAP+0x1A0)
+PASS  0xFDCE4 reads module+0x11/+0x12 and writes [module+0x190]+0x1A0
+PASS  0x944DE window (5 GHz RF-program gate)
+PASS  0x944DE checks band==1, module+0x440==1, returns bandobj+0xEC8
+PASS  0xBCDC4 = lookup(id) -> [ctx+0x4B8] (band object)
+PASS  0x40684 window: type==2 and 0x944DE==1 gate, then band/field/channel
+PASS  0x40684 calls 0x101890 with (band, field, channel)
+PASS  0x101890 is band-1 only (cmp r0,#1; return 0 otherwise)
+PASS  0x101890 parameter table literal = CA 0x10BE68
+PASS  rf_program_ran model (type 2 + both gates)
+PASS  PD4 copy differs only in the boot epilogue + the 0x108240 cave (4 B + the 64-byte stub, 59 diff bytes)
+PASS  PD4 identical to FIRMWARE in the decode window worker_prologue
+PASS  PD4 identical to FIRMWARE in the decode window worker_perlink
+PASS  PD4 identical to FIRMWARE in the decode window worker_ret100
+PASS  PD4 identical to FIRMWARE in the decode window worker_valargs
+PASS  PD4 identical to FIRMWARE in the decode window worker_err1000
+PASS  PD4 identical to FIRMWARE in the decode window worker_store
+PASS  PD4 identical to FIRMWARE in the decode window worker_post
+PASS  PD4 identical to FIRMWARE in the decode window worker_tail
+PASS  PD4 identical to FIRMWARE in the decode window validate
+PASS  PD4 identical to FIRMWARE in the decode window validate_tables
+PASS  PD4 identical to FIRMWARE in the decode window fdce4
+PASS  PD4 identical to FIRMWARE in the decode window fdce4_store
+PASS  PD4 identical to FIRMWARE in the decode window gate944
+PASS  PD4 identical to FIRMWARE in the decode window bcdc4
+PASS  PD4 identical to FIRMWARE in the decode window c40684
+PASS  PD4 identical to FIRMWARE in the decode window c101890
+PASS  PD4 identical to FIRMWARE in the decode window c101890_lit
+PASS  PD4 identical to FIRMWARE in the decode window dispatcher
+PASS  PD4 identical to FIRMWARE in the decode window dispatcher_key
+PASS  PD4 identical to FIRMWARE in the decode window dispatcher_call
+PASS  PD4 identical to FIRMWARE in the decode window dispatcher_tail
+PASS  PD4 identical to FIRMWARE in the decode window table_literals
+PASS  host module sha256 pinned (2.4.15 build)
+PASS  host module length pinned
+PASS  host symbol wal_check_and_release_msg_resp at 0x109370 (104 B)
+PASS  host symbol wal_set_host_msg_response_by_addr at 0x1269d8 (216 B)
+PASS  host symbol wal_send_cfg_event at 0x126c98 (1140 B)
+PASS  host symbol wal_alloc_cfg_event at 0x126ab0 (340 B)
+PASS  host code window check_and_release
+PASS  host code window set_host_resp
+PASS  host code window send_cfg_event
+PASS  host code window send_request_hdr
+PASS  host code window d2h_resp_complete
+PASS  host code window vendor_chan_send
+PASS  wal_send_cfg_event writes the request header {flag@0, u16 len@6, u32 seq@8} then the body at +12
+PASS  D2H response completion path copies the answer and calls wal_set_host_msg_response_by_addr
+PASS  vendor channel helper sends cmd 0x0124 and then blocks in wal_check_and_release_msg_resp
+
+fw_chan_worker_re: 89/89 PASS

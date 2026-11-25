@@ -1,0 +1,49 @@
+== firmware 0x0124 channel-config worker: dispatch and store ==
+  firmware: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+  sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b  (928920 B, CPU = file + 0x40000)
+
+[1] g0 id1 dispatcher CA 0x043d58
+    payload+3 = module index -> ctx = lookup(0, payload[3]) (CA 0x0fe578)
+    key = u16 payload+0x14; scan table A CA 0x10c23c (217 x {u16 key; u16 pad; u32 worker})
+    then table B CA 0x103bf8 (88 entries); key 0x0124 -> worker CA 0x0841b9
+    subkey = u8 payload+0x16 (worker ignores it); body = payload+0x18
+    worker return: 0 = ok; non-zero is logged and returned as the dispatcher status
+    (a sibling worker CA 0x084261 handles key 0x03E4 with the same body store but no RF calls)
+
+[2] worker CA 0x0841b8
+    if module+0x4B0 == 0: log, return 0x64 (no store)
+    validate(band=body[0], channel=body[2], &index) (CA 0x10172c)
+    if status != 0: log, return 0x3e8 (no store)
+    store order: ctx+0x10 = body[2] (channel)
+                 ctx+0x11 = body[0] (band)
+                 ctx+0x13 = TABLE INDEX returned by validate
+                 ctx+0x12 = body[1] (the vendor chip-id/per-VAP byte)
+    then: 0x0fdce4(module) 0x0f4fd8(module+0x4AC) 0x040684(module, perlink+0xE20, perlink)
+          0x097008(module) only when perlink+0x1C8 != 0
+          ctx+0x17 = 0; return 0
+
+[3] channel validation CA 0x10172c
+    band 0: 14-entry table CA 0x117b48 = channels 1..14
+    band 1: 29-entry table CA 0x117ad4 = channels 36..196 (5 GHz)
+    on a match: return 0 and *out = the index in that table
+    on a miss/invalid band: return 0x3e8 (no *out write)
+
+[4] post-store work (all after the ctx stores; none of it changes the ctx word)
+    0x0fdce4: writes the VAP object (+0x1A0 bits 1..7) from the band/field class
+    0x0f4fd8(module+0x4AC): per-user bookkeeping path (no RF call)
+    0x040684: only when module[4] (create type) == 2, and
+              0x0944de(module) == 1  ->  0x101890(band,field,channel)
+        0x0944de requires module+0x11 == 1 (band 1) and module+0x440 == 1
+        and band_object+0xEC8 == 1 (band object = lookup(ctx[0])+0x4B8)
+    0x101890 is the 5 GHz-only RF program: it re-validates via CA 0x10172c,
+        selects a per-channel-index parameter block from CA 0x10be68 and
+        issues the RF-side work through CA 0x101650/0x101BD8 (return 1)
+    0x097008: called when per-link+0x1C8 != 0; applies the channel word
+        to the band/link state (both bands)
+
+== the bench word 0x00000124 ==
+  it is not the command id: it is the worker's store for band 1,
+  channel 36, field 0, index 0 (channel-table index of ch36).
+  An index of 0 is the EXPECTED, successful value; the previous
+  'valid must be 1' gate could never pass for ch36 and its G6b
+  REFUSED line is a host-side gate bug.

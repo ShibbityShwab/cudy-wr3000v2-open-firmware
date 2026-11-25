@@ -1,0 +1,5 @@
+# artifact hashes for lane wifi-fw-chan-worker (task-180), captured 2026-11-27
+# local vendor artifacts are read in place; they are never committed.
+7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b  /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin  (local) vendor firmware image
+cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1  /home/shibbityshwab/pd4-rebuilt.bin  (local) PD4 bench copy
+22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2  /home/shibbityshwab/recovery-extract/lib/hisilicon/ko/hi5622v100_wifi.ko  (local) vendor host module 2.4.15

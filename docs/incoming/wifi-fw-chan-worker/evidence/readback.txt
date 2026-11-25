@@ -1,0 +1,32 @@
+== read-only BAR0 pack (BAR0 = CPU + 0x6b8000) ==
+  object                   CPU         BAR0        len  expected / meaning
+  module table slot 0      0x00171458 0x00829458 4    0x00119758 (context array base)
+  module table base u16    0x00172504 0x0082a504 2    0x0000 -> ctx0 = slot0 + base
+  ctx0 channel word        0x00119768 0x007d1768 4    0x00000124 for band1 ch36 (index 0)
+  ctx0 index byte          0x0011976b 0x007d176b 1    0 for ch36 (the decoded table index)
+  ctx0 create type         0x0011975c 0x007d175c 1    2 (VSF_IFTYPE_AP create type)
+  ctx0 VAP object          0x001198e8 0x007d18e8 4    non-zero after vap_add (G6a: 0x01010f18)
+  ctx0 per-link            0x00119c08 0x007d1c08 4    0x00175a18 (bank1 context) in G6a
+  ctx0 band object         0x00119c10 0x007d1c10 4    0x0015e570 (band 1 object) in G6a
+  ctx0 5G-RF gate byte     0x00119b98 0x007d1b98 1    1 = the 0x101890 RF program runs
+  band1 publish word       0x0015ff70 0x00817f70 4    0x00175a18 (live bank1)
+  band0 publish word       0x0015e408 0x00816408 4    0x00174bf0 (live bank0)
+  band1 object +0xEC8      0x0015f438 0x00817438 1    1 = the 0x101890 RF program runs
+  band1 object +0x19A1     0x0015ff11 0x00817f11 1    writer source of module+0x440 [I]
+  per-link +0x1C8          0x00175be0 0x0082dbe0 1    non-zero = the 0x97008 channel switch runs
+
+  two-step paths (read the pointer byte/word first, then +offset):
+    ctx0+0x4B0 -> per-link CA          ; +0x1c8 -> 0x97008 flag
+    ctx0+0x4B8 -> band object CA       ; +0xec8 -> 0x944DE gate, +0x19a1 -> module+0x440 source
+
+== 5 GHz RF-program decision (all reads are read-only) ==
+  module_type = ctx0+0x004 ; m440 = ctx0+0x440 ; ec8 = bandobj+0xEC8
+  ran  = (module_type==2 && m440==1 && ec8==1) -> the worker's
+         0x40684 call ran 0x101890 (the 5 GHz RF program)
+  skipped otherwise, SILENTLY: the worker still returns 0 and the
+  ctx word is still stored.  class:
+    module_type != 2  -> the VAP create type is not the AP type
+    m440 != 1         -> module+0x440 (band-config byte) not applied
+    ec8 != 1          -> the band object's +0xEC8 not set
+  both 1 and still no beacon -> the RF program ran; the remaining gap
+  is inside 0x101890/0x5FA6C or the beacon engine, not the worker.

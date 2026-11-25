@@ -1,0 +1,18 @@
+== firmware channel tables (validate helper CA 0x10172c) ==
+band 0: CA 0x117b48  14 entries (stride 4)    1   2   3   4   5   6   7   8   9  10  11  12  13  14
+band 1: CA 0x117ad4  29 entries (stride 4)   36  40  44  48  52  56  60  64 100 104 108 112 116 120 124 128 132 136 140 144 149 153 157 161 165 184 188 192 196
+
+== module channel context word (u32 at module ctx+0x10) ==
+  byte +0x10 = channel   byte +0x11 = band
+  byte +0x12 = body[1]   byte +0x13 = CHANNEL-TABLE INDEX (not validity)
+  band 1 ch  36 -> index  0  word = 0x00000124  (channel=36 band=1 field=0 index=0)  old_gate(valid==1)=refuse
+  band 1 ch  40 -> index  1  word = 0x01000128  (channel=40 band=1 field=0 index=1)  old_gate(valid==1)=PASS
+  band 1 ch 196 -> index 28  word = 0x1c0001c4  (channel=196 band=1 field=0 index=28)  old_gate(valid==1)=refuse
+  band 0 ch   1 -> index  0  word = 0x00000001  (channel=1 band=0 field=0 index=0)  old_gate(valid==1)=refuse
+  band 0 ch   6 -> index  5  word = 0x05000006  (channel=6 band=0 field=0 index=5)  old_gate(valid==1)=refuse
+  band 0 ch  14 -> index 13  word = 0x0d00000e  (channel=14 band=0 field=0 index=13)  old_gate(valid==1)=refuse
+
+== worker return codes (the pre-store gates) ==
+  0x064 = module+0x4B0 (per-link context) is NULL - no store
+  0x3e8 = channel validation failed (band not 0/1 or channel not in the band's table) - no store
+  0      = body stored and the post-store device work ran (see --decode); the ctx word is then exactly ctx_word()
