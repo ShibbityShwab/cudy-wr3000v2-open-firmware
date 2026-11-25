@@ -292,6 +292,19 @@ KO_SYMS = [
     ("hmac_alg_sr_config_param", 0x963CC),
     ("hmac_sr_bss_color_change_event", 0x95D6C),
     ("hmac_config_set_beacon", 0x745A0),
+    # the ALG parameter plane (OFDMA / sounding / SR): the vendor host
+    # builds these params as text tokens and the scheduler consumes them
+    ("wal_config_alg_cfg_param_host_entry", 0xFC284),
+    ("alg_ofdma_config_param_output_entry", 0x84468),
+    ("alg_sounding_config_param_output_entry", 0x82BA8),
+    ("alg_sr_config_param_output_entry", 0x799EC),
+    ("alg_trigger_cfg_param_output_tb_ppdu_ofdma_ba_sw", 0x77FD0),
+    ("hmac_sounding_config_param", 0xF7E70),
+    ("hmac_sounding_config_user_copy", 0xF7C54),
+    ("hmac_alg_sr_config_param", 0x963CC),
+    ("hmac_sr_cfg_param_bss_color", 0x961D4),
+    ("mac_set_sr_ie", 0x256D0),
+    ("wal_hipriv_multiap_sr_enable", 0x114A38),
 ]
 
 # --- our own host-built frames (protocol bytes, not vendor bytes) ----------

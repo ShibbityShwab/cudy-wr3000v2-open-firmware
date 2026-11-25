@@ -21,9 +21,11 @@ Deliverables:
 | [TABLES.md](TABLES.md) | T1-T12: every address, table row, worker instruction, body layout, probe address, frame byte |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | the read-only probe pack (R0) and the AX-event rung (R1), the zero-rebuild BSS-color observation (R2), PASS/FAIL and abort rules |
 | [tools/fw_ax_advanced_re.py](tools/fw_ax_advanced_re.py) | re-derives every claim from the pinned artifacts (`--selftest` 210/210 PASS) |
-| `src/` | the portable host frame model for the AX config events + ALG text body (kernel/host compile the same code) |
-| `tools/run-host-tests.sh` | the no-device test entry point |
-| evidence/ | `selftest.txt`, `keys.txt`, `decode.txt`, `alg.txt`, `host.txt`, `frames.txt`, `probes.txt` |
+| `src/hi5622_ax_events.{c,h}` | the portable host frame model for the nine AX config events + the ALG text body (kernel/host compile the same code, fail-closed) |
+| `src/ax_events_selftest.c` | host selftest: 31 checks incl. the exact T12 frame bytes and every refusal path |
+| `BUILD-NOTES.md` | the integration contract for the implementation lane |
+| `tools/run-host-tests.sh` | the no-device test entry point (C model 31/31 + RE tool 221/221) |
+| evidence/ | `selftest.txt`, `keys.txt`, `decode.txt`, `alg.txt`, `host.txt`, `frames.txt`, `probes.txt`, `host-tests.txt` |
 
 Bottom line (details in REPORT.md):
 
