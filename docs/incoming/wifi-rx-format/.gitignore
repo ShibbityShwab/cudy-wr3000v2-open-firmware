@@ -1,0 +1,10 @@
+# lane build leftovers (the .ko is local evidence only)
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+.modules.order.cmd
+.module-common.o

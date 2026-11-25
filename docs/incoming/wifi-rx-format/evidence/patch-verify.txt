@@ -1,0 +1,30 @@
+# patch dry-run / apply against the final association + mgmt-carrier + watermark tree
+# regeneration: patch -p1 --dry-run < patches/0001-rx-format-hardening.patch
+checking file hi5622_dp.c
+checking file hi5622_dp_txrx.c
+checking file hi5622_dp_txrx.h
+checking file hi5622_rx_format.c
+checking file hi5622_rx_format.h
+checking file Kbuild
+# apply:
+patching file hi5622_dp.c
+patching file hi5622_dp_txrx.c
+patching file hi5622_dp_txrx.h
+patching file hi5622_rx_format.c
+patching file hi5622_rx_format.h
+patching file Kbuild
+# conflict markers: 0
+# patched source sha256:
+50722957d0bd7bae99e33021b1b207775c8519edfd7e773320b697f2223af5fd  hi5622_rx_format.c
+b0927aaa607b45a5f553f7893f5170d07feb731862355a69d2cf64545dadcca3  hi5622_rx_format.h
+a08910fbdafb6039b267cb868870d5bc80b5906bb947032d487c97e7ac594e9e  Kbuild
+a608958a5d549e13ecd8849544b31d2dca9251b832f963f001059caf3af94d78  hi5622_dp_txrx.c
+227205679d5633743af0bb729d8ab158244713f1a3aac47601d025ea9fd8b191  hi5622_dp_txrx.h
+fc22d8d994a1e008d1be683e951ef58292964e49149357b6c38fdc1a9162260d  hi5622_dp.c
+# base source sha256 (same files before the patch):
+a4d65594c9a3514346769d8cb8a0efe929c938c0b3f418bd7fa77c0189881df8  Kbuild
+76da6d4b3bd5ad6e165656bb9c9ade5a9ed6ef1df97a2dcf810bd0a2638b6d6e  hi5622_dp_txrx.c
+a74a993a9a89d87d92994e6cdb7a4ff258d43d1d0585d6ecb188612237279346  hi5622_dp_txrx.h
+89e3a1518c4b129c11e7cf722cfc3e460c2f48c052f39a1872e2ee804c557eb6  hi5622_dp.c
+# patch sha256:
+0f6eac054390489345d26bb9f93ac61237a3511f40859dca0487de361afc5bd1  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-rx-format/patches/0001-rx-format-hardening.patch

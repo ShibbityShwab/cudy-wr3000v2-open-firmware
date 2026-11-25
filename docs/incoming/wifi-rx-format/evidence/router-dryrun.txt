@@ -1,0 +1,28 @@
+== check: /sys/bus/pci/devices/0000:00:00.0 (read-only)
+driver  : none
+has boot: (dry-run)
+has hcc_status: (dry-run)
+has dp_status: (dry-run)
+has dp_rings: (dry-run)
+has dp_rx_arm: (dry-run)
+has dp_rx_drain: (dry-run)
+has dp_rx_probe: (dry-run)
+has dp_rx_capture: (dry-run)
+rx_enable=DRY: cat /sys/module/hi5622_wifi/parameters/rx_enable rx_clear_status=DRY: cat /sys/module/hi5622_wifi/parameters/rx_clear_status rx_drain_max=DRY: cat /sys/module/hi5622_wifi/parameters/rx_drain_max rx_refill_wm=DRY: cat /sys/module/hi5622_wifi/parameters/rx_refill_wm mgmt_rx=DRY: cat /sys/module/hi5622_wifi/parameters/mgmt_rx mgmt_tx=DRY: cat /sys/module/hi5622_wifi/parameters/mgmt_tx 
+note: run this only after the association ladder did
+      AP -> dp_setup -> dp_txq_sync -> dp_rx_arm in THIS load.
+== probe: dp_rx_probe (read-only RX format / device-write witness)
+DRY: cat /sys/bus/pci/devices/0000:00:00.0/dp_rx_probe
+== probe: dp_status head (read-only)
+DRY: cat /sys/bus/pci/devices/0000:00:00.0/dp_status
+== snapshot: 2569-11-25T06:39:54Z (read-only)
+-- golden page/mask/staging (expect page 0x86807fef, state CA 0x1, golden:1, staging 0)
+DRY: cat /sys/bus/pci/devices/0000:00:00.0/boot
+-- hcc_status head
+DRY: cat /sys/bus/pci/devices/0000:00:00.0/hcc_status
+-- dmesg markers
+DRY: dmesg | grep markers
+-- verdict for the record
+DRY: cat /sys/bus/pci/devices/0000:00:00.0/dp_rx_probe
+done: read-only, nothing written. If the golden page/state line deviates:
+STOP, do not retry in this load, power-cycle the Wi-Fi chip physically.

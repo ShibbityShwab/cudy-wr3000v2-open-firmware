@@ -1,0 +1,4 @@
+# host test: portable RX format model (lane wifi-rx-format, task-163)
+# regeneration: ./tools/run-host-tests.sh
+# cc: cc (GCC) 16.2.1 20260810
+132 checks, 0 failures

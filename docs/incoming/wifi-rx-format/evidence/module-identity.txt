@@ -1,0 +1,33 @@
+# RX-format-hardened module identity (host-built, NOT fired)
+stripped size: 356424 B
+0eadba355ac914c3ecf09dbe50b31d023ff0c7dbd56c2ba7a977f2cc79d5aacd  /tmp/rxfmt-artifact/hi5622_wifi.stripped.ko
+9fa4794c98310b40b579e38731af988ca06a847ce9adb842b309b329b7dc9d08  /tmp/rxfmt-artifact/hi5622_wifi.ko.unstripped
+params: 57
+# required symbols:
+0000ddd8 t dptx_rx_publish_one
+00010fe0 T hi5622_dp_rx_probe_show
+000130c0 T hif_rx_entry_encode
+000130f4 T hif_rx_entry_decode
+0001312c T hif_rx_entry_classify
+000131bc T hif_rx_cookie_pack
+00013224 T hif_rx_cookie_check
+00013270 T hif_rx_buffer_prepare
+00013310 T hif_rx_header_is_zero
+00013348 T hif_rx_buffer_witness
+000133f0 T hif_rx_hdr_parse
+000134a8 T hif_rx_refill_budget
+00013504 T hif_rx_cfg_expect
+# feature strings:
+dp_rx_probe
+DEVICE-WROTE-FRAMES (a received frame WAS DMA'd into host memory: the capture gap is the completion/report pointer path, not the entry/header format)
+MAC-WROTE-NOTHING (rings armed, config mirrored, no received frame has been DMA'd into host buffers in this load)
+dp_rx_probe: READ-ONLY RX format survey (no register write, no ring pointer moved; rx_enable not required)
+DP txrx: RX format self-check FAILED (%d) - MAC rings/config do not mirror the vendor contract; dp_setup fails closed, no RX pointer can be published
+DP txrx: bound - TX frame buffer %u B devva 0x%08x (host word + 16 B zero DMA header + MPDU); MSDU table CA 0x%08x; RX format self-check OK (%u buffers prepared, %u scrubbed); attrs dp_tx_frame/dp_tx_status/dp_rx_poll/dp_rx_capture/dp_rx_probe (read-only witness)
+dev_attr_dp_rx_probe
+hi5622_dp_rx_probe_show
+# .text vs the fired d2c608e7 tree (expected DIFFERENT: the patch adds code)
+136965bbc9709d3ed0e0dd40138367bd21333a9f74554f30b7062a2c255132e8  /tmp/rxfmt-art.text
+7403aaff764b620b35883e502135e1730fbae967ddace6c9ea8bda930a515af0  /tmp/rxfmt-fire.text
+text size: 151108 B
+text size: 146448 B

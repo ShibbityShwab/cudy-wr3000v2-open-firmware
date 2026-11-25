@@ -1,0 +1,9 @@
+# patched module build (host-only, 0 warnings) - ./tools/build-patched-module.sh
+# kernel tree: /home/shibbityshwab/openwrt-lab-upstream-target/.../linux-6.18.60
+# warning/error grep: 0
+== 4. strip and verify
+== RX-FORMAT-HARDENED module (host-built, NOT fired)
+artifact  : /tmp/rxfmt-artifact/hi5622_wifi.stripped.ko
+size      : 356424
+sha256    : 0eadba355ac914c3ecf09dbe50b31d023ff0c7dbd56c2ba7a977f2cc79d5aacd
+params    : 57

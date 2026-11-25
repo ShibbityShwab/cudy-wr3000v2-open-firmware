@@ -1,0 +1,10 @@
+# chain: the patched module's base tree is the fired FINAL IMAGE #2 association module tree
+# base tree: /tmp/wifi-rx-watermark-build/rebuild (./wifi-rx-watermark/tools/build-final-module.sh)
+# the base tree reproduces the fired module .text byte-for-byte:
+7403aaff764b620b35883e502135e1730fbae967ddace6c9ea8bda930a515af0  /tmp/rxfmt-base.text
+7403aaff764b620b35883e502135e1730fbae967ddace6c9ea8bda930a515af0  /tmp/rxfmt-fire.text
+# (baseline .text equal: YES)
+# baseline module (fired into FINAL IMAGE #2, never committed): ./build/wifi-rx-watermark/hi5622_wifi.stripped.ko
+baseline size: 347388 B
+# baseline sha256 (path-dependent build-id; .text is the fixed part):
+d2c608e7c8f578c2443b2dabc381cc660cdb12055ff682a662ab1a31eb609ab6  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-rx-watermark/hi5622_wifi.stripped.ko
