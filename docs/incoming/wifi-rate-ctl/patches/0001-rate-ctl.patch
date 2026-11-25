@@ -1,6 +1,6 @@
 diff -ruN a/src/h2d_send.c b/src/h2d_send.c
---- a/src/h2d_send.c	2026-11-24 13:40:04.226052207 +0700
-+++ b/src/h2d_send.c	2026-11-25 18:13:45.911942288 +0700
+--- a/src/h2d_send.c
++++ b/src/h2d_send.c
 @@ -175,8 +175,18 @@
  /* ------------------------------------------------------------------ */
  /* the send path                                                       */
@@ -127,8 +127,8 @@ diff -ruN a/src/h2d_send.c b/src/h2d_send.c
  }
  static DEVICE_ATTR_WO(h2d_send);
 diff -ruN a/src/h2d_send.h b/src/h2d_send.h
---- a/src/h2d_send.h	2026-11-24 11:23:37.360341587 +0700
-+++ b/src/h2d_send.h	2026-11-25 18:13:45.911859333 +0700
+--- a/src/h2d_send.h
++++ b/src/h2d_send.h
 @@ -17,6 +17,14 @@
   * multi-message session. */
  extern unsigned int hi5622_h2d_send_budget;
@@ -145,8 +145,8 @@ diff -ruN a/src/h2d_send.h b/src/h2d_send.h
  void hi5622_h2d_del_attrs(struct device *dev);
  
 diff -ruN a/src/h2d_send_logic.c b/src/h2d_send_logic.c
---- a/src/h2d_send_logic.c	2026-11-24 13:35:56.906390512 +0700
-+++ b/src/h2d_send_logic.c	2026-11-25 18:13:45.911825600 +0700
+--- a/src/h2d_send_logic.c
++++ b/src/h2d_send_logic.c
 @@ -115,6 +115,7 @@
  	case H2D_MSG_CTX_CREATE_T1:	return "ctx_create_t1";
  	case H2D_MSG_CTX_CREATE_T2:	return "ctx_create_t2";
@@ -197,8 +197,8 @@ diff -ruN a/src/h2d_send_logic.c b/src/h2d_send_logic.c
  		  struct h2d_frame *f, u8 *wire, u32 cap, u32 *total,
  		  enum h2d_err *err)
 diff -ruN a/src/h2d_send_logic.h b/src/h2d_send_logic.h
---- a/src/h2d_send_logic.h	2026-11-24 13:37:49.396406121 +0700
-+++ b/src/h2d_send_logic.h	2026-11-25 18:13:45.911758855 +0700
+--- a/src/h2d_send_logic.h
++++ b/src/h2d_send_logic.h
 @@ -54,6 +54,7 @@
  	H2D_MSG_CTX_CREATE_T1,	/* same frame, data[0]=type 1 (defaults+2nd alloc) */
  	H2D_MSG_CTX_CREATE_T2,	/* same frame, data[0]=type 2 (defaults) */
@@ -228,8 +228,8 @@ diff -ruN a/src/h2d_send_logic.h b/src/h2d_send_logic.h
   * default field B for H2D_MSG_CFG_CAL (ignored for every other message).
   * h2d_msg_build() is the shorthand with both sentinels. */
 diff -ruN a/src/hcc.c b/src/hcc.c
---- a/src/hcc.c	2026-11-24 11:24:04.280541490 +0700
-+++ b/src/hcc.c	2026-11-25 18:13:45.911993624 +0700
+--- a/src/hcc.c
++++ b/src/hcc.c
 @@ -34,6 +34,7 @@
  #include <asm/barrier.h>
  
@@ -249,8 +249,8 @@ diff -ruN a/src/hcc.c b/src/hcc.c
  				    payload_avail, wire_len,
  				    hcc_kernel_now_ms());
 diff -ruN a/src/hi5622_rate_ctl.c b/src/hi5622_rate_ctl.c
---- a/src/hi5622_rate_ctl.c	1970-01-01 07:00:00.000000000 +0700
-+++ b/src/hi5622_rate_ctl.c	2026-11-25 18:09:58.055752880 +0700
+--- a/src/hi5622_rate_ctl.c
++++ b/src/hi5622_rate_ctl.c
 @@ -0,0 +1,674 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
@@ -928,8 +928,8 @@ diff -ruN a/src/hi5622_rate_ctl.c b/src/hi5622_rate_ctl.c
 +}
 \ No newline at end of file
 diff -ruN a/src/hi5622_rate_ctl.h b/src/hi5622_rate_ctl.h
---- a/src/hi5622_rate_ctl.h	1970-01-01 07:00:00.000000000 +0700
-+++ b/src/hi5622_rate_ctl.h	2026-11-25 18:07:38.657210063 +0700
+--- a/src/hi5622_rate_ctl.h
++++ b/src/hi5622_rate_ctl.h
 @@ -0,0 +1,35 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -967,8 +967,8 @@ diff -ruN a/src/hi5622_rate_ctl.h b/src/hi5622_rate_ctl.h
 +
 +#endif /* HI5622_RATE_CTL_H */
 diff -ruN a/src/hi5622_rate_ctl_logic.c b/src/hi5622_rate_ctl_logic.c
---- a/src/hi5622_rate_ctl_logic.c	1970-01-01 07:00:00.000000000 +0700
-+++ b/src/hi5622_rate_ctl_logic.c	2026-11-25 18:11:29.608448173 +0700
+--- a/src/hi5622_rate_ctl_logic.c
++++ b/src/hi5622_rate_ctl_logic.c
 @@ -0,0 +1,489 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
@@ -1461,8 +1461,8 @@ diff -ruN a/src/hi5622_rate_ctl_logic.c b/src/hi5622_rate_ctl_logic.c
 +}
 \ No newline at end of file
 diff -ruN a/src/hi5622_rate_ctl_logic.h b/src/hi5622_rate_ctl_logic.h
---- a/src/hi5622_rate_ctl_logic.h	1970-01-01 07:00:00.000000000 +0700
-+++ b/src/hi5622_rate_ctl_logic.h	2026-11-25 18:11:29.607914938 +0700
+--- a/src/hi5622_rate_ctl_logic.h
++++ b/src/hi5622_rate_ctl_logic.h
 @@ -0,0 +1,228 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -1694,8 +1694,8 @@ diff -ruN a/src/hi5622_rate_ctl_logic.h b/src/hi5622_rate_ctl_logic.h
 +#endif /* HI5622_RATE_CTL_LOGIC_H */
 \ No newline at end of file
 diff -ruN a/src/Kbuild b/src/Kbuild
---- a/src/Kbuild	2026-11-24 11:24:08.035435163 +0700
-+++ b/src/Kbuild	2026-11-25 18:13:45.912012900 +0700
+--- a/src/Kbuild
++++ b/src/Kbuild
 @@ -12,6 +12,7 @@
  obj-m := hi5622_wifi.o
  hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
@@ -1706,8 +1706,8 @@ diff -ruN a/src/Kbuild b/src/Kbuild
  
  ccflags-y += -I$(src)
 diff -ruN a/src/main.c b/src/main.c
---- a/src/main.c	2026-11-24 12:37:24.522315019 +0700
-+++ b/src/main.c	2026-11-25 18:13:45.911969319 +0700
+--- a/src/main.c
++++ b/src/main.c
 @@ -22,6 +22,7 @@
  
  #include "hi5622_hcc.h"

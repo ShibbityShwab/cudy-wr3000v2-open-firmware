@@ -1,8 +1,10 @@
 patch: patches/0001-rate-ctl.patch
-size_bytes: 56801
-sha256: 140a808e8db0f845becbbb5ea60afc314acfe335bec8917945d9ebf9f453c5a8
+size_bytes: 56009
+sha256: 33e195f7e3cddab541e31fc6fab38cb26bb7e5571576dfe5dfea00b047df6bbe
 
 applied-to: a pristine source-only copy of ../wifi-h2d-send/src
+generator : tools/make-patch.py (deterministic: file timestamps are stripped,
+            two consecutive runs give the same sha256; --verify applies it)
 command   : patch -p1 --batch --forward -s -d <stage> -i patches/0001-rate-ctl.patch
 
 files_touched: 11 (new: 4)

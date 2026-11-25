@@ -40,12 +40,13 @@ the rate family is device-processed with the same wait-for-device flag
     BUILD-NOTES.md     the pinned patch chain and artifact identity
     patches/           the fail-closed driver patch
     src/               portable pure logic + host selftest
-    tools/             the decoder, test runner and build script
+    tools/             the decoder, patch generator, test runner, build script
     evidence/          decode selftest, generated tables, host/build evidence
 
 ## Reproduce
 
     python3 tools/decode_alg_engine.py --selftest
+    ./tools/make-patch.py --verify     # regenerate the driver patch (deterministic)
     ./tools/run-host-tests.sh          # decode selftest + C logic selftest
     ./tools/build-rate-ctl.sh          # apply patch to a staged copy + build
                                        # (host build; no device, no image)

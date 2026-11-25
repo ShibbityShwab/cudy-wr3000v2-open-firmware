@@ -35,7 +35,13 @@ Base source files, sha256 (as committed at wifi-h2d-send/src):
 If a base file drifts, tools/build-rate-ctl.sh's patch(1) dry-run fails -
 re-review the base lane before adapting the patch.
 
-## Patch delta (0001-rate-ctl.patch, 11 files: 7 edits + 4 new)
+## Patch delta (0001-rate-ctl.patch, 56,009 B, 11 files: 7 edits + 4 new)
+
+The patch is derived, not hand-written: tools/make-patch.py copies a
+source-only snapshot of the base tree, applies the edits, diffs, strips the
+file timestamps (so two runs give the same sha256:
+33e195f7e3cddab541e31fc6fab38cb26bb7e5571576dfe5dfea00b047df6bbe) and
+--verify re-applies it to a pristine base copy.
 
 | file | change |
 | --- | --- |
@@ -55,6 +61,7 @@ event frame posted through the existing SR-node / mailbox / budget path.
 ## Build + host tests (reproducible)
 
     cd opensource/docs/incoming/wifi-rate-ctl
+    ./tools/make-patch.py --verify # regenerate the patch (deterministic)
     ./tools/run-host-tests.sh      # decode + portable logic + frame cross-check
     ./tools/build-rate-ctl.sh      # stage + patch + host tests + kernel build
 
@@ -89,3 +96,14 @@ release; the deployment is a fresh golden boot.
 
     rm -rf /tmp/wifi-rate-ctl-build /tmp/wifi-rate-ctl-host
     ./tools/build-rate-ctl.sh
+## Publication / hygiene checks (2026-11-25)
+
+* all committed lane files are text (the generated table evidence is
+  printable-ASCII only; the earlier one-control-byte trailing value-table
+  entry was sanitized by the decoder);
+* no vendor binary/object/firmware/calibration byte is tracked: the patch is
+  GPL-2.0 source text, the evidence is derived annotations, the vendor .ko is
+  read in place from the local recovery extraction only;
+* fresh-clone verification: a git clone of the opensource submodule at the
+  lane tip runs tools/run-host-tests.sh green (decode 41/41, logic 70/70,
+  frame cross-check 144/144) and contains no binary files in the lane.
