@@ -118,11 +118,15 @@ inputs are the HT/VHT capability bits (+0x8A..+0x8D) [V].
 
 | per-link field | type | meaning |
 | --- | --- | --- |
-| +0x6B8 | ptr | 280 B beacon buffer (module 0xCE2 alloc) |
+| +0x6B8 | ptr | 280 B buffer, module 0xCE2 alloc, filled from the VAP on the first start (role [I]: beacon buffer) |
 | +0x6BC | ptr | aux object written from CA 0xEE394's result |
-| +0x6C0 | ptr | 92 B descriptor buffer (0x5C alloc) |
+| +0x6C0 | ptr | 92 B buffer (0x5C alloc, [0]=0xE4, [+4..+15]=0xFF) (role [I]: descriptor) |
 | +0x6C4 | u16 | 16 |
 | +0x6C6 | u8 | 1 = beacon state exists; 0 = never created |
+
+The pointer/field *existence and creation order* are [V]; the exact role names
+(beacon buffer / descriptor) are [I] from the shape (per-VAP allocation on the
+AP VAP-start path, freed only by the teardown CA 0x87024).
 | +0x11D | u8 | band index used by CA 0x4AF0C (0/1) |
 | +0xE20 | ptr | P (RF lane; -> band object at +0x1A00 when bound) |
 | +0x1C8 | u8 | after the channel worker, nonzero -> CA 0x97008 call |

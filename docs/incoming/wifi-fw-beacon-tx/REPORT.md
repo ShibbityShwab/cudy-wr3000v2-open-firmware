@@ -151,7 +151,10 @@ Worker CA 0x46394 [V]. After resolving the VAP/band context:
 ```
 
 So **perlink+0x6C6 = 1 is the firmware's per-VAP "beacon state exists" flag**
-and perlink+0x6B8 / +0x6BC / +0x6C0 are its buffers/objects. A second VAP start
+and perlink+0x6B8 / +0x6BC / +0x6C0 are its buffers/objects. The existence,
+sizes and creation/free sites are [V]; the role names ([I]) follow from the
+AP-only VAP-start path, the per-VAP lifetime (freed only by the teardown
+CA 0x87024) and the 0x310-byte object built from ctx+0x4AC in the same block. A second VAP start
 on the same band skips the allocation (the guard), and the stop path
 (CA 0x87024) frees the three pointers and clears the state. The AP config
 (0x0127) only stages VAP fields - the beacon objects appear at VAP start.
