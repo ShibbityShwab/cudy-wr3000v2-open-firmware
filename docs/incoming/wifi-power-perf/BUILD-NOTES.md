@@ -51,6 +51,23 @@ the pre-ACTIVE boot phase.
 | run-to-run variance | the 20-byte build-id only (second build `a937e3d7...` same size); compare `.text` when pinning |
 | artifact location | `/tmp/wifi-power-perf-build/artifact/hi5622_wifi.stripped.ko` (never committed) |
 
+## Base variants (both verified)
+
+Two valid base trees exist because the final association work tree also
+carries lane-local fixes on top of the tracked patch chain.  The patch was
+generated against the FINAL tree and applies cleanly to both:
+
+| base | base identity | patched build (0 warnings) |
+| --- | --- | --- |
+| `/tmp/sibling-mgmt-fix` (FINAL association tree; delivered identity) | stripped 344,372 B sha256 `ab9e18a4...`, 56 params | stripped **349,892 B** sha256 `0143c637...` (`evidence/build.txt`) |
+| tracked rebuild `/tmp/wifi-assoc-build/integ` (`wifi-stability/tools/build-association-module.sh`) | stripped 344,472 B sha256 `251d08f0...`, 56 params | stripped **349,996 B** sha256 `0d3b8a1f...` (`evidence/build-tracked-base.txt`) |
+
+The 100 B base difference and the 104 B module difference are the lane-local
+fixes in the final tree; both bases expose the same 60 params and the same
+attribute surface.  `build-patched-module.sh` defaults to the FINAL tree when
+present and gates the 56-param identity; set `BASE_TREE` for the tracked
+rebuild.
+
 **Not fired, not in any image.**  The Lead decides whether it is baked.
 
 ## Applying by hand

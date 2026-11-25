@@ -307,7 +307,8 @@ decoded frame, so only the first packet after an idle gap can be late.
 | portable logic selftest, 73 checks | `tools/pm_perf_selftest.c`, output `evidence/selftest.txt` | host PASS |
 | independent performance model | `tools/perf_model.py --write evidence/PERF-MODEL.md --check` | host PASS |
 | patch applies to the pinned base | `tools/run-host-checks.sh` step 3 | host PASS |
-| patched module cross-build, 0 warnings, 60 params, 349,892 B | `tools/build-patched-module.sh`, output `evidence/build.txt` | host PASS |
+| patched module cross-build, 0 warnings, 60 params, 349,892 B on the FINAL association tree | `tools/build-patched-module.sh`, output `evidence/build.txt` | host PASS |
+| same patch cross-builds on the tracked association rebuild (349,996 B) | `BASE_TREE=/tmp/wifi-assoc-build/integ ...`, output `evidence/build-tracked-base.txt` | host PASS |
 | vendor PM functions (sec 2) | `tools/vendor_pm_disasm.py --ko <local vendor .ko> <symbols...>` (local evidence; output never committed) | [V] |
 | bench timings quoted as [V*] | `wifi-perf-baseline` baseline + ledger 2026-11-27 20:30 | [V*] |
 

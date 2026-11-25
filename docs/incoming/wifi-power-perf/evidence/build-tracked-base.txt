@@ -1,0 +1,5 @@
+== apply 0001-power-perf-safe-subset.patch
+== patched params: 60
+build: OK stripped=349996 sha256=0d3b8a1f187aa4061776e1ac4d2f25d8c0636ecf5d252d981816891aa56b4dc0 params=60
+build: artifact /tmp/wifi-power-perf-build-tracked/artifact/hi5622_wifi.stripped.ko (LOCAL evidence only, never committed)
+build: log /tmp/wifi-power-perf-build-tracked/build.log
