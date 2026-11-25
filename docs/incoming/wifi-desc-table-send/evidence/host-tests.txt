@@ -1,0 +1,13 @@
+== 1. portable 0xF7 descriptor-table model (src/)
+== portable 0xF7 descriptor-table model
+frame:000100044400010000005a5a0000000001000000f70028005553000002000000000080001e002c0100000000ff1f0000010280001e002c0100000000ff000000ffffffff
+== 63 checks, 0 failures
+PASS
+== 2. ordering contract on the patched driver tree (/tmp/desctable-build)
+== ordering: 13 checks, 0 failures
+PASS
+== desc_table_send_test: 32 checks, 0 failures
+PASS
+== 3. built artifact contract (/tmp/desctable-artifact/hi5622_wifi.ko)
+artifact 360448 B sha256 aac6177ce84c972dafff67061951c2fe28e31a330f636c7a185c1511dfe800e3 params 60
+host tests PASS (no device contacted)

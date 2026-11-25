@@ -1,0 +1,601 @@
+diff --git a/Kbuild b/Kbuild
+--- a/Kbuild
++++ b/Kbuild
+@@ -34,6 +34,7 @@
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
++		 hi5622_desc_table.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+diff --git a/hi5622_scan_logic.h b/hi5622_scan_logic.h
+--- a/hi5622_scan_logic.h
++++ b/hi5622_scan_logic.h
+@@ -276,25 +276,36 @@
+  * beacon_static parameter is enabled; it lives here so the host selftest can
+  * assert the order without a kernel build.  The WAL carrier's own sequence
+  * already ends with its VAP start (after the AP config), so the kernel skips
+- * the extra VAP-start step for it. */
++ * the extra VAP-start step for it.
++ *
++ * wifi-desc-table-send (task-188) inserts the H2D 0x00F7 descriptor-table
++ * step after the VAP base (0x0064, which binds the module band object the
++ * worker tests) and before the 0x0124 channel post (whose band-1 RF
++ * programme evaluates the armed descriptor records at post time).  It is
++ * present only when the fail-closed desc_table parameter is exactly 1. */
+ enum hi5622_beacon_step {
+ 	HI5622_BEACON_STEP_NONE = 0,
+ 	HI5622_BEACON_STEP_VAP_ADD = 1,		/* mode-1 base: user_add only */
+-	HI5622_BEACON_STEP_CHAN = 2,		/* channel config, vendor first */
+-	HI5622_BEACON_STEP_SSID = 3,		/* provider frame 0 */
+-	HI5622_BEACON_STEP_AP_CFG = 4,		/* provider frame 1 */
+-	HI5622_BEACON_STEP_VAP_START = 5,	/* AFTER the AP config */
+-	HI5622_BEACON_STEP_MAX = 6,
++	HI5622_BEACON_STEP_DESC_TABLE = 2,	/* H2D 0x00F7 table (C1 fix) */
++	HI5622_BEACON_STEP_CHAN = 3,		/* channel config after 0xF7 */
++	HI5622_BEACON_STEP_SSID = 4,		/* provider frame 0 */
++	HI5622_BEACON_STEP_AP_CFG = 5,		/* provider frame 1 */
++	HI5622_BEACON_STEP_VAP_START = 6,	/* AFTER the AP config */
++	HI5622_BEACON_STEP_MAX = 7,
+ };
+ 
+ /* Fill out[] with the ordered plan; returns the number of steps.  enabled=0
+  * returns 0 (the legacy bench-proven path is executed instead, unchanged).
+- * vap_start=0 drops only the final VAP-start step (ladder isolation rung). */
++ * vap_start=0 drops only the final VAP-start step (ladder isolation rung).
++ * desc_table=0 (default) drops the 0x00F7 step; exactly 1 inserts it between
++ * vap_add and ap_chan; any other value is refused by the kernel layer before
++ * this plan is built. */
+ unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
+-				u8 *out, unsigned int max);
++				unsigned int desc_table, u8 *out,
++				unsigned int max);
+ 
+-/* Stable step name ("vap_add"/"ap_chan"/"ap_ssid"/"ap_cfg"/"ap_vap_start";
+- * "none" for unknown). */
++/* Stable step name ("vap_add"/"desc_table"/"ap_chan"/"ap_ssid"/"ap_cfg"/
++ * "ap_vap_start"; "none" for unknown). */
+ const char *hi5622_beacon_step_name(u8 step);
+ 
+ #endif /* HI5622_SCAN_LOGIC_H */
+diff --git a/hi5622_scan_logic.c b/hi5622_scan_logic.c
+--- a/hi5622_scan_logic.c
++++ b/hi5622_scan_logic.c
+@@ -715,10 +715,12 @@
+ }
+ 
+ /* =====================================================================
+- * AP-start ordering plan (wifi-beacon-static lane, task-140)
++ * AP-start ordering plan (wifi-beacon-static lane, task-140;
++ * 0x00F7 step added by wifi-desc-table-send, task-188)
+  * ===================================================================*/
+ unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
+-				u8 *out, unsigned int max)
++				unsigned int desc_table, u8 *out,
++				unsigned int max)
+ {
+ 	unsigned int n = 0;
+ 
+@@ -726,6 +728,12 @@
+ 		return 0;
+ 	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_VAP_ADD;
++	/* The H2D 0x00F7 descriptor table must be installed after the VAP base
++	 * bound the module band object (0x0064) and before the 0x0124 channel
++	 * post: the band-1 RF programme evaluates the armed record at 0x0124
++	 * post time.  Only the fail-closed value 1 enables the step. */
++	if (desc_table == 1u && n < max)
++		out[n++] = HI5622_BEACON_STEP_DESC_TABLE;
+ 	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_CHAN;
+ 	if (n < max)
+@@ -741,6 +749,7 @@
+ {
+ 	switch (step) {
+ 	case HI5622_BEACON_STEP_VAP_ADD:	return "vap_add";
++	case HI5622_BEACON_STEP_DESC_TABLE:	return "desc_table";
+ 	case HI5622_BEACON_STEP_CHAN:		return "ap_chan";
+ 	case HI5622_BEACON_STEP_SSID:		return "ap_ssid";
+ 	case HI5622_BEACON_STEP_AP_CFG:		return "ap_cfg";
+diff --git a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -41,6 +41,7 @@
+ #include "hi5622_band5g.h"
+ #include "hi5622_vapmsg5g.h"
+ #include "hi5622_beacon5g.h"
++#include "hi5622_desc_table.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -117,6 +118,29 @@
+ MODULE_PARM_DESC(ap_chan_wait_ms,
+ 		 "5GHz AP start: 0=legacy no wait (default), 1..1000=bounded wait for the firmware module channel context after ap_chan (timeout aborts before any AP frame), >1000 refused");
+ 
++/* lane wifi-desc-table-send (task-188), FAIL-CLOSED default 0.  The firmware
++ * installs its per-band channel-descriptor pool (CA 0x1ADC98) from an H2D
++ * group-0/id-1 config event with key 0x00F7; the boot pool's 5 GHz record
++ * word (0x00000201) has the descriptor-valid bit (byte2 bit7 = 0x00800000)
++ * clear, so the band-1 predicate (CA 0x101890) returns 0, the 5 GHz RF
++ * programme is skipped and the 5 GHz beacon engine never gets a channel.
++ * Posting a 0x00F7 table whose 5 GHz record is armed is the C1 fix:
++ *   0 (default) = no 0x00F7 frame at all - current behaviour, byte-identical
++ *                 to the bench-fired ladder;
++ *   1           = post the 68-byte fix frame on a BAND-1 AP start, after the
++ *                 VAP base (0x0064) and BEFORE the 0x0124 channel post, and
++ *                 only with the beacon_static vendor order enabled;
++ *   >1          = refused at use time BEFORE any frame (fail closed, never
++ *                 guessed).  One meaning per module load; read-only. */
++static unsigned int hi5622_desc_table;
++module_param_named(desc_table, hi5622_desc_table, uint, 0444);
++MODULE_PARM_DESC(desc_table,
++		 "5GHz AP start: H2D key 0x00F7 descriptor-table send (0=off default = current behaviour, 1=post the 68-byte fix frame before the 0x0124 channel config on a band-1 beacon_static AP, >1 refused)");
++/* Read-only outcome for the sysfs status line (never a wire input). */
++static int hi5622_desc_table_last_rc = -ENODATA;	/* never attempted */
++static unsigned int hi5622_desc_table_posts;
++static unsigned int hi5622_desc_table_refusals;
++
+ /* scan-complete lane (task-123): the bench measured the firmware returning 6
+  * of the 13 requested per-channel results within the wifi-scan-ap lane's 5 s
+  * bound (~830 ms/channel, ledger 2026-11-26 14:00), so a 13-channel request
+@@ -1653,6 +1677,27 @@
+ 			p->channel = ac.channel;
+ 		}
+ 	}
++	/* lane wifi-desc-table-send (task-188): FAIL-CLOSED parameter gate for
++	 * the H2D 0x00F7 descriptor-table send.  Runs BEFORE any frame (no
++	 * partial ladder on a bad parameter): desc_table 0 is the current
++	 * behaviour; exactly 1 requires the beacon_static vendor order (the
++	 * only ladder with a slot for the frame); anything else is refused. */
++	if (hi5622_desc_table > HI5622_DESC_TABLE_PARM_MAX) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - desc_table=%u is not a valid descriptor-table parameter (0=off, 1=post; no frame sent\n",
++			 hi5622_desc_table);
++		hi5622_desc_table_refusals++;
++		rc = -EINVAL;
++		goto out;
++	}
++	if (hi5622_desc_table == HI5622_DESC_TABLE_PARM_MAX &&
++	    !hi5622_beacon_static) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - desc_table=1 needs the beacon_static=1 vendor order (the 0x00F7 step exists only in that AP-start ladder); no frame sent\n");
++		hi5622_desc_table_refusals++;
++		rc = -EINVAL;
++		goto out;
++	}
+ 	/* Capture the pre-call VAP-base state BEFORE any post.  The firmware
+ 	 * populates module_ctx+0x190 ASYNCHRONOUSLY after vap_add/vap_start, so a
+ 	 * readback immediately after a fresh post is expected to be zero (bench R2
+@@ -1682,7 +1727,8 @@
+ 
+ 		/* The plan is the pure ordering contract (host-tested) and is
+ 		 * logged so the bench reads the intended rung from dmesg. */
+-		plan_n = hi5622_beacon_plan(1u, hi5622_beacon_vap_start, plan,
++		plan_n = hi5622_beacon_plan(1u, hi5622_beacon_vap_start,
++					    hi5622_desc_table, plan,
+ 					    HI5622_BEACON_STEP_MAX);
+ 		dev_info(wdev_dev,
+ 			 "cfg80211: start_ap beacon_static=1 plan (%u steps):", plan_n);
+@@ -1786,6 +1832,88 @@
+ 			 HI5622_STAB_VAP_WAIT_MS,
+ 			 base_was_posted && !restart_plain
+ 				 ? "pre-existing latch" : "fresh base post");
++		/* lane wifi-desc-table-send (task-188): the H2D 0x00F7
++		 * descriptor-table install.  Placement contract (sibling
++		 * wifi-fw-desc-table FIRE-RECIPE R2/R3): AFTER the VAP base
++		 * (0x0064) bound the module/band object the worker tests
++		 * (ctx+0x4B8), and BEFORE the 0x0124 channel post, whose
++		 * band-1 RF programme (CA 0x40684 -> predicate CA 0x101890)
++		 * evaluates the armed descriptor record at post time.  The
++		 * install gate is the fail-closed desc_table parameter; the
++		 * frame is refused before the wire if the model says no. */
++		{
++			struct hi5622_desc_table_plan dtp;
++			u32 dt_out0 = 0;
++			int drc;
++
++			drc = hi5622_desc_table_plan(hi5622_desc_table,
++						     hi5622_beacon_static,
++						     p->band, &dtp);
++			if (drc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static REFUSED - desc_table=%u is not a valid parameter (%d); no AP frame sent\n",
++					 hi5622_desc_table, drc);
++				hi5622_desc_table_refusals++;
++				rc = drc;
++				goto out;
++			}
++			if (dtp.post) {
++				len = 0;
++				drc = hi5622_desc_table_build(
++					wire, HI5622_FRAME_MAX_TOTAL, &len, &dtp);
++				if (drc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: start_ap beacon_static: descriptor-table builder refused (%d) - sequence aborted, no frame sent\n",
++						 drc);
++					hi5622_desc_table_refusals++;
++					rc = drc;
++					goto out;
++				}
++				drc = hi5622_frame_post(c->ctx, wire, len,
++							"desc_table", &dt_out0);
++				hi5622_desc_table_last_rc = drc;
++				if (drc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: start_ap beacon_static: descriptor-table frame (g0 id1 key 0x00F7) not posted (%d) - sequence aborted\n",
++						 drc);
++					rc = drc;
++					goto out;
++				}
++				hi5622_desc_table_posts++;
++				posted++;
++				dev_info(wdev_dev,
++					 "cfg80211: start_ap beacon_static frame %u/%u 'desc_table' posted (%zu B, g0 id1 key 0x00F7, cc=%c%c, 2 records, band1 word=0x%08x armed, 5G bitmap=0x%08x) - before the 0x0124 channel post\n",
++					 posted, plan_n, len, dtp.cc[0],
++					 dtp.cc[1],
++					 (unsigned)HI5622_DESC_TABLE_WORD_5G,
++					 (unsigned)HI5622_DESC_TABLE_BITMAP_5G);
++				/* Read-only evidence for the Lead: the 0x00F7
++				 * worker installs the pool and then returns 0x64
++				 * when the module band object is absent (band
++				 * feature bits skipped).  This is a read of the
++				 * module-table recipe the beacon lane uses. */
++				{
++					u32 dt_slot0, dt_base, dt_mctx, dt_bandobj;
++
++					dt_slot0 = hi5622_fw_ram_read(c->ctx,
++						HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
++					dt_base = hi5622_fw_ram_read(c->ctx,
++						HI5622_STAB_MODULE_TABLE_BASE_CPU);
++					dt_mctx = hi5622_beacon5g_mctx_ca(dt_slot0,
++									 dt_base);
++					dt_bandobj = dt_mctx ?
++						hi5622_fw_ram_read(c->ctx,
++							dt_mctx +
++							HI5622_BEACON5G_MCTX_BAND_OBJ_OFF) : 0u;
++					dev_info(wdev_dev,
++						 "cfg80211: desc_table post: module ctx=0x%08x bandobject=0x%08x (%s)\n",
++						 dt_mctx, dt_bandobj,
++						 dt_bandobj ?
++						 "the 0x00F7 worker's band-object test can pass" :
++						 "ZERO - the worker installs the pool then returns 0x64 (band feature bits skipped)");
++				}
++			}
++		}
+ 		memset(&cp, 0, sizeof(cp));
+ 		cp.band = p->band;
+ 		cp.channel = (u8)p->channel;
+@@ -2335,6 +2463,19 @@
+ 	if (ret > 0)
+ 		pos += (size_t)ret;
+ 	if (pos >= len)
++		return (int)(len - 1);
++	/* lane wifi-desc-table-send (task-188): the 0x00F7 descriptor-table
++	 * parameter/outcome (read-only; the frame itself is posted from
++	 * start_ap, never from here). */
++	ret = hi5622_desc_table_status_line(hi5622_desc_table,
++					    hi5622_beacon_static,
++					    hi5622_desc_table_last_rc,
++					    hi5622_desc_table_posts,
++					    hi5622_desc_table_refusals,
++					    buf + pos, len - pos);
++	if (ret > 0)
++		pos += (size_t)ret;
++	if (pos >= len)
+ 		return (int)(len - 1);
+ 	mutex_lock(&s->lock);
+ 	ret = hi5622_scan_status_line(&s->model, buf + pos, len - pos);
+diff --git a/hi5622_desc_table.h b/hi5622_desc_table.h
+new file mode 100644
+--- /dev/null
++++ b/hi5622_desc_table.h
+@@ -0,0 +1,132 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_desc_table.h - H2D 0x00F7 descriptor-table send (the C1 fix) for the
++ * Hi5622V100 clean-room full-MAC driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-desc-table-send, shared task task-188,
++ * 2026-11-25).  The frame and content facts are the committed decode of the
++ * sibling lane wifi-fw-desc-table (../wifi-fw-desc-table/REPORT.md, TABLES.md,
++ * FIRE-RECIPE.md); no vendor source, object code, firmware byte, calibration
++ * value, MAC or secret is reproduced here.
++ *
++ * WHY THIS EXISTS
++ * ---------------
++ * The firmware keeps a 0x148-byte runtime "descriptor pool" (CA 0x1ADC98)
++ * with N <= 20 records {word, +4, +6, channel bitmap}.  The boot builder
++ * installs country "99" and a 5 GHz record word 0x00000201 whose byte2 (the
++ * flags byte) is 0.  The band-1 descriptor predicate (CA 0x101890) returns 1
++ * only when the resolved record's byte2 bit7 (0x00800000) is set, and the
++ * 5 GHz-only RF programme (CA 0x40684) calls that predicate: with the boot
++ * table the predicate is 0, the RF image is never written and the 5 GHz
++ * beacon engine has no channel (the C1 symptom).
++ *
++ * The only firmware path that rewrites the pool from the host is an H2D HCC
++ * group-0 / id-1 config event with key 0x00F7: the worker (CA 0x45A30)
++ * strcmp-dedupes the pool country string against the blob, memcpy_s's
++ * 8 + body[4]*16 bytes into the pool (destMax 0x148), runs the channel-map
++ * populator and then programs the band feature bits.  This module builds
++ * that frame (68 bytes on the wire including the inherited 4-byte tail) and
++ * decides, fail-closed, whether the current AP start may post it:
++ *
++ *   desc_table=0 (default)  no 0xF7 frame at all - current behaviour;
++ *   desc_table=1            post the 0xF7 table before the 0x0124 channel
++ *                           post, on a band-1 AP start with the
++ *                           beacon_static vendor order only;
++ *   desc_table>1            refused (-EINVAL) before any frame.
++ *
++ * The blob is the pool image for the two-record fix table:
++ *   cc "US" (MUST differ from the boot pool's "99": the install is gated by
++ *   an ARM strcmp on the country string, and a "99" table is silently
++ *   skipped), count 2,
++ *   rec0 word 0x00800000 (2.4 GHz, armed), +4 30, +6 300, bitmap 0x1FFF;
++ *   rec1 word 0x00800201 (5 GHz, 20 MHz, armed), +4 30, +6 300,
++ *   bitmap 0x000000FF (ch36..64 = 5 GHz map rows 0..7).
++ *
++ * Pure C99: the same code compiles in the kernel module and in the host
++ * selftest (src/desc_table_selftest.c); tools/run-host-tests.sh compiles both.
++ */
++#ifndef HI5622_DESC_TABLE_H
++#define HI5622_DESC_TABLE_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#else
++#include <errno.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++#endif
++
++/* ---- fail-closed module parameter contract ---------------------------- */
++/* The only accepted non-zero value; anything above is refused. */
++#define HI5622_DESC_TABLE_PARM_MAX	1u
++
++/* ---- frame geometry [V] (wifi-fw-desc-table TABLES T2/T3) -------------- */
++#define HI5622_DESC_TABLE_HDR_LEN	12u	/* 12-byte HCC header */
++#define HI5622_DESC_TABLE_TOKEN_LEN	8u	/* preamble/token 00..00 01..00 */
++#define HI5622_DESC_TABLE_KEY		0x00f7u	/* config key at hdr+20 */
++#define HI5622_DESC_TABLE_BLOB_LEN	40u	/* 8 + 2*16 */
++#define HI5622_DESC_TABLE_REC_LEN	16u
++#define HI5622_DESC_TABLE_RECS		2u
++#define HI5622_DESC_TABLE_MAX_RECS	20u	/* destMax 0x148 = 8+20*16 */
++#define HI5622_DESC_TABLE_TAG		0x5a5au
++/* 12 hdr + 8 token + 2 key + 2 len + 40 blob + 4 inherited tail. */
++#define HI5622_DESC_TABLE_WIRE_LEN	68u
++
++/* Fixed table values (the two-record fix of the lane's FIRE-RECIPE). */
++#define HI5622_DESC_TABLE_CC0		'U'
++#define HI5622_DESC_TABLE_CC1		'S'
++#define HI5622_DESC_TABLE_WORD_2G	0x00800000u	/* band 0, byte2 bit7 armed */
++#define HI5622_DESC_TABLE_WORD_5G	0x00800201u	/* band 1, bw 20, armed */
++#define HI5622_DESC_TABLE_PLAN_4	30u		/* rec +4 (vendor 3000/100) */
++#define HI5622_DESC_TABLE_PLAN_6	300u		/* rec +6 (vendor 3000/10) */
++#define HI5622_DESC_TABLE_BITMAP_2G	0x00001fffu	/* 2.4G rows 0..12 */
++#define HI5622_DESC_TABLE_BITMAP_5G	0x000000ffu	/* 5G rows 0..7 = ch36..64 */
++
++/* ---- fail-closed AP-start decision ------------------------------------ */
++/* What one band-1 AP start must do with the 0x00F7 frame. */
++struct hi5622_desc_table_plan {
++	bool	post;		/* true = build + post the frame */
++	u8	cc[2];		/* country code in the blob ("US") */
++	u8	recs;		/* record count (always 2 here) */
++};
++
++/* Fill *out with the descriptor-table decision.
++ *  - 0 on success.  post = true only for desc_table == 1 on a band-1 AP with
++ *    the beacon_static vendor order enabled;
++ *  - -EINVAL for NULL out, desc_table > HI5622_DESC_TABLE_PARM_MAX, band > 1,
++ *    or desc_table == 1 without beacon_static == 1 (fail closed: never
++ *    silently ignore an explicit request, never guess a band).
++ * band == 0 with a valid parameter is a clean no-post (the frame is a band-1
++ * AP-start step only). */
++int hi5622_desc_table_plan(unsigned int desc_table, unsigned int beacon_static,
++			   unsigned int band, struct hi5622_desc_table_plan *out);
++
++/* Build the complete 68-byte HCC wire frame into wire/cap.
++ * Refuses (-EINVAL) NULL/bad arguments, a plan that is not armed, a country
++ * code equal to the boot pool string "99", an empty or non-printable cc, and
++ * a record count other than 2; -ENOSPC when cap < HI5622_DESC_TABLE_WIRE_LEN.
++ * The caller posts the result through hi5622_frame_post() (the only wire
++ * path); this module never touches the device. */
++int hi5622_desc_table_build(u8 *wire, size_t cap, size_t *out_len,
++			    const struct hi5622_desc_table_plan *plan);
++
++/* One read-only sysfs status line (the driver appends it to cfg80211_status):
++ *   desc_table: param=N (mode) beacon_static=M last_rc=R posted=P refused=F
++ * mode is "off" (0), "band1-post" (1) or "invalid" (>1).  last_rc is
++ * -ENODATA until the first attempt.  Returns the length, clamped like
++ * hi5622_frame_post_status_line(). */
++int hi5622_desc_table_status_line(unsigned int desc_table,
++				  unsigned int beacon_static, int last_rc,
++				  unsigned int posted, unsigned int refused,
++				  char *buf, size_t len);
++
++#endif /* HI5622_DESC_TABLE_H */
+diff --git a/hi5622_desc_table.c b/hi5622_desc_table.c
+new file mode 100644
+--- /dev/null
++++ b/hi5622_desc_table.c
+@@ -0,0 +1,171 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_desc_table.c - H2D 0x00F7 descriptor-table frame builder and the
++ * fail-closed AP-start gate (see the header for the decoded contract).
++ *
++ * ORIGINAL clean-room code (lane wifi-desc-table-send, task-188).  The frame
++ * layout and the blob field map are the committed facts of
++ * ../wifi-fw-desc-table/TABLES.md T2/T3; this file only synthesizes the
++ * host-built protocol bytes and refuses malformed requests.
++ */
++#include "hi5622_desc_table.h"
++
++#ifdef __KERNEL__
++#include <linux/kernel.h>
++#include <linux/string.h>
++#else
++#include <stdio.h>
++#include <string.h>
++#endif
++
++static void dt_put16(u8 *p, u16 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)((v >> 8) & 0xffu);
++}
++
++static void dt_put32(u8 *p, u32 v)
++{
++	p[0] = (u8)(v & 0xffu);
++	p[1] = (u8)((v >> 8) & 0xffu);
++	p[2] = (u8)((v >> 16) & 0xffu);
++	p[3] = (u8)((v >> 24) & 0xffu);
++}
++
++/* The boot pool's country string is "99\0" and the firmware install gate is
++ * an ARM strcmp(pool, blob) dedupe: a blob whose cc equals "99" is silently
++ * skipped (only the old pool is re-expanded), so it must be refused here.
++ * Printable ASCII keeps the strcmp input unambiguous; the two letters are
++ * the regdomain country code the vendor hmac_config_set_country ships. */
++static bool dt_cc_ok(const u8 cc[2])
++{
++	if (cc[0] < 0x20u || cc[0] > 0x7eu || cc[1] < 0x20u || cc[1] > 0x7eu)
++		return false;
++	if (cc[0] == '9' && cc[1] == '9')
++		return false;
++	return true;
++}
++
++int hi5622_desc_table_plan(unsigned int desc_table, unsigned int beacon_static,
++			   unsigned int band, struct hi5622_desc_table_plan *out)
++{
++	if (!out)
++		return -EINVAL;
++	memset(out, 0, sizeof(*out));
++	if (desc_table > HI5622_DESC_TABLE_PARM_MAX)
++		return -EINVAL;
++	if (band > 1u)
++		return -EINVAL;
++	/* An explicit 0xF7 request without the vendor-order AP start cannot be
++	 * honoured (the frame has no safe slot in the legacy ladder): refuse
++	 * instead of silently dropping it. */
++	if (desc_table == HI5622_DESC_TABLE_PARM_MAX && beacon_static != 1u)
++		return -EINVAL;
++	out->cc[0] = (u8)HI5622_DESC_TABLE_CC0;
++	out->cc[1] = (u8)HI5622_DESC_TABLE_CC1;
++	out->recs = (u8)HI5622_DESC_TABLE_RECS;
++	/* Band-1 AP start only: the pool record the fix arms is the 5 GHz one,
++	 * and the RF programme this unblocks is the band-1-only branch. */
++	out->post = (desc_table == HI5622_DESC_TABLE_PARM_MAX && band == 1u);
++	return 0;
++}
++
++/* One 16-byte descriptor record: {u32 word, u8 field4, u8 pad, u16 field6,
++ * 4 zero, u32 channel bitmap} (wifi-fw-desc-table TABLES T3). */
++static void dt_record(u8 *p, u32 word, u8 f4, u16 f6, u32 bitmap)
++{
++	dt_put32(p, word);
++	p[4] = f4;
++	p[5] = 0u;
++	dt_put16(p + 6, f6);
++	dt_put32(p + 8, 0u);
++	dt_put32(p + 12, bitmap);
++}
++
++int hi5622_desc_table_build(u8 *wire, size_t cap, size_t *out_len,
++			    const struct hi5622_desc_table_plan *plan)
++{
++	u8 *b, *blob;
++
++	if (!wire || !out_len || !plan)
++		return -EINVAL;
++	if (!plan->post)
++		return -EINVAL;		/* never build an unrequested frame */
++	if (plan->recs != HI5622_DESC_TABLE_RECS)
++		return -EINVAL;
++	if (!dt_cc_ok(plan->cc))
++		return -EINVAL;
++	if (cap < HI5622_DESC_TABLE_WIRE_LEN)
++		return -ENOSPC;
++
++	b = wire;
++	memset(b, 0, HI5622_DESC_TABLE_WIRE_LEN);
++
++	/* 12-byte HCC header (group 0, message id 1).  fb = 0x04 and the token
++	 * pattern are the vendor emitter's / lane frame's exact values [V]. */
++	b[0] = 0x00u;				/* group 0 */
++	b[1] = 0x01u;				/* alloc nibble 1, dst 0 */
++	b[2] = 0x00u;				/* fa */
++	b[3] = 0x04u;				/* fb */
++	dt_put16(b + 4, (u16)HI5622_DESC_TABLE_WIRE_LEN);	/* total 0x44 */
++	dt_put16(b + 6, 0x0001u);		/* message id 1 */
++	b[8] = 0x00u;				/* fc */
++	b[9] = 0x00u;				/* dst */
++	dt_put16(b + 10, (u16)HI5622_DESC_TABLE_TAG);		/* 0x5A5A */
++
++	/* 8-byte token, then key u16 at hdr+20 and payload length at hdr+22
++	 * (the firmware g0-id1 handler reads key = u16[msg+20] and passes
++	 * body = msg+24, len = u16[msg+22] to the worker). */
++	b[16] = 0x01u;
++	dt_put16(b + 20, (u16)HI5622_DESC_TABLE_KEY);
++	dt_put16(b + 22, (u16)HI5622_DESC_TABLE_BLOB_LEN);
++
++	/* Descriptor blob = the 0x148-byte pool image for N = 2 records. */
++	blob = b + 24;
++	blob[0] = plan->cc[0];
++	blob[1] = plan->cc[1];
++	blob[2] = 0u;		/* NUL: the gate's strcmp stops here */
++	blob[3] = 0u;		/* chip / regdomain id (boot default 0) */
++	blob[4] = plan->recs;	/* N: the worker's length formula input */
++	blob[5] = 0u;
++	blob[6] = 0u;
++	blob[7] = 0u;
++	dt_record(blob + 8u, HI5622_DESC_TABLE_WORD_2G,
++		  (u8)HI5622_DESC_TABLE_PLAN_4,
++		  (u16)HI5622_DESC_TABLE_PLAN_6,
++		  HI5622_DESC_TABLE_BITMAP_2G);
++	dt_record(blob + 8u + HI5622_DESC_TABLE_REC_LEN,
++		  HI5622_DESC_TABLE_WORD_5G, (u8)HI5622_DESC_TABLE_PLAN_4,
++		  (u16)HI5622_DESC_TABLE_PLAN_6,
++		  HI5622_DESC_TABLE_BITMAP_5G);
++
++	/* Inherited 4-byte 0xFF tail every working g0-id1 frame carries. */
++	memset(b + 24 + HI5622_DESC_TABLE_BLOB_LEN, 0xff, 4);
++
++	*out_len = HI5622_DESC_TABLE_WIRE_LEN;
++	return 0;
++}
++
++int hi5622_desc_table_status_line(unsigned int desc_table,
++				  unsigned int beacon_static, int last_rc,
++				  unsigned int posted, unsigned int refused,
++				  char *buf, size_t len)
++{
++	const char *mode;
++	int n;
++
++	if (!buf || !len)
++		return -EINVAL;
++	if (desc_table == 0u)
++		mode = "off";
++	else if (desc_table == HI5622_DESC_TABLE_PARM_MAX)
++		mode = "band1-post";
++	else
++		mode = "invalid";
++	n = snprintf(buf, len,
++		     "desc_table: param=%u (%s) beacon_static=%u last_rc=%d posted=%u refused=%u\n",
++		     desc_table, mode, beacon_static, last_rc, posted, refused);
++	if (n < 0)
++		return n;
++	return (int)((size_t)n < len ? (size_t)n : len - 1);
++}

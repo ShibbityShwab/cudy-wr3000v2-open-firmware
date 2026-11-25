@@ -1,0 +1,21 @@
+# lane wifi-desc-table-send (task-188) artifact hashes - HOST-BUILT, LOCAL EVIDENCE ONLY
+# generated 2026-11-25 (session date; host clock shows Buddhist year)
+
+[base pins]
+beacon5g base artifact (/tmp/beacon5g-artifact/hi5622_wifi.ko): bc1cc0ead2c5b98a35eea875c353dc7e5bcf2e39b61ba9427408b714ea9a1bbb 356600 B
+r1-band base artifact (/tmp/r1-band-artifact/hi5622_wifi.ko): e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4 356612 B
+r1-band patched provider sha256: c306e75fb4d640812278dc1ccdd59c8c197ba6e3f42da2b7f5ff98010d8b79ab
+
+[this lane, committed files]
+9c42076f4f5faecf352f6aecf5d6ba8b88edb73a454e26872ec543233cdfce2f  patches/0001-desc-table-send.patch
+976c544dbabfcb29f32530f083903ca6f708f7cbb8407576d578199a99664d9f  src/hi5622_desc_table.c
+5321d1f7ff1f5e494ba65013fb815861d972e6f2161bf1ce8e0466665551f9d1  src/hi5622_desc_table.h
+9ed1c64adcff487abc2c2d9afd3b0d6373f160b42b742d2f80ed1ce102508fe4  src/desc_table_selftest.c
+7bb6e64b49a04c947925cd9ad402042e10655adf5320b6231b08ab8482732fb1  tools/build-desc-table-send.sh
+2561fef2a3c805c9bd2aca1d138251c3a0c3c7028a314b9e29bccd3a6d3c9ed8  tools/run-host-tests.sh
+295e0037d7fe285fe0e92943504abf751c67b62457122cec4fb73e452fa8f8be  tools/order_test.c
+07b2b5573d41c6e83841919367c327c630137d2dd9ad961b001474382cde07eb  tools/desc_table_send_test.py
+
+[this lane, built artifact - LOCAL EVIDENCE ONLY, never committed]
+aac6177ce84c972dafff67061951c2fe28e31a330f636c7a185c1511dfe800e3  /tmp/desctable-artifact/hi5622_wifi.ko
+/tmp/desctable-artifact/hi5622_wifi.ko 360448 B
