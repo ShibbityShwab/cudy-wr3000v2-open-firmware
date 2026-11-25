@@ -3090,8 +3090,12 @@ are now: device TX completion = DMAC `0x01F3` -> host-internal g2 id13; device m
 CRX `g1 id13`; host-internal WAL request = `0x01F2`. The scan sweep is final (8 channels max with
 H1) and the remaining blocker for a client association is **RF** (no antennas: ~44 dB path loss,
 AP TX ~-64 dBm at 30 cm, marginal client RX + flaky MT7922) while the user attaches the antennas.
-The image-2 lane stages this module into the SAE-capable image; the association/4-way ladders
-(L5) wait on the antenna fix.
+The image-2 lane has now **baked and host-verified** this module into the SAE-capable image:
+container **7,188,799 B sha256 `0d9429ec...`**, kernel slice **unchanged** (3,372,638 B
+`13e81214...`, slot `1794a531...` - a rootfs-only successor), rootfs UBI **3,801,088 B
+`44df3a63...`**, 83 packages, build-tail verify **82/82 PASS**, three recorded bakes
+byte-identical; nothing was flashed by that lane (`wifi-final-image-2/`). The association/4-way
+ladders (L5) wait on the antenna fix.
 
 ---
 
@@ -3506,8 +3510,10 @@ CRX event, and the association-chain software exists in one module. The ranking 
    the on-air observer; capture auth/assoc via `g1 id13`, `STA added`, EAPOL 4-way, PTK;
 (2) **on-air beacon/association proof with a reliable client** and the RX data capture that comes
    with it (the RF fix also unblocks the 4-way PTK);
-(3) **the image bake of the corrected association module** (image-2: SAE hostapd + WPA2/WPA3
-   configs + the `ab9e18a4` module; kernel slice unchanged) and the post-boot receipt;
+(3) **the image bake of the corrected association module** - host-only bake **done** (image-2:
+   SAE hostapd + WPA2/WPA3 configs + the `ab9e18a4` module; kernel slice unchanged; container
+   7,188,799 B `0d9429ec...`; verify 82/82); remaining: the attended install, the post-boot
+   receipt and the on-air client test;
 (4) **5 GHz / STA-join rungs** once association works (band5g endpoint-0001 ready handshake, the
    `sta_join=2` risk, WAL join fields);
 (5) **RX hardening proposals** (completion validity wait/clear-after-read, refill watermark) before
@@ -3618,7 +3624,10 @@ numbers and a 51/51 fetch manifest - **no sibling source text is copied**, and t
 explicitly not licence-compatible. The management-TX/RX wire layouts are protocol facts decoded from
 our own vendor modules (no bytes reproduced). No per-unit RF calibration value or identity is
 committed: the RF statement is a bench observation (~44 dB path loss, -64 dBm at 30 cm), not a
-calibration dump.
+calibration dump. The image-2 bake is likewise recorded by size+sha256 only (container
+`0d9429ec...`, kernel slice `13e81214...`/slot `1794a531...`, rootfs UBI `44df3a63...`, installed
+module `4f1b45c1...`); the image/UBI/kernel/module binaries remain local (gitignored) and that
+lane contacted no device.
 
 **Why it is publishable.** The repository is an intentionally public research notebook: negative
 results, dead ends and the ledger are part of the record. This report is written to that standard:

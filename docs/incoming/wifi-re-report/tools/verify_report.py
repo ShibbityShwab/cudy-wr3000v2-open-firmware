@@ -149,11 +149,11 @@ def check_evidence_index():
     nums = [int(x) for x in ids]
     uniq = sorted(set(nums))
     check("evidence claim IDs are unique", len(set(nums)) == len(nums), "duplicates")
-    check("evidence index has at least 340 claims", len(uniq) >= 340, "%d" % len(uniq))
+    check("evidence index has at least 341 claims", len(uniq) >= 341, "%d" % len(uniq))
     check("evidence index carries the v5 range EV-278..EV-308", 278 in nums and 308 in nums,
           "278=%s 308=%s" % (278 in nums, 308 in nums))
-    check("evidence index carries the v6 range EV-309..EV-340", 309 in nums and 340 in nums,
-          "309=%s 340=%s" % (309 in nums, 340 in nums))
+    check("evidence index carries the v6 range EV-309..EV-341", 309 in nums and 341 in nums,
+          "309=%s 341=%s" % (309 in nums, 341 in nums))
     check("evidence index carries the v3 range EV-196..EV-244", 196 in nums and 244 in nums,
           "196=%s 244=%s" % (196 in nums, 244 in nums))
     check("evidence index carries the v4 range EV-245..EV-277", 245 in nums and 277 in nums,
@@ -357,6 +357,16 @@ def check_constants():
          get_lane("wifi-scan-tuning/FINDINGS-R10C.md").lower()),
         ("public-research fetch manifest", "51/51",
          get_lane("wifi-public-research-2/README.md").lower()),
+        ("image-2 container hash", "0d9429ec",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 container size 7,188,799 B", "7,188,799",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 rootfs UBI hash", "44df3a63",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 installed module hash", "4f1b45c1",
+         get_lane("wifi-final-image-2/HASHES.txt").lower()),
+        ("image-2 build verify 82/82", "82/82",
+         get_lane("wifi-final-image-2/REPORT.md").lower()),
     ]
     for name, needle, src in checks_const:
         ok = needle in joined and needle in src

@@ -40,11 +40,14 @@ claim-ID sequence, table/finding completeness, the v2-v5 milestone vocabulary, k
 cross-checks against the owning lanes' committed sources and the superproject ledger,
 forbidden-content scan) and a final PASS with the check count. v5 added the static-RE-wave checks
 (sections 6.1-6.17, findings F1-F19, tables T1-T37, claims EV-001..EV-305); **v6 extends the same
-checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-340** - the
+checks to sections 6.19-6.25, findings F21-F27, tables T39-T45 and claims EV-309..EV-341** - the
 association module identities and 56 params, the corrected g0 id6 mgmt-TX carrier, the g1 id13
 management-RX event, the SET_RX_FILTER negative, the RX arm ordering (0x182 vs 0x02), the R11
 `field10` values, the RF path-loss observation and the 51/51 public-source manifest. At the v6
-cut-off the verifier reports **RESULT: PASS (290/290 checks)**. Exit code 0 on success.
+cut-off the verifier reports **RESULT: PASS (295/295 checks)**; the image-2 bake addendum
+(container `0d9429ec...`, kernel slice unchanged `13e81214...`/slot `1794a531...`, rootfs UBI
+`44df3a63...`, verify 82/82) is cross-checked against `wifi-final-image-2/HASHES.txt` +
+`REPORT.md`. Exit code 0 on success.
 
 ## 2. Reproduce the boot-chain facts
 
@@ -150,7 +153,10 @@ in [TABLES.md](TABLES.md) T39-T44. The public-source manifest is in
 `wifi-public-research-2/SOURCES.tsv` + `VERIFY-fetch.txt` (51/51 byte+sha matches at the pinned
 commits; re-fetching is a network action). The R11 scan ladder is `wifi-scan-full/TEST-LADDER-R11.md`
 (attended; the final sweep values are in T44), and the RF statement (~44 dB path loss) is a bench
-observation, not a reproducible host test.
+observation, not a reproducible host test. The image-2 bake is reproduced by
+`wifi-final-image-2/tools/bake-final-image-2.sh` + `tools/verify-final-image-2.sh` (needs the
+local artifacts directory and the shared OpenWrt tree; host-only, nothing flashed); its identity
+is recorded in `wifi-final-image-2/HASHES.txt` and the report's T45.
 
 ## 5. Reproduce the firmware patch recipes (host-only)
 
