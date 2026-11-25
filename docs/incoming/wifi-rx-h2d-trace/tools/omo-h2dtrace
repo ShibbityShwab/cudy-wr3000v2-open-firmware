@@ -1,27 +1,14 @@
 #!/bin/sh
 # omo-h2dtrace - one-shot read-only vendor H2D capture for the stock pair-A image.
-# Installed by lane rx-h2d-trace (task-176) via the crafted config-backup restore channel;
-# starts the sampler BEFORE the vendor wifi stack loads (S08 ordering; phase 21 proved that
-# an S08 aid runs inside/before the module-load window).
-#
-# READ-ONLY: the sampler only pread()s /dev/mem; this script only starts it. It never writes
-# device registers, never flashes, never loads/unloads kernel modules.
-#
-# One-shot: does nothing once a capture log exists; remove the aid in RUNBOOK T7.
-
+# READ-ONLY: the sampler only pread()s /dev/mem; this script only starts it.
+# One-shot: does nothing once a capture log exists.
 [ -f /overlay/h2d-trace.stop ] && exit 0
 [ -s /overlay/h2d-trace.log ] && exit 0
-
 LOG=/overlay/h2d-trace.log
 ERR=/overlay/h2d-trace.err
-
-# wait briefly for /dev/mem (mdev usually has it by S08; the sampler also retries internally)
-i=0
-while [ ! -e /dev/mem ] && [ $i -lt 60 ]; do
-	i=$((i+1))
-	usleep 100000 2>/dev/null || sleep 1
-done
-
-echo "omo-h2dtrace: starting sampler at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERR"
-nohup /usr/bin/omo-h2dsampler -o "$LOG" -t 180 -r 20 >>"$ERR" 2>&1 &
+echo "omo-h2dtrace: aid start $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERR"
+# the S08 can run before the overlay exposes the sampler; wait up to 30 s, then start it
+( i=0; while [ $i -lt 300 ]; do [ -x /usr/bin/omo_h2dsampler ] && break; i=$((i+1)); sleep 0.1; done;
+  echo "omo-h2dtrace: sampler present after $i x 100ms" >> "$ERR";
+  /usr/bin/omo_h2dsampler -o "$LOG" -t 180 -r 20 >>"$ERR" 2>&1 ) &
 exit 0
