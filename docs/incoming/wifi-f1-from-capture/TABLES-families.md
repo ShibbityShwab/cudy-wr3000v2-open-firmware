@@ -91,9 +91,10 @@ valid sends). **Not an RX message** (set_beacon; the beacon path is already unde
 
 ## 6. The diff against our driver [M/V]
 
-The known bench diff (parent lane) is **108 matched / 0 drift**; the capture confirms the count
-exactly: **104 x g0 id1 key 0x00d8 (the first post-ready TXQ/AMSDU-MIB config) + 4 x g0 id1
-key 0x0065 (VAP start)**. Nothing else our driver sends appears in the stock boot, and nothing the
+The known bench diff (parent lane) is **108 matched / 0 drift**; the capture is **consistent with
+that count being 104 x g0 id1 key 0x00d8 (the first post-ready TXQ/AMSDU-MIB config) + 4 x g0 id1
+key 0x0065 (VAP start)** (those are the only families our documented send set shares with the
+stock's valid set). Nothing else our driver sends appears in the stock boot, and nothing the
 stock sends is an RX enable (sec. 3 of REPORT). Our driver must **not** add: the HEARTBEAT (D2H),
 the key 0x0004 config event (never sent by the stock - killed candidate), or the g2 id29 timer
 (pointer payload, no firmware handler). The one implementable missing class is g0 id29 - already

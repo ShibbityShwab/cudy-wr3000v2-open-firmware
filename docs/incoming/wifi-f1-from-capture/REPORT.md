@@ -174,9 +174,11 @@ host message. What it shows:
 
 **F1 conclusion [V/I]:** the vendor's pre-RX/steady-state H2D surface contains **no RX-ring reset,
 TRX enable or delivery-gate message**. `smac_msg_proc_enable_trx_req` / `..._rx_ring_reset_req` are
-firmware-internal (no H2D id, no dispatch entry), and the stock delivers RX with the same message
-classes our driver already replicates (its 108 matches = 104 x key 0xD8 + 4 x key 0x65) plus the
-datapath-class EDCA timeout. So F1 is **not a missing H2D frame**; the discriminating options left
+firmware-internal (no H2D id, no dispatch entry; the name literals sit at CA `0x1228BC` /
+`0x1229A8`, file `0xE28BC`/`0xE29A8`, this lane's string scan, and the vendor send catalogue has
+no builder for them [V*]), and the stock boot - whose RX path is the known-good reference - runs
+with the same message classes our driver already replicates (the parent diff's 108 matches are
+consistent with 104 x key 0xD8 + 4 x key 0x65) plus the datapath-class EDCA timeout. So F1 is **not a missing H2D frame**; the discriminating options left
 are (i) the missing datapath context that the EDCA timeout maintains (fire recipe rank 1), (ii) the
 host delivery layer (already heavily excluded by the RX lanes; a stock-control run on the same
 host port is the reference), or (iii) a firmware-internal RX init that a host-only boot never runs

@@ -30,7 +30,7 @@ discriminator before the F1 escalates to the firmware/internal path.
 
 | raw family (sampler group/id) | raw | valid H2D | decode | direction |
 | --- | ---: | ---: | --- | --- |
-| g0 id1 | 498 | 254 | config events, 25 keys (`hmac_config_send_event`/`hdpp_config_send_event`); 108 match our driver = 104 x key 0xD8 + 4 x key 0x65 | H2D |
+| g0 id1 | 498 | 254 | config events, 25 keys (`hmac_config_send_event`/`hdpp_config_send_event`); 108 match our driver (parent diff; consistent with 104 x key 0xD8 + 4 x key 0x65) | H2D |
 | g0 id29 | 381 | 329 | `hmac_edca_opt_timeout_fn`, 72 B = 12 + 20 zero + 40 x 0xff | H2D |
 | g2 id29 | 328 | 0 | `hcc_timer_timeout_proc` (plat.ko), 16 B, 4-byte host ctx pointer | H2D (torn only) |
 | g4 id0 | 153 | 0 | firmware OAM/device-log blobs | D2H residue |
