@@ -1,0 +1,27 @@
+# lane artifact manifest - wifi-5ghz-beacon (task-175)
+
+Host-built module (NOT fired, NOT committed):
+  artifact : /tmp/beacon5g-artifact/hi5622_wifi.ko (debug-stripped)
+  size     : 356,600 B
+  sha256   : bc1cc0ead2c5b98a35eea875c353dc7e5bcf2e39b61ba9427408b714ea9a1bbb
+  unstripped: 1,357,356 B
+  .text sha256: 80ca20e6d2a06660af1361eef8a982e334da9f61502c6652899b3ed116b6273b
+  params   : 59 (E2 58 + ap_chan_wait_ms, default 0)
+  vermagic : 6.18.60 SMP mod_unload ARMv7 p2v8
+  warnings : 0
+  base     : the E2 module under bench test, stripped sha256
+             13e7bf4c44772011e88903136c0c051d06d9ae5eab3c5e24df1ebb20f2cc1abf
+             (353,652 B, 58 params), via the committed vapmsg5g chain
+
+Verification transcripts (committed, regenerable):
+  evidence/host-tests.txt       437 planner checks + 10 patch-contract checks, 0 failures
+  evidence/build-artifact.txt   the builder's own contract output
+  evidence/build.log            the 0-warning module build log
+  evidence/re-probes-2.5.24.txt 55/55 vendor-module probes (sha de78ec07...)
+  evidence/re-probes-2.4.15.txt 55/55 vendor-module probes (sha 22fa789a...)
+
+Deliverable commit lineage (shared opensource repo; concurrent lanes commit
+into the same tree, so the lane files first landed through these commits):
+  6dad9ec  patch + src/ + tools/ (work-in-progress sweep)
+  776ba30  docs + evidence (sweep by the concurrent ax-he-caps lane)
+This file records the lane's own final artifact manifest under its task id.
