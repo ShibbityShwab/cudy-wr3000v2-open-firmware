@@ -1,0 +1,527 @@
+diff --git a/hi5622_dp.c b/hi5622_dp.c
+index 447a2c3..55e8294 100644
+--- a/hi5622_dp.c
++++ b/hi5622_dp.c
+@@ -47,9 +47,11 @@
+ #include <linux/errno.h>
+ #include <linux/io.h>
+ #include <linux/kernel.h>
++#include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/pci.h>
++#include <linux/skbuff.h>
+ #include <linux/slab.h>
+ #include <linux/string.h>
+ #include <linux/types.h>
+@@ -60,11 +62,39 @@
+ #include "h2d_send.h"
+ #include "dp_rings.h"
+ #include "hi5622_dp_txrx.h"
++#include "hi5622_rx_live.h"
+ 
+ /* Host bookkeeping + DMA area size per RX buffer (vendor: 4-byte skb word
+  * followed by the descriptor/MPDU area). */
+ #define DP_RX_NORM_ALLOC (DP_RX_BUF_HDR + DP_RX_NORM_BUFLEN)
+ #define DP_RX_SMALL_ALLOC (DP_RX_BUF_HDR + DP_RX_SMALL_BUFLEN)
++/* wifi-rx-woc-class (shared task task-167): vendor RX buffer memory class.
++ *
++ * Decoded from the local vendor host stack (hi_kpie.ko / hi5622v100_wifi.ko,
++ * not committed): the vendor's per-frame RX buffers are NOT coherent
++ * allocations.  hi_net_woc_alloc_skb() allocates each buffer with
++ * __netdev_alloc_skb(NULL, buflen + 3, GFP_ATOMIC), aligns skb->data to 4 and
++ * maps it once with dma_map_page_attrs(dev, page(skb->data), len,
++ * DMA_FROM_DEVICE, attrs = 0); the published ring entry is
++ * data+4 mapped through the identity host-CA window to its CPU physical
++ * address.  There is NO reserved DRAM carve-out: the vendor's "+0x600000" is
++ * the vendor kernel PHYS_OFFSET (0x80600000) relative to the DDR base
++ * (0x80000000), i.e. the plain kernel-VA -> CPU-physical conversion.
++ * rx_buf_class=1 reproduces the vendor class (cacheable skb slab memory +
++ * streaming DMA_FROM_DEVICE map + the explicit per-publish header cache
++ * maintenance); the default 0 keeps the fired coherent pool behaviour
++ * byte-for-byte.  Any other value fails dp_setup closed. */
++#define DP_RX_CLASS_COHERENT   0u
++#define DP_RX_CLASS_WOC        1u
++#define DP_RX_WOC_ALIGN        4u
++#define DP_RX_WOC_HOST_WORD    0x574f4301u /* host bookkeeping word at buffer+0 */
++#define DP_RX_WOC_ALLOC_MARGIN 8u          /* skb head margin for the align shift */
++
++static unsigned int dp_rx_buf_class = DP_RX_CLASS_COHERENT;
++module_param_named(rx_buf_class, dp_rx_buf_class, uint, 0644);
++MODULE_PARM_DESC(rx_buf_class,
++	"RX buffer memory class: 0 = dma_alloc_coherent pools (default, fail-closed), 1 = vendor WOC class (cacheable skb slab + streaming DMA_FROM_DEVICE map); any other value refuses dp_setup");
++
+ #define DP_DP_MAC_ALL_OFF_REGS 18u
+ #define DP_DP_MAC_ALL_OFF_MAX 0x54u
+ 
+@@ -109,6 +139,15 @@ struct hi5622_dp {
+     void **rx_small_cpu;
+     dma_addr_t *rx_small_dma;
+ 
++    /* wifi-rx-woc-class (task-167): when rx_buf_class=1 the pools are
++     * cacheable skb slab buffers with one held DMA_FROM_DEVICE mapping each;
++     * the coherent class leaves these NULL. */
++    struct sk_buff **rx_norm_skb;
++    struct sk_buff **rx_small_skb;
++    unsigned int rx_buf_class_used;
++    u32 rx_woc_prepares;
++    u32 rx_woc_sync_cpu;
++
+     /* last executed MAC program + read-backs */
+     unsigned int mac_reg_count;
+     u32 mac_written[DP_MAC_REG_COUNT];
+@@ -253,8 +292,97 @@ static void *dp_dma_alloc(struct hi5622_pci *ctx, size_t size,
+     return p;
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* wifi-rx-woc-class (task-167): vendor-class RX buffer allocation    */
++/*                                                                    */
++/* Everything here is derived from the decoded vendor path; no vendor */
++/* code/bytes are reproduced (REPORT.md section 3):                    */
++/*   hi_net_woc_alloc_skb(kpie 0x73a8): __netdev_alloc_skb(NULL,      */
++/*     buflen+3, GFP_ATOMIC = 0xa20); align skb->data to 4;           */
++/*     is_vmalloc_addr(data) -> dma_map_page_attrs(dev,               */
++/*     page(data), offset, buflen, DMA_FROM_DEVICE, attrs=0); return  */
++/*     skb (the dma_addr is the direct-map CPU physical address).     */
++/*   shuangta_host_rx_add_buff(wifi 0x374d0): pre-write *data = skb,  */
++/*     zero the 36-byte header, cache-maintain the header span        */
++/*     (map TO_DEVICE then FROM_DEVICE) and publish data+4 through    */
++/*     pcie_if_hostca_to_devva -> identity window -> CPU physical.    */
++/*   hi_net_woc_skb_free(kpie 0x6aec) does not unmap (the buffer is   */
++/*     recycled through the WOC per-cpu lists); we unmap at teardown. */
++/* ------------------------------------------------------------------ */
++bool hi5622_dp_rx_woc_class(struct hi5622_pci *ctx)
++{
++    return ctx && ctx->dp &&
++           ctx->dp->rx_buf_class_used == DP_RX_CLASS_WOC;
++}
++
++static int dp_woc_rx_alloc_one(struct hi5622_pci *ctx, size_t size,
++                               void **cpu, dma_addr_t *dma,
++                               struct sk_buff **skb)
++{
++    struct device *dev = &ctx->pdev->dev;
++    struct sk_buff *s;
++    dma_addr_t d;
++    unsigned long va;
++    unsigned int misalign;
++
++    if (!cpu || !dma || !skb || size < HIL_RX_PAYLOAD_OFF)
++        return -EINVAL;
++    /* vendor: __netdev_alloc_skb(NULL, buflen + 3, GFP_ATOMIC); the extra
++     * margin below only covers the up-to-3-byte alignment shift, it does not
++     * change the device-writable span. */
++    s = __netdev_alloc_skb(NULL, (unsigned int)size + DP_RX_WOC_ALLOC_MARGIN,
++                           GFP_KERNEL);
++    if (!s)
++        return -ENOMEM;
++    misalign = (unsigned int)((unsigned long)s->data &
++                              (DP_RX_WOC_ALIGN - 1u));
++    if (misalign)
++        skb_reserve(s, DP_RX_WOC_ALIGN - misalign);
++    if (skb_tailroom(s) < (int)size) {
++        kfree_skb(s);
++        return -ENOMEM;
++    }
++    va = (unsigned long)s->data;
++    /* one held streaming mapping, exactly the vendor class: cacheable slab
++     * memory mapped DMA_FROM_DEVICE (the map invalidates the buffer lines). */
++    d = dma_map_page_attrs(dev, virt_to_page((void *)va),
++                           (size_t)offset_in_page(va), size,
++                           DMA_FROM_DEVICE, 0);
++    if (dma_mapping_error(dev, d)) {
++        kfree_skb(s);
++        return -ENOMEM;
++    }
++    if ((u64)d < (u64)DP_HOST_DMA_LO || (u64)d > (u64)DP_HOST_DMA_HI) {
++        dev_err(dev,
++                "DP: WOC RX buffer DMA address 0x%llx outside the device-visible host window 0x%08x..0x%08x - refused\n",
++                (unsigned long long)d, DP_HOST_DMA_LO, DP_HOST_DMA_HI);
++        dma_unmap_page_attrs(dev, d, size, DMA_FROM_DEVICE, 0);
++        kfree_skb(s);
++        return -ERANGE;
++    }
++    /* host word + zeroed 36-byte device header (vendor add_buff pre-write). */
++    *(u32 *)(void *)va = DP_RX_WOC_HOST_WORD;
++    memset((void *)(va + HIL_RX_SKB_WORD), 0, HIL_RX_HDR_BYTES);
++    *cpu = (void *)va;
++    *dma = d;
++    *skb = s;
++    return 0;
++}
++
++static void dp_woc_rx_free_one(struct hi5622_pci *ctx, void *cpu,
++                               dma_addr_t dma, size_t size,
++                               struct sk_buff *skb)
++{
++    struct device *dev = &ctx->pdev->dev;
++
++    dma_unmap_page_attrs(dev, dma, size, DMA_FROM_DEVICE, 0);
++    kfree_skb(skb);
++    (void)cpu;
++}
++
+ static void dp_free_rx_pool(struct hi5622_pci *ctx, void ***cpu,
+-                            dma_addr_t **dma, unsigned int count, size_t size)
++                            dma_addr_t **dma, struct sk_buff ***skb,
++                            unsigned int count, size_t size)
+ {
+     struct device *dev = &ctx->pdev->dev;
+     unsigned int i;
+@@ -262,45 +390,133 @@ static void dp_free_rx_pool(struct hi5622_pci *ctx, void ***cpu,
+     if (!cpu || !dma || !*cpu || !*dma)
+         return;
+     for (i = 0; i < count; i++) {
+-        if ((*cpu)[i] && (*dma)[i] != 0) {
++        if (!(*cpu)[i] || (*dma)[i] == 0)
++            continue;
++        if (skb && *skb && (*skb)[i])
++            dp_woc_rx_free_one(ctx, (*cpu)[i], (*dma)[i], size, (*skb)[i]);
++        else
+             dma_free_coherent(dev, size, (*cpu)[i], (*dma)[i]);
+-            (*cpu)[i] = NULL;
+-            (*dma)[i] = 0;
+-        }
++        (*cpu)[i] = NULL;
++        (*dma)[i] = 0;
++        if (skb && *skb)
++            (*skb)[i] = NULL;
+     }
+     kfree(*cpu);
+     kfree(*dma);
+     *cpu = NULL;
+     *dma = NULL;
++    if (skb) {
++        kfree(*skb);
++        *skb = NULL;
++    }
+ }
+ 
+ static int dp_alloc_rx_pool(struct hi5622_pci *ctx, void ***cpu,
+-                            dma_addr_t **dma, unsigned int count,
+-                            size_t size, const char *what)
++                            dma_addr_t **dma, struct sk_buff ***skb,
++                            unsigned int count, size_t size,
++                            unsigned int class, const char *what)
+ {
+     void **c;
+     dma_addr_t *d;
++    struct sk_buff **s = NULL;
+     unsigned int i;
++    int rc;
+ 
+     c = kcalloc(count, sizeof(*c), GFP_KERNEL);
+     d = kcalloc(count, sizeof(*d), GFP_KERNEL);
+-    if (!c || !d) {
++    if (class == DP_RX_CLASS_WOC)
++        s = kcalloc(count, sizeof(*s), GFP_KERNEL);
++    if (!c || !d || (class == DP_RX_CLASS_WOC && !s)) {
+         kfree(c);
+         kfree(d);
++        kfree(s);
+         return -ENOMEM;
+     }
+     *cpu = c;
+     *dma = d;
++    if (skb)
++        *skb = s;
+     for (i = 0; i < count; i++) {
++        if (class == DP_RX_CLASS_WOC) {
++            rc = dp_woc_rx_alloc_one(ctx, size, &c[i], &d[i], &s[i]);
++            if (rc) {
++                dp_free_rx_pool(ctx, cpu, dma, skb, count, size);
++                return rc;
++            }
++            continue;
++        }
+         c[i] = dp_dma_alloc(ctx, size, &d[i], what);
+         if (!c[i]) {
+-            dp_free_rx_pool(ctx, cpu, dma, count, size);
++            dp_free_rx_pool(ctx, cpu, dma, skb, count, size);
+             return -ENOMEM;
+         }
+     }
+     return 0;
+ }
+ 
++/* Vendor per-publish preparation: scrub the host word + 36-byte device header
++ * and cache-maintain the write before the ring entry becomes visible.  The
++ * coherent class keeps the old behaviour exactly (no-op, returns 0). */
++int hi5622_dp_rx_buf_prepare(struct hi5622_pci *ctx, u32 buf_dma,
++                             unsigned int size)
++{
++    struct hi5622_dp *dp;
++    void *va = NULL;
++    unsigned int i;
++
++    if (!ctx || !ctx->dp)
++        return -ENODEV;
++    dp = ctx->dp;
++    if (dp->rx_buf_class_used != DP_RX_CLASS_WOC)
++        return 0;
++    for (i = 0; i < DP_RX_NORM_DEPTH && !va; i++)
++        if ((u32)dp->rx_norm_dma[i] == buf_dma)
++            va = dp->rx_norm_cpu[i];
++    for (i = 0; i < DP_RX_SMALL_DEPTH && !va; i++)
++        if ((u32)dp->rx_small_dma[i] == buf_dma)
++            va = dp->rx_small_cpu[i];
++    if (!va)
++        return -ENOENT;
++    *(u32 *)va = DP_RX_WOC_HOST_WORD;
++    memset((u8 *)va + HIL_RX_SKB_WORD, 0, HIL_RX_HDR_BYTES);
++    /* flush the heading pre-write (TO_DEVICE) and invalidate the lines before
++     * the device owns them (FROM_DEVICE): the vendor does both around
++     * add_buff; BIDIRECTIONAL is the single-call equivalent. */
++    dma_sync_single_for_device(&ctx->pdev->dev, (dma_addr_t)buf_dma, size,
++                               DMA_BIDIRECTIONAL);
++    dp->rx_woc_prepares++;
++    return 0;
++}
++
++/* Before the CPU parses a completed buffer, invalidate the lines the device
++ * wrote (no-op for the coherent class). */
++void hi5622_dp_rx_buf_sync_cpu(struct hi5622_pci *ctx, unsigned int ring_kind,
++                               unsigned int slot)
++{
++    struct hi5622_dp *dp;
++    dma_addr_t d;
++    size_t size;
++
++    if (!ctx || !ctx->dp)
++        return;
++    dp = ctx->dp;
++    if (dp->rx_buf_class_used != DP_RX_CLASS_WOC)
++        return;
++    if (ring_kind == 0u) {
++        if (slot >= DP_RX_NORM_DEPTH || !dp->rx_norm_skb)
++            return;
++        d = dp->rx_norm_dma[slot];
++        size = DP_RX_NORM_ALLOC;
++    } else {
++        if (slot >= DP_RX_SMALL_DEPTH || !dp->rx_small_skb)
++            return;
++        d = dp->rx_small_dma[slot];
++        size = DP_RX_SMALL_ALLOC;
++    }
++    dma_sync_single_for_cpu(&ctx->pdev->dev, d, size, DMA_FROM_DEVICE);
++    dp->rx_woc_sync_cpu++;
++}
++
+ static void dp_free_rings(struct hi5622_pci *ctx)
+ {
+     struct hi5622_dp *dp = ctx->dp;
+@@ -309,9 +525,9 @@ static void dp_free_rings(struct hi5622_pci *ctx)
+     if (!dp)
+         return;
+     dp_free_rx_pool(ctx, &dp->rx_norm_cpu, &dp->rx_norm_dma,
+-                    DP_RX_NORM_DEPTH, DP_RX_NORM_ALLOC);
++                    &dp->rx_norm_skb, DP_RX_NORM_DEPTH, DP_RX_NORM_ALLOC);
+     dp_free_rx_pool(ctx, &dp->rx_small_cpu, &dp->rx_small_dma,
+-                    DP_RX_SMALL_DEPTH, DP_RX_SMALL_ALLOC);
++                    &dp->rx_small_skb, DP_RX_SMALL_DEPTH, DP_RX_SMALL_ALLOC);
+     if (dp->rx_cmp_ring) {
+         dma_free_coherent(dev, DP_RXCMP_RING_BYTES, dp->rx_cmp_ring,
+                           dp->rx_cmp_ring_dma);
+@@ -353,8 +569,20 @@ static void dp_free_rings(struct hi5622_pci *ctx)
+ static int dp_alloc_rings(struct hi5622_pci *ctx)
+ {
+     struct hi5622_dp *dp = ctx->dp;
++    struct device *dev = &ctx->pdev->dev;
+     dma_addr_t dma;
+ 
++    /* wifi-rx-woc-class (task-167): fail closed on an unknown class before
++     * any allocation; the used class is latched for the whole load. */
++    if (dp_rx_buf_class != DP_RX_CLASS_COHERENT &&
++        dp_rx_buf_class != DP_RX_CLASS_WOC) {
++        dev_err(dev,
++                "DP: rx_buf_class=%u is not a supported RX buffer class (0 = coherent, 1 = vendor WOC) - dp_setup refused, no allocation, no device write\n",
++                dp_rx_buf_class);
++        return -EINVAL;
++    }
++    dp->rx_buf_class_used = dp_rx_buf_class;
++
+     dp->txq_table = dp_dma_alloc(ctx, DP_TXQ_TABLE_BYTES, &dma, "txq_table");
+     if (!dp->txq_table)
+         return -ENOMEM;
+@@ -391,11 +619,13 @@ static int dp_alloc_rings(struct hi5622_pci *ctx)
+     dp->rx_cmp_ring_dma = dma;
+ 
+     if (dp_alloc_rx_pool(ctx, &dp->rx_norm_cpu, &dp->rx_norm_dma,
+-                         DP_RX_NORM_DEPTH, DP_RX_NORM_ALLOC,
++                         &dp->rx_norm_skb, DP_RX_NORM_DEPTH,
++                         DP_RX_NORM_ALLOC, dp->rx_buf_class_used,
+                          "rx_norm_buffer") != 0)
+         return -ENOMEM;
+     if (dp_alloc_rx_pool(ctx, &dp->rx_small_cpu, &dp->rx_small_dma,
+-                         DP_RX_SMALL_DEPTH, DP_RX_SMALL_ALLOC,
++                         &dp->rx_small_skb, DP_RX_SMALL_DEPTH,
++                         DP_RX_SMALL_ALLOC, dp->rx_buf_class_used,
+                          "rx_small_buffer") != 0)
+         return -ENOMEM;
+     return 0;
+@@ -480,19 +710,31 @@ static int dp_write_msdu_table(struct hi5622_pci *ctx)
+ /* ------------------------------------------------------------------ */
+ /* RX free-ring fill                                                  */
+ /* ------------------------------------------------------------------ */
+-static void dp_fill_rx_rings(struct hi5622_pci *ctx)
++static int dp_fill_rx_rings(struct hi5622_pci *ctx)
+ {
+     struct hi5622_dp *dp = ctx->dp;
+     u32 *norm = dp->rx_norm_ring;
+     u32 *small = dp->rx_small_ring;
+     unsigned int i;
++    int rc;
+ 
+-    for (i = 0; i < DP_RX_NORM_DEPTH; i++)
++    for (i = 0; i < DP_RX_NORM_DEPTH; i++) {
++        rc = hi5622_dp_rx_buf_prepare(ctx, (u32)dp->rx_norm_dma[i],
++                                      DP_RX_NORM_ALLOC);
++        if (rc)
++            return rc;
+         norm[i] = dp_rx_buf_entry_devva((u32)dp->rx_norm_dma[i]);
+-    for (i = 0; i < DP_RX_SMALL_DEPTH; i++)
++    }
++    for (i = 0; i < DP_RX_SMALL_DEPTH; i++) {
++        rc = hi5622_dp_rx_buf_prepare(ctx, (u32)dp->rx_small_dma[i],
++                                      DP_RX_SMALL_ALLOC);
++        if (rc)
++            return rc;
+         small[i] = dp_rx_buf_entry_devva((u32)dp->rx_small_dma[i]);
++    }
+     /* Publish the ring contents before the MAC produces/consumes. */
+     dma_wmb();
++    return 0;
+ }
+ 
+ /* ------------------------------------------------------------------ */
+@@ -658,7 +900,9 @@ static ssize_t dp_setup_store(struct device *dev, struct device_attribute *attr,
+     rc = dp_write_msdu_table(ctx);
+     if (rc)
+         goto fail;
+-    dp_fill_rx_rings(ctx);
++    rc = dp_fill_rx_rings(ctx);
++    if (rc)
++        goto fail;
+     memset(&p, 0, sizeof(p));
+     p.msdu_table_acp = dp->msdu_table_acp;
+     p.rx_norm_addr = (u32)dp->rx_norm_ring_dma;
+@@ -708,7 +952,9 @@ static ssize_t dp_setup_store(struct device *dev, struct device_attribute *attr,
+     dp->setup_done = true;
+     mutex_unlock(&dp->lock);
+     dev_info(dev,
+-             "DP setup: OK - rings 256/512/4095 (4-byte entries), TXQ table 0x2524 devva 0x%08x, tx rings 8x64x8, tx_ba_info 0x800 devva 0x%08x, MSDU table %u entries at CA 0x%08x/ACP 0x%08x, MAC band0 %u regs written+verified (mask 0x%08x); next: dp_txq_sync\n",
++             "DP setup: OK - RX buffer class %u (%s), rings 256/512/4095 (4-byte entries), TXQ table 0x2524 devva 0x%08x, tx rings 8x64x8, tx_ba_info 0x800 devva 0x%08x, MSDU table %u entries at CA 0x%08x/ACP 0x%08x, MAC band0 %u regs written+verified (mask 0x%08x); next: dp_txq_sync\n",
++             dp->rx_buf_class_used,
++             dp->rx_buf_class_used == DP_RX_CLASS_WOC ? "vendor WOC" : "coherent",
+              dp->txq_table_devva, (u32)dp->txba_dma,
+              dp->table_entries_written, dp->msdu_table_ca,
+              dp->msdu_table_acp, dp->mac_reg_count,
+@@ -725,7 +971,7 @@ fail:
+     dev_err(dev,
+             "DP setup: FAILED at step '%s' (rc %d) - lane closed for this module load; no retry, no further writes\n",
+             rc == -ENOMEM ? "dma_alloc" :
+-            rc == -EINVAL ? "msdu_table_lookup" :
++            rc == -EINVAL ? "msdu_table_lookup_or_buffer_class" :
+             rc == -ERANGE ? "ring_devva_range" :
+             rc == -EFAULT ? "ca_translation" :
+             rc == -EIO ? "readback_verify" : "mac_program",
+@@ -805,6 +1051,13 @@ static ssize_t dp_status_show(struct device *dev, struct device_attribute *attr,
+                      (u32)dp->rx_norm_ring_dma,
+                      (u32)dp->rx_small_ring_dma,
+                      (u32)dp->rx_cmp_ring_dma);
++    pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++                     "RX buffer class: requested=%u used=%u (%s); prepares=%u cpu_syncs=%u\n",
++                     dp_rx_buf_class, dp->rx_buf_class_used,
++                     dp->rx_buf_class_used == DP_RX_CLASS_WOC ?
++                         "vendor WOC (cacheable skb slab + streaming DMA_FROM_DEVICE)" :
++                         "coherent pool (dma_alloc_coherent)",
++                     dp->rx_woc_prepares, dp->rx_woc_sync_cpu);
+     pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+                      "setup gates: windows=%u armed=%u released=%u latched=%u phase=%s ctx_created=%u probe_required=1 h2d_budget=%u\n",
+                      ctx->windows_programmed ? 1u : 0u,
+diff --git a/hi5622_dp.h b/hi5622_dp.h
+index 4182853..0f4b6d3 100644
+--- a/hi5622_dp.h
++++ b/hi5622_dp.h
+@@ -27,4 +27,16 @@ void hi5622_dp_remove(struct hi5622_pci *ctx);
+ int  hi5622_dp_add_attrs(struct device *dev);
+ void hi5622_dp_del_attrs(struct device *dev);
+ 
++/* wifi-rx-woc-class (shared task task-167): the vendor-class RX buffer path.
++ * hi5622_dp_rx_woc_class() reports whether the pools of this load use the
++ * vendor memory class (cacheable skb slab + streaming DMA_FROM_DEVICE);
++ * hi5622_dp_rx_buf_prepare() is the per-publish host-word/header scrub + cache
++ * flush (no-op for the coherent class) and hi5622_dp_rx_buf_sync_cpu() is the
++ * pre-parse cache invalidate (no-op likewise). */
++bool hi5622_dp_rx_woc_class(struct hi5622_pci *ctx);
++int  hi5622_dp_rx_buf_prepare(struct hi5622_pci *ctx, u32 buf_dma,
++                              unsigned int size);
++void hi5622_dp_rx_buf_sync_cpu(struct hi5622_pci *ctx, unsigned int ring_kind,
++                               unsigned int slot);
++
+ #endif /* _HI5622_DP_H */
+diff --git a/hi5622_dp_txrx.c b/hi5622_dp_txrx.c
+index 048d37e..a2fd331 100644
+--- a/hi5622_dp_txrx.c
++++ b/hi5622_dp_txrx.c
+@@ -1057,6 +1057,15 @@ static int dptx_rx_refill(struct hi5622_dp_txrx *t, u8 ring_kind)
+ 		if (idx >= depth)
+ 			return HIL_RX_ERANGE;
+ 		buf_dma = q[*head];
++		/* wifi-rx-woc-class (task-167): vendor-class buffers are cacheable
++		 * memory; re-scrub the host word/36-byte header and flush it before
++		 * the device may write (no-op for the coherent class). */
++		rc = hi5622_dp_rx_buf_prepare(t->ctx, buf_dma,
++					      ring_kind == 0u ?
++						      DP_RX_NORM_STRIDE :
++						      DP_RX_SMALL_STRIDE);
++		if (rc)
++			return rc;
+ 		((u32 *)ring)[idx] = buf_dma + HIL_RX_SKB_WORD;
+ 		*head = (u16)(((u32)*head + 1u) % depth);
+ 		(*count)--;
+@@ -1149,6 +1158,14 @@ static int dptx_rx_wm_ring(struct hi5622_dp_txrx *t, u8 ring_kind,
+ 		if (idx >= depth)
+ 			return HIL_RX_ERANGE;
+ 		buf_dma = q[*head];
++		/* wifi-rx-woc-class (task-167): same per-publish preparation as the
++		 * window refill (no-op for the coherent class). */
++		rc = hi5622_dp_rx_buf_prepare(t->ctx, buf_dma,
++					      ring_kind == 0u ?
++						      DP_RX_NORM_STRIDE :
++						      DP_RX_SMALL_STRIDE);
++		if (rc)
++			return rc;
+ 		((u32 *)ring)[idx] = buf_dma + HIL_RX_SKB_WORD;
+ 		*head = (u16)(((u32)*head + 1u) % depth);
+ 		(*count)--;
+@@ -1456,6 +1473,10 @@ ssize_t hi5622_dp_rx_drain_store(struct device *dev,
+ 			rc = -ENODEV;
+ 			goto drain_refuse;
+ 		}
++		buf_dma = (u32)pool_dma[slot_idx];
++		/* wifi-rx-woc-class (task-167): invalidate the device-written lines
++		 * before the CPU parses the header/payload (no-op coherent class). */
++		hi5622_dp_rx_buf_sync_cpu(t->ctx, ring_kind, slot_idx);
+ 		rc = hi5622_rx_hdr_parse(cpu + HIL_RX_SKB_WORD, dma_cap, &hdr);
+ 		if (rc == HIL_RX_ECHAIN) {
+ 			t->rx_chain_refused++;
+@@ -1491,7 +1512,6 @@ ssize_t hi5622_dp_rx_drain_store(struct device *dev,
+ 		 * payload starts at buffer+0x28 (HIL_RX_PAYLOAD_OFF). */
+ 		hi5622_sta_ops_rx_deliver(t->ctx, cpu + HIL_RX_PAYLOAD_OFF,
+ 					  hdr.payload_len);
+-		buf_dma = (u32)pool_dma[slot_idx];
+ 		rc = dptx_rx_queue_completed(t, ring_kind, buf_dma);
+ 		if (rc != HIL_RX_OK)
+ 			goto drain_refuse;
+@@ -1987,7 +2007,8 @@ int hi5622_dp_txrx_bind(struct hi5622_pci *ctx,
+ 	mutex_unlock(&dptx_list_lock);
+ 
+ 	dev_info(dev,
+-		 "DP txrx: bound - TX frame buffer %u B devva 0x%08x (host word + 16 B zero DMA header + MPDU); MSDU table CA 0x%08x; attrs dp_tx_frame/dp_tx_status/dp_rx_poll/dp_rx_capture\n",
++		 "DP txrx: bound - RX buffer class %s; TX frame buffer %u B devva 0x%08x (host word + 16 B zero DMA header + MPDU); MSDU table CA 0x%08x; attrs dp_tx_frame/dp_tx_status/dp_rx_poll/dp_rx_capture\n",
++		 hi5622_dp_rx_woc_class(ctx) ? "vendor-WOC" : "coherent",
+ 		 DP_TXRX_FRAME_AREA, devva, t->msdu_table_ca);
+ 	return 0;
+ }

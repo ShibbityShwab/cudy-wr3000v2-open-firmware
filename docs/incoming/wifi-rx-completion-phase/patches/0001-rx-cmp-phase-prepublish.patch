@@ -1,0 +1,639 @@
+diff -ruN rx-cmp-phase-stage/hi5622_dp.c rx-cmp-phase-src/hi5622_dp.c
+--- a/hi5622_dp.c	2026-11-25 14:41:50.645107353 +0700
++++ b/hi5622_dp.c	2026-11-25 14:42:31.482454746 +0700
+@@ -928,6 +928,12 @@
+ static struct device_attribute dev_attr_dp_rx_status_clear =
+     __ATTR(dp_rx_status_clear, 0200, NULL, hi5622_dp_rx_status_clear_store);
+ 
++/* wifi-rx-completion-phase lane (task-168): the one-shot phase-1 completion
++ * consumer prepublish experiment (before dp_rx_arm; fail-closed behind the
++ * rx_cmp_prepublish module parameter). */
++static struct device_attribute dev_attr_dp_rx_cmp_prepublish =
++    __ATTR(dp_rx_cmp_prepublish, 0200, NULL, hi5622_dp_rx_cmp_prepublish_store);
++
+ /* wifi-dp-tuning lane (task-134): TXQ-table publish evidence, bounded
+  * completion poll and the two opt-in MAC-tail experiment attributes. */
+ static struct device_attribute dev_attr_dp_txq_table =
+@@ -954,6 +960,7 @@
+     &dev_attr_dp_rx_drain.attr,
+     &dev_attr_dp_rx_parity.attr,
+     &dev_attr_dp_rx_status_clear.attr,
++    &dev_attr_dp_rx_cmp_prepublish.attr,
+     &dev_attr_dp_txq_table.attr,
+     &dev_attr_dp_tx_complete_poll.attr,
+     &dev_attr_dp_mac_ext.attr,
+diff -ruN rx-cmp-phase-stage/hi5622_dp_txrx.c rx-cmp-phase-src/hi5622_dp_txrx.c
+--- a/hi5622_dp_txrx.c	2026-11-25 14:41:50.645208664 +0700
++++ b/hi5622_dp_txrx.c	2026-11-25 14:43:05.137378610 +0700
+@@ -30,6 +30,7 @@
+ #include <linux/string.h>
+ #include <linux/jiffies.h>
+ #include <linux/types.h>
++#include <linux/delay.h>
+ 
+ #include "hi5622_driver.h"
+ #include "hi5622_hcc.h"
+@@ -39,6 +40,7 @@
+ #include "dp_txrx.h"
+ #include "hi5622_rx_live.h"
+ #include "hi5622_rx_diff.h"
++#include "hi5622_rx_cmp_phase.h"
+ #include "hi5622_sta_ops.h"
+ 
+ #define DPTX_FRAME_OWNER 0x54585258u /* "TXRX" host bookkeeping word */
+@@ -111,6 +113,23 @@
+ MODULE_PARM_DESC(rx_status_service,
+ 	"1 = dp_rx_status_clear may W1C the served RX status bit (config +0x44); 0 (default) = read-only");
+ 
++/* wifi-rx-completion-phase (task-168): the completion-consumer phase rung.
++ * Vendor decode (REPORT.md): the completion consumer is a packed 16-bit
++ * pointer = index[14:0] | phase<<15 published to config +0x40, the vendor
++ * ring library publishes 32-bit zero-extended words, and the vendor's own
++ * initial consumer is 0x0000 (stock cfg +0x40 = 0; the phase bit becomes 1
++ * only after a full 4095-entry lap).  This rung is an OPT-IN experiment: with
++ * rx_cmp_prepublish=1, the one-shot dp_rx_cmp_prepublish action publishes the
++ * phase-1 word 0x8000 before dp_rx_arm to test whether the device's DMAC
++ * requires a non-zero initial consumer phase.  It is fail-closed by default
++ * and probe-and-rollback: if the host-MAC status word reacts (bit 7 rptr
++ * overtake wptr / bit 10 rx_ppdu_desc error), the rung restores the vendor
++ * initial 0 immediately. */
++static unsigned int dptx_rx_cmp_prepublish = 0u;
++module_param_named(rx_cmp_prepublish, dptx_rx_cmp_prepublish, uint, 0644);
++MODULE_PARM_DESC(rx_cmp_prepublish,
++	"1 = allow the one-shot dp_rx_cmp_prepublish phase-1 completion-consumer experiment (published before dp_rx_arm); 0 (default) = action refused");
++
+ /* Documentation-example address (02:00:... locally administered); never a
+  * per-unit value. The project already documents wlan0 as 02:00:68:69:35:01. */
+ static const u8 dptx_example_addr[6] = { 0x02, 0x00, 0x68, 0x69, 0x35, 0x01 };
+@@ -253,6 +272,17 @@
+ 	u32  rx_parity_read_fail;
+ 	u32  rx_status_clears;
+ 	u32  rx_status_last_cleared;
++	/* wifi-rx-completion-phase (task-168): phase-1 consumer prepublish
++	 * probe-and-rollback evidence, all host-side. */
++	u32  rx_cmp_prepublish_done;
++	u32  rx_cmp_prepublish_active;
++	u32  rx_cmp_prepublish_old;
++	u32  rx_cmp_prepublish_new;
++	u32  rx_cmp_prepublish_rb;
++	u32  rx_cmp_prepublish_status_before;
++	u32  rx_cmp_prepublish_status_after;
++	u32  rx_cmp_prepublish_reaction;
++	u32  rx_cmp_prepublish_rollback;
+ };
+ 
+ static LIST_HEAD(dptx_list);
+@@ -985,6 +1015,17 @@
+ 			 t->rx_parity_live_mismatch,
+ 			 t->rx_parity_live_device_zero, t->rx_parity_read_fail,
+ 			 t->rx_status_clears);
++	/* wifi-rx-completion-phase (task-168): phase-1 consumer prepublish
++	 * probe-and-rollback evidence (vendors initial consumer is 0x0000). */
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "RX completion-phase: rx_cmp_prepublish=%u one_shot_used=%u active=%u probe{old=0x%08x new=0x%08x rb=0x%08x before=0x%08x after=0x%08x reaction=0x%08x rollback=%u}\n",
++			 dptx_rx_cmp_prepublish, t->rx_cmp_prepublish_done,
++			 t->rx_cmp_prepublish_active, t->rx_cmp_prepublish_old,
++			 t->rx_cmp_prepublish_new, t->rx_cmp_prepublish_rb,
++			 t->rx_cmp_prepublish_status_before,
++			 t->rx_cmp_prepublish_status_after,
++			 t->rx_cmp_prepublish_reaction,
++			 t->rx_cmp_prepublish_rollback);
+ 	mutex_unlock(&t->lock);
+ 	return pos;
+ }
+@@ -1732,6 +1773,16 @@
+ 			 "DP rx_arm: live-bank device-owned words 0x14=0x%08x 0x24=0x%08x 0x28=0x%08x 0x2c=0x%08x 0x30=0x%08x (vendor idle 0x00200020/0x00800000/0x01800800/0x02801000/0x03801800; all-zero = device RX state not initialized - run 'cat dp_rx_parity' for the full diff)\n",
+ 			 extra[0], extra[1], extra[2], extra[3], extra[4]);
+ 	}
++	dev_info(dev,
++		 "DP rx_arm: cmp-preq phase rung rx_cmp_prepublish=%u one_shot_used=%u active=%u cfg_cmp_rptr_published=0x%04x (vendor initial 0x0000, phase1 experiment 0x8000) probe{old=0x%08x new=0x%08x rb=0x%08x before=0x%08x after=0x%08x reaction=0x%08x rollback=%u} - see wifi-rx-completion-phase REPORT.md\n",
++		 dptx_rx_cmp_prepublish, t->rx_cmp_prepublish_done,
++		 t->rx_cmp_prepublish_active, cr & 0xffffu,
++		 t->rx_cmp_prepublish_old, t->rx_cmp_prepublish_new,
++		 t->rx_cmp_prepublish_rb,
++		 t->rx_cmp_prepublish_status_before,
++		 t->rx_cmp_prepublish_status_after,
++		 t->rx_cmp_prepublish_reaction,
++		 t->rx_cmp_prepublish_rollback);
+ 	return (ssize_t)count;
+ 
+ arm_refuse:
+@@ -1742,6 +1793,172 @@
+ 	return rc;
+ }
+ 
++/* dp_rx_cmp_prepublish: the task-168 phase-1 completion-consumer rung.
++ *
++ * Publishes the packed completion-consumer word 0x8000 (index 0, phase 1) to
++ * the host-interface config block +0x40 BEFORE dp_rx_arm, then probes the
++ * host-MAC status word for a device reaction.  This is an experiment, not a
++ * vendor sequence: the vendor's own initial consumer is 0x0000 (stock dump
++ * cfg +0x40 = 0; the phase bit only becomes 1 after a full 4095-entry lap),
++ * and the vendor ring library's phase-aware arithmetic reads
++ * (device producer 0x0000, consumer 0x8000) as ONE FULL LAP.  The rung is
++ * therefore probe-and-rollback: if status bit 7 (rptr overtake wptr) or
++ * bit 10 (rx_ppdu_desc error) transitions 0->1 after the store, 0x0000 is
++ * restored immediately and the verdict is PHASE1-REJECTED-BY-DEVICE.  A clean
++ * probe leaves 0x8000 published for the attended R2 (frames) rung and records
++ * PHASE1-ACCEPTED-IDLE.  One shot per load, before arm, exact-width 32-bit
++ * store with read-back; no other RX state is touched. */
++ssize_t hi5622_dp_rx_cmp_prepublish_store(struct device *dev,
++					 struct device_attribute *attr,
++					 const char *buf, size_t count)
++{
++	struct hi5622_dp_txrx *t = dptx_from_dev(dev);
++	struct hi5622_pci *ctx;
++	u32 old, before, after, store, rb, rb2 = 0u;
++	u32 reaction, cw, pending = 0u, full = 0u;
++	enum rxc_gate gate;
++	u32 ready;
++	int rc;
++
++	(void)attr;
++	if (!t || !t->ctx)
++		return -ENODEV;
++	ctx = t->ctx;
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	mutex_lock(&t->lock);
++	if (!t->bound || t->failed) {
++		mutex_unlock(&t->lock);
++		return -ENODEV;
++	}
++	ready = (ctx->windows_programmed && ctx->hcc && ctx->hcc->armed &&
++		 dptx_write_gate(ctx) == 0) ? 1u : 0u;
++	old = dptx_mac_read(ctx, HIL_RX_CFG_CMP_RPTR);
++	if (old == 0xffffffffu) {
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_cmp_prepublish: REFUSED - config +0x40 transport miss (0xffffffff) - no write\n");
++		return -EFAULT;
++	}
++	gate = rxc_prepublish_gate(dptx_rx_cmp_prepublish, dptx_rx_enable,
++				   ready, t->rx_armed,
++				   t->rx_cmp_prepublish_done, t->rx_failed,
++				   old);
++	switch (gate) {
++	case RXC_GATE_ALLOW:
++		break;
++	case RXC_GATE_DISABLED:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: REFUSED - rx_cmp_prepublish=0 (fail-closed; reload with rx_cmp_prepublish=1 for the phase-1 rung)\n");
++		return -EPERM;
++	case RXC_GATE_NO_RX_ENABLE:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: REFUSED - rx_enable=0 (fail-closed)\n");
++		return -EPERM;
++	case RXC_GATE_NOT_READY:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: refused - transport/write gate is not up (needs dp_setup + dp_txq_sync in this load); no write\n");
++		return -EBUSY;
++	case RXC_GATE_ARMED:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: REFUSED - dp_rx_arm already ran; the prepublish must happen BEFORE the arm (reload)\n");
++		return -EALREADY;
++	case RXC_GATE_ALREADY_DONE:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: REFUSED - one-shot already used in this load\n");
++		return -EALREADY;
++	case RXC_GATE_LANE_FAILED:
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: REFUSED - the RX lane/device is already closed in this load\n");
++		return -EIO;
++	case RXC_GATE_CONSUMER_DIRTY:
++	default:
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_cmp_prepublish: REFUSED - config +0x40 = 0x%08x is not the vendor initial consumer 0x0000; refusing to overwrite a moved consumer (no write)\n",
++			old);
++		return -ERANGE;
++	}
++	before = dptx_mac_read_live(ctx, HIL_RX_LIVE_STATUS);
++	if (before == 0xffffffffu) {
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_cmp_prepublish: REFUSED - live status transport miss - no write\n");
++		return -EFAULT;
++	}
++	store = rxc_store_value(old, RXC_PHASE1_PREPUBLISH);
++	rc = dptx_mac_write_checked(ctx, HIL_RX_CFG_CMP_RPTR, store);
++	if (rc) {
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_cmp_prepublish: REFUSED - store failed rc=%d; no further action\n",
++			rc);
++		return -EFAULT;
++	}
++	rb = dptx_mac_read(ctx, HIL_RX_CFG_CMP_RPTR);
++	if (rb == 0xffffffffu || !rxc_readback_ok(rb, RXC_PHASE1_PREPUBLISH)) {
++		/* Best-effort restore of the vendor initial consumer. */
++		(void)dptx_mac_write_checked(ctx, HIL_RX_CFG_CMP_RPTR,
++					     rxc_store_value(rb,
++						RXC_VENDOR_INITIAL_CONSUMER));
++		mutex_unlock(&t->lock);
++		dev_err(dev,
++			"DP rx_cmp_prepublish: FAILED - read-back 0x%08x does not carry 0x8000; restored the vendor initial consumer, no traffic rung\n",
++			rb);
++		return -EIO;
++	}
++	/* Let the device reflect a reaction, then probe the two phase flags. */
++	msleep(10);
++	after = dptx_mac_read_live(ctx, HIL_RX_LIVE_STATUS);
++	if (after == 0xffffffffu)
++		after = before;
++	reaction = rxc_status_reaction(before, after);
++	t->rx_cmp_prepublish_old = old;
++	t->rx_cmp_prepublish_new = store;
++	t->rx_cmp_prepublish_rb = rb;
++	t->rx_cmp_prepublish_status_before = before;
++	t->rx_cmp_prepublish_status_after = after;
++	t->rx_cmp_prepublish_reaction = reaction;
++	t->rx_cmp_prepublish_done = 1u;
++	if (reaction != 0u) {
++		rc = dptx_mac_write_checked(ctx, HIL_RX_CFG_CMP_RPTR,
++					    rxc_store_value(rb,
++						RXC_VENDOR_INITIAL_CONSUMER));
++		if (rc == 0) {
++			rb2 = dptx_mac_read(ctx, HIL_RX_CFG_CMP_RPTR);
++			if (rb2 == 0xffffffffu ||
++			    !rxc_readback_ok(rb2, RXC_VENDOR_INITIAL_CONSUMER))
++				rc = -EIO;
++		}
++		t->rx_cmp_prepublish_rollback = (rc == 0) ? 1u : 0u;
++		t->rx_cmp_prepublish_active = 0u;
++		mutex_unlock(&t->lock);
++		dev_warn(dev,
++			 "DP rx_cmp_prepublish: PHASE1-REJECTED-BY-DEVICE status 0x%08x -> 0x%08x reaction=0x%08x (bit7=rptr-overtake bit10=ppdu-desc-err) old=0x%08x rb=0x%08x rollback=%s rb_after=0x%08x - the device validates the completion consumer phase; the phase-1 state is NOT usable and the vendor initial consumer 0x0000 is restored.  Do not send traffic; report this line.\n",
++			 before, after, reaction, old, rb,
++			 t->rx_cmp_prepublish_rollback ? "OK" : "FAILED",
++			 rb2);
++		return (ssize_t)count;
++	}
++	t->rx_cmp_prepublish_active = 1u;
++	cw = dptx_mac_read_live(ctx, HIL_RX_LIVE_CMP_WPTR);
++	if (cw != 0xffffffffu &&
++	    rxc_ring_state(cw, RXC_PHASE1_PREPUBLISH, HIL_RX_CMP_DEPTH,
++			   &pending, &full) != RXC_OK)
++		full = 1u;
++	mutex_unlock(&t->lock);
++	dev_warn(dev,
++		 "DP rx_cmp_prepublish: PHASE1-ACCEPTED-IDLE status 0x%08x -> 0x%08x (no device reaction) cfg+0x40 0x%08x -> 0x%08x (vendor initial was 0x0000); phase-aware view: producer=0x%04x consumer=0x8000 pending=%u full_lap=%u - one full-lap ring ahead of the first completion.  Probe is clean only for the no-traffic discriminator; do NOT claim a fix.  R2 (attended, recovery armed) may now send the auth frames.\n",
++		 before, after, old, rb, cw, pending, full);
++	return (ssize_t)count;
++}
++
+ /* dp_rx_drain: the only RX action that moves ring pointers.  Consumes a
+  * bounded prefix of the completion ring, validates every entry against the
+  * host pools and the 36-byte MAC header, queues the buffers for refill,
+diff -ruN rx-cmp-phase-stage/hi5622_dp_txrx.h rx-cmp-phase-src/hi5622_dp_txrx.h
+--- a/hi5622_dp_txrx.h	2026-11-25 14:41:50.645355671 +0700
++++ b/hi5622_dp_txrx.h	2026-11-25 14:42:31.479454762 +0700
+@@ -94,6 +94,14 @@
+                                         struct device_attribute *attr,
+                                         const char *buf, size_t count);
+ 
++/* wifi-rx-completion-phase (shared task task-168): the one-shot phase-1
++ * completion-consumer prepublish experiment (published before dp_rx_arm; the
++ * vendor initial consumer is 0x0000).  Fail-closed behind rx_cmp_prepublish=1
++ * and probe-and-rollback on a device status reaction. */
++ssize_t hi5622_dp_rx_cmp_prepublish_store(struct device *dev,
++                                          struct device_attribute *attr,
++                                          const char *buf, size_t count);
++
+ /* wifi-dp-tuning (shared task task-134): TXQ-table queue-state publish and the
+  * bounded completion/consumer read surface. */
+ ssize_t hi5622_dp_txq_show(struct device *dev,
+diff -ruN rx-cmp-phase-stage/hi5622_rx_cmp_phase.c rx-cmp-phase-src/hi5622_rx_cmp_phase.c
+--- a/hi5622_rx_cmp_phase.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_rx_cmp_phase.c	2026-11-25 14:42:31.592916717 +0700
+@@ -0,0 +1,153 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rx_cmp_phase.c - portable completion-ring consumer/phase model
++ * (lane wifi-rx-completion-phase, shared task task-168).
++ *
++ * ORIGINAL clean-room code.  Pure functions only: no kernel, no device, no
++ * vendor bytes.  The kernel glue (hi5622_dp_txrx.c) performs the one 32-bit
++ * store; this file only decides what the store must be.
++ *
++ * Contract sources (all committed, decoded in REPORT.md):
++ *   - packed pointer = index[14:0] | phase<<15
++ *       hal_ring_set_sw2hw 0x31f1c (type 2 -> cfg +0x40, zero-extended u16
++ *       stored as a 32-bit word), hal_ring_set_entries 0x322f4 /
++ *       hal_ring_get_entries 0x32164 (phase toggles on wrap).
++ *   - pending = phase-aware producer-consumer distance
++ *       hal_ring_get_entry_count 0x31f80.
++ *   - vendor initial completion consumer = 0x0000
++ *       shuangta_rx_host_init_dscr_queue 0x37888 leaves cfg +0x40 at reset;
++ *       vendor stock dump cfg +0x40 = 0, live +0x10 = 0.
++ */
++#include "hi5622_rx_cmp_phase.h"
++
++rxc_u32 rxc_pack(rxc_u32 index, rxc_u32 phase)
++{
++    return (index & RXC_IDX_MASK) | ((phase & 1u) ? RXC_PHASE_BIT : 0u);
++}
++
++void rxc_unpack(rxc_u32 packed, rxc_u32 *index, rxc_u32 *phase)
++{
++    if (index != NULL)
++        *index = packed & RXC_IDX_MASK;
++    if (phase != NULL)
++        *phase = (packed & RXC_PHASE_BIT) ? 1u : 0u;
++}
++
++rxc_u32 rxc_next(rxc_u32 packed, rxc_u32 depth)
++{
++    rxc_u32 index = packed & RXC_IDX_MASK;
++    rxc_u32 phase = (packed & RXC_PHASE_BIT) ? 1u : 0u;
++
++    if (depth == 0u || depth > RXC_IDX_MASK)
++        return packed;              /* fail closed: never wrap on bad depth */
++    index++;
++    if (index >= depth) {
++        index = 0u;
++        phase ^= 1u;
++    }
++    return rxc_pack(index, phase);
++}
++
++rxc_u32 rxc_advance(rxc_u32 packed, rxc_u32 n, rxc_u32 depth)
++{
++    rxc_u32 i;
++
++    if (depth == 0u || depth > RXC_IDX_MASK)
++        return packed;
++    if (n > depth)
++        n = depth;                  /* cannot consume more than one lap */
++    for (i = 0u; i < n; i++)
++        packed = rxc_next(packed, depth);
++    return packed;
++}
++
++int rxc_pending(rxc_u32 producer, rxc_u32 consumer, rxc_u32 depth,
++                rxc_u32 *count)
++{
++    rxc_s32 d;
++
++    if (count == NULL || depth == 0u || depth > RXC_IDX_MASK)
++        return RXC_EARG;
++    if ((producer & RXC_IDX_MASK) >= depth ||
++        (consumer & RXC_IDX_MASK) >= depth)
++        return RXC_ERANGE;
++    /* Vendor hal_ring_get_entry_count 0x31f80 type-2 branch: signed index
++     * distance, +depth when the phase bits differ, then the u16 count; an
++     * out-of-range result is the over-consumed/desynced state the caller must
++     * refuse. */
++    d = (rxc_s32)(producer & RXC_IDX_MASK) -
++        (rxc_s32)(consumer & RXC_IDX_MASK);
++    if (((producer ^ consumer) & RXC_PHASE_BIT) != 0u)
++        d += (rxc_s32)depth;
++    if (d < 0 || (rxc_u32)d > depth)
++        return RXC_ERANGE;
++    *count = (rxc_u32)d;
++    return RXC_OK;
++}
++
++int rxc_ring_state(rxc_u32 producer, rxc_u32 consumer, rxc_u32 depth,
++                   rxc_u32 *pending, rxc_u32 *full_lap)
++{
++    rxc_u32 count = 0u;
++    int rc;
++
++    rc = rxc_pending(producer, consumer, depth, &count);
++    if (rc != RXC_OK)
++        return rc;
++    if (pending != NULL)
++        *pending = count;
++    if (full_lap != NULL)
++        *full_lap = (count == depth) ? 1u : 0u;
++    return RXC_OK;
++}
++
++enum rxc_gate rxc_prepublish_gate(rxc_u32 param_enabled, rxc_u32 rx_enable,
++                                  rxc_u32 ready, rxc_u32 armed,
++                                  rxc_u32 done, rxc_u32 lane_failed,
++                                  rxc_u32 cfg_cmp_rptr)
++{
++    if (param_enabled == 0u)
++        return RXC_GATE_DISABLED;
++    if (rx_enable == 0u)
++        return RXC_GATE_NO_RX_ENABLE;
++    if (ready == 0u)
++        return RXC_GATE_NOT_READY;
++    if (armed != 0u)
++        return RXC_GATE_ARMED;
++    if (done != 0u)
++        return RXC_GATE_ALREADY_DONE;
++    if (lane_failed != 0u)
++        return RXC_GATE_LANE_FAILED;
++    if ((cfg_cmp_rptr & 0xffffu) != RXC_VENDOR_INITIAL_CONSUMER)
++        return RXC_GATE_CONSUMER_DIRTY;
++    return RXC_GATE_ALLOW;
++}
++
++rxc_u32 rxc_store_value(rxc_u32 old_word, rxc_u32 packed)
++{
++    return (old_word & 0xffff0000u) | (packed & 0xffffu);
++}
++
++int rxc_readback_ok(rxc_u32 readback, rxc_u32 packed)
++{
++    return ((readback & 0xffffu) == (packed & 0xffffu)) ? 1 : 0;
++}
++
++rxc_u32 rxc_status_reaction(rxc_u32 before, rxc_u32 after)
++{
++    rxc_u32 watch = RXC_STATUS_BIT_RPTR_OVERTAKE |
++                    RXC_STATUS_BIT_PPDU_DESC_ERR;
++
++    return (after & ~before) & watch;
++}
++
++int rxc_phase1_looks_full(rxc_u32 producer)
++{
++    rxc_u32 pending = 0u;
++    rxc_u32 full = 0u;
++
++    if (rxc_ring_state(producer, RXC_PHASE1_PREPUBLISH, RXC_CMP_DEPTH,
++                       &pending, &full) != RXC_OK)
++        return 1;                   /* fail closed: treat as full */
++    return (int)full;
++}
+diff -ruN rx-cmp-phase-stage/hi5622_rx_cmp_phase.h rx-cmp-phase-src/hi5622_rx_cmp_phase.h
+--- a/hi5622_rx_cmp_phase.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_rx_cmp_phase.h	2026-11-25 14:42:31.592970227 +0700
+@@ -0,0 +1,156 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rx_cmp_phase.h - portable completion-ring consumer/phase model for
++ * the Hi5622V100 clean-room host (Cudy WR3000 v2.0, luofu v2).
++ *
++ * ORIGINAL clean-room code (lane wifi-rx-completion-phase, shared task
++ * task-168).  No vendor source/object code, firmware byte, calibration value
++ * or per-unit identity is reproduced: every constant below is a derived fact
++ * with a [V]/[V*] marker cited in REPORT.md, and every routine is device-free
++ * so the host selftest can pin it without a kernel or a bench.
++ *
++ * Why this file exists (task-168, the completion-consumer candidate): the
++ * completion ring consumer is the single host-written word of the RX capture
++ * path that the previous lanes never modelled as a *phase* quantity.  The
++ * vendor ring library publishes a packed 16-bit pointer = index[14:0] |
++ * phase<<15 (hal_ring_set_sw2hw 0x31f1c, type 2 = completion ring, 32-bit
++ * store to config +0x40); the consumer is advanced by hal_ring_get_entries
++ * 0x32164 (phase toggles on wrap) and the device producer is read from live
++ * bank +0x10 by hal_ring_get_hw2sw 0x31e1c.  The initial consumer the vendor
++ * publishes is 0x0000, not 0x8000 (stock dump, see REPORT.md).  This header
++ * pins the vendor semantics, the vendor-exact initial value, the requested
++ * phase-1 experiment and its state-machine gates.
++ *
++ * Evidence markers: [V] decoded from opensource/docs/incoming/wifi-shim-port/
++ * raw/hi5622v100_wifi.dis / committed register dumps; [V*] hardware-observed
++ * by an attended lane and quoted from a committed report; [I] inference;
++ * [U] unknown.
++ */
++#ifndef HI5622_RX_CMP_PHASE_H
++#define HI5622_RX_CMP_PHASE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++typedef u8  rxc_u8;
++typedef u16 rxc_u16;
++typedef u32 rxc_u32;
++typedef s32 rxc_s32;
++#else
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  rxc_u8;
++typedef uint16_t rxc_u16;
++typedef uint32_t rxc_u32;
++typedef int32_t  rxc_s32;
++#endif
++
++/* ===================================================================
++ * 1. Completion-ring constants [V]
++ * =================================================================== */
++#define RXC_IDX_MASK   0x7fffu   /* packed pointer index bits [14:0] */
++#define RXC_PHASE_BIT  0x8000u   /* packed pointer phase bit 15 */
++#define RXC_CMP_DEPTH  4095u     /* completion ring depth, band 0 [V] */
++#define RXC_CONFIG_CMP_RPTR 0x40u /* host-interface config word, band 0 */
++#define RXC_LIVE_CMP_WPTR 0x10u  /* live bank word: device producer */
++
++/* The vendor-exact initial consumer: 0x0000 (index 0, phase 0) [V].
++ * Evidence: shuangta_rx_host_init_dscr_queue (0x37888) zeroes the 0x28-byte
++ * completion ring struct and never writes config +0x40; the vendor stock
++ * register dump (vendor driver live, AP idle) reads cfg 0x40040040 = 0 and
++ * live 0x40050010 = 0.  Do not confuse this with the free-ring producers,
++ * which do publish 0x8000 (index 0, phase 1 = ring full) after the 256/512
++ * entry fill: cfg +0x38/+0x3c = 0x8000 in the same dump. */
++#define RXC_VENDOR_INITIAL_CONSUMER 0x0000u
++#define RXC_FREE_RING_FULL_PUBLISH  0x8000u
++
++/* The phase-1 prepublish experiment value: index 0, phase 1 = 0x8000. */
++#define RXC_PHASE1_PREPUBLISH 0x8000u
++
++/* Return codes (negative; same shape as the other lane headers). */
++#define RXC_OK      0
++#define RXC_EARG   (-1)
++#define RXC_ERANGE (-2)
++
++/* ===================================================================
++ * 2. Vendor ring arithmetic
++ * =================================================================== */
++
++/* Packed pointer: index in [14:0], phase in bit 15. */
++rxc_u32 rxc_pack(rxc_u32 index, rxc_u32 phase);
++void     rxc_unpack(rxc_u32 packed, rxc_u32 *index, rxc_u32 *phase);
++
++/* Next packed pointer after publishing/consuming one entry; phase toggles on
++ * wrap (vendor hal_ring_set_entries 0x32354 / hal_ring_get_entries 0x32258:
++ * the index goes to 0 and bit 15 is inverted). */
++rxc_u32 rxc_next(rxc_u32 packed, rxc_u32 depth);
++
++/* Advance a consumer by n consumed entries (n <= depth). */
++rxc_u32 rxc_advance(rxc_u32 packed, rxc_u32 n, rxc_u32 depth);
++
++/* Pending count with the vendor hal_ring_get_entry_count (0x31f80) phase-aware
++ * arithmetic: equal packed words -> 0; equal index with different phase ->
++ * the ring is one lap apart (full: pending = depth); otherwise pending is the
++ * wrapped index distance.  Refuses a bad depth/out-of-range index. */
++int rxc_pending(rxc_u32 producer, rxc_u32 consumer, rxc_u32 depth,
++                rxc_u32 *count);
++
++/* Ring-state classification used by the experiment prediction: given the
++ * device producer and the published consumer, classify empty / partial /
++ * full-lap.  full_lap = 1 exactly when the phase-aware count is the depth
++ * (equal index, opposite phase). */
++int rxc_ring_state(rxc_u32 producer, rxc_u32 consumer, rxc_u32 depth,
++                   rxc_u32 *pending, rxc_u32 *full_lap);
++
++/* ===================================================================
++ * 3. The prepublish state machine (host-side decisions only)
++ *
++ * The rung is deliberately a one-shot, pre-arm, opt-in action: it publishes
++ * the completion consumer before any traffic so the RX ladder can test
++ * whether the device's DMAC requires a non-zero consumer phase before it
++ * accepts its first completion write.  Every input below is checked by the
++ * kernel glue BEFORE one 32-bit store is issued; the portable layer decides,
++ * the glue performs the I/O.
++ * =================================================================== */
++enum rxc_gate {
++    RXC_GATE_ALLOW = 0,
++    RXC_GATE_DISABLED,       /* rx_cmp_prepublish module param is 0 */
++    RXC_GATE_NO_RX_ENABLE,   /* rx_enable=0 */
++    RXC_GATE_NOT_READY,      /* bind/transport/write gate not up */
++    RXC_GATE_ARMED,          /* dp_rx_arm already ran: too late */
++    RXC_GATE_ALREADY_DONE,   /* one-shot already used in this load */
++    RXC_GATE_LANE_FAILED,    /* RX lane or device already closed */
++    RXC_GATE_CONSUMER_DIRTY /* cfg +0x40 is not the vendor initial 0 */
++};
++
++/* Decide whether the one-shot prepublish may write. */
++enum rxc_gate rxc_prepublish_gate(rxc_u32 param_enabled, rxc_u32 rx_enable,
++                                  rxc_u32 ready, rxc_u32 armed,
++                                  rxc_u32 done, rxc_u32 lane_failed,
++                                  rxc_u32 cfg_cmp_rptr);
++
++/* Exact-width store value: replace only the low 16 bits of the 32-bit word
++ * (the vendor setters 0x325e4 / hal_ring_set_sw2hw do a 32-bit access; the
++ * upper half is 0 in the vendor stock state). */
++rxc_u32 rxc_store_value(rxc_u32 old_word, rxc_u32 packed);
++
++/* True when the read-back carries the requested packed value in [15:0]. */
++int rxc_readback_ok(rxc_u32 readback, rxc_u32 packed);
++
++/* Status-word reaction check for the probe-and-rollback rung: the device's
++ * host-MAC status word bits 7 (rptr overtake wptr) and 10 (rx_ppdu_desc
++ * error) are the two phase/descriptor consistency flags [V: status map in
++ * wifi-rx-capture-plan REPORT section 5.2 and shuangta_get_rpt_host_intr_
++ * rptr_overtake_wptr 0x3a818 = (word >> 7) & 1].  Returns the mask of flags
++ * that changed from 0 to 1 (0 = no reaction). */
++#define RXC_STATUS_BIT_RPTR_OVERTAKE 0x00000080u
++#define RXC_STATUS_BIT_PPDU_DESC_ERR 0x00000400u
++rxc_u32 rxc_status_reaction(rxc_u32 before, rxc_u32 after);
++
++/* Predicted outcome of the vendor library's phase-aware count for the
++ * phase-1 prepublish state: producer 0 (phase 0) + consumer 0x8000
++ * (phase 1) = equal index / opposite phase = one full lap.  Returns 1 when
++ * the published value makes the ring look full to a phase-aware consumer
++ * (the reason R1 runs WITHOUT traffic before R2). */
++int rxc_phase1_looks_full(rxc_u32 producer);
++
++#endif /* HI5622_RX_CMP_PHASE_H */
+diff -ruN rx-cmp-phase-stage/Kbuild rx-cmp-phase-src/Kbuild
+--- a/Kbuild	2026-11-25 14:41:50.645036880 +0700
++++ b/Kbuild	2026-11-25 14:42:31.484454736 +0700
+@@ -27,6 +27,7 @@
+ 		 dp_rings.o hi5622_dp.o dp_txrx.o hi5622_dp_txrx.o \
+ 		 hi5622_rx_live.o \
+ 		 hi5622_rx_diff.o \
++		 hi5622_rx_cmp_phase.o \
+ 		 hi5622_cfg80211_logic.o hi5622_cfg80211.o \
+ 		 hi5622_cfg80211_ops.o \
+ 		 hi5622_scan_logic.o hi5622_frames_provider.o \
