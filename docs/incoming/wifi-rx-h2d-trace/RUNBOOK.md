@@ -136,17 +136,17 @@ sampler binary cannot be pasted over busybox telnet without a base64 applet (2.5
 neither `nc` nor `base64` in the extracted image; `tftp`/devmem/mdev are present), so **the
 container path is the supported one** - do not hand-roll a binary transfer.
 
-Verify after the restore (before reboot):
-
-```sh
-python3 tools/telnet-exec.py --host 192.168.10.1 -- 'ls -l /etc/init.d/omo-h2dtrace /etc/rc.d/S08omo-h2dtrace /usr/bin/omo-h2dsampler'
-# expect: the three entries present, sampler executable
-```
+Note: the LuCI restore path runs `sysupgrade -r` and then reboots the box by itself;
+that post-restore boot IS the capture boot (the aid is in place before it starts).
+If a restore variant stops before the reboot, inspect the three files with the telnet
+shell and then issue a plain reboot. Verification of the installed files is part of T4.
 
 ## T4. The capture boot (one attended boot; recovery armed) ~10 min
 
-Reboot the stock image (plain reboot; **no RESET**, no flash). The S08 aid starts the sampler before
-the vendor stack loads; it logs to `/overlay/h2d-trace.log` and stops after 180 s (defaults).
+The restore procedure reboots the box: that post-restore boot is the capture boot. If
+it did not reboot, issue a plain reboot (**no RESET**, no flash). The S08 aid starts the
+sampler before the vendor stack loads; it logs to /overlay/h2d-trace.log and stops
+after 180 s (defaults).
 
 Watch the UART for the normal stock boot (the Wi-Fi bring-up in the vendor kernel log) and let the
 stock AP come up. Then:
