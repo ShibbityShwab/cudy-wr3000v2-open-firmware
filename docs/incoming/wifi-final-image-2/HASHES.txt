@@ -1,0 +1,117 @@
+# HASHES - wifi-final-image-2 (task-159, FINAL IMAGE #2)
+#
+# Host-only bake.  Nothing was flashed, written to a device or booted by this
+# lane.  All identities below were derived from the built bytes by
+# tools/bake-final-image-2.sh and tools/verify-final-image-2.sh in the recorded
+# runs (see build-evidence/build-runs.txt, build-evidence/build-summary.txt,
+# build-evidence/final-image-verify.txt).
+# Image/UBI/kernel/module binaries are LOCAL artefacts, never committed:
+#   /home/shibbityshwab/wifi-final-image-2-artifacts/
+#
+# ===========================================================================
+# BUILD ENVIRONMENT PINS
+# ===========================================================================
+openwrt_tree                = /home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_git_head               = 27663a0 (asserted)
+tree_config_sha256          = 9052d5e36fd30e6c59276910f2b286d5a109a5dffd03f3a8e1386aece0ed075d
+built_kernel_config_sha256  = 08b6e59511ab5e568a6afb73da22958283a648c6fffe4987f6d0a245066f676c (pre == post, both runs)
+target_kernel_config_sha256 = ecf1aae26a527737ac94ad62392181e92be1cffe5c03d0f46c16b05cdc9be41f
+profile                     = DEVICE_cudy_wr3000-v2 (hisilicon/luofu)
+kernel                      = linux-6.18.60, OpenWrt GCC 14.4.0, arm_cortex-a9 musl-eabi
+
+# ===========================================================================
+# FINAL IMAGE #2 - the container (sysupgrade .bin, the flash unit)
+# ===========================================================================
+container_size             = 7,188,799 B
+container_sha256           = 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+container_before_sha256    = 0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+                             (three recorded bakes are byte-identical -> reproducible)
+predecessor_container      = 8944740ebe4c708eca202241ec1fa3e01fb86cebe3778609335632ddd697aaa1
+                             (wifi-hostapd-sae image B, the SAE-hostapd base of this image)
+
+# ===========================================================================
+# KERNEL SLICE - UNCHANGED (rootfs-only successor)
+# ===========================================================================
+kernel_slice_size          = 3,372,638 B
+kernel_slice_sha256        = 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_slot_sha256         = 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e
+                             (8,650,752 B kernelb/mtd12 slot; NOT a container member and
+                              NOT written by a rootfs-only flash)
+kernel_cmdline             = CONFIG_CMDLINE / CONFIG_CMDLINE_FORCE=y in the built kernel
+                             config: "ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 ..."
+
+# ===========================================================================
+# ROOTFS (rebuilt; the only changed flash member)
+# ===========================================================================
+rootfs_ubi_size            = 3,801,088 B
+rootfs_ubi_sha256          = 44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
+root_squashfs_size         = 3,316,684 B
+root_squashfs_sha256       = f0f970e20d9ea412f6f535c835cadbb57655824d3236a0f63243f394a7dc7a94
+rootfs_ubi_volume_size     = 3,317,760 B (root.squashfs + 1,076 B zero padding)
+mtd14_rootfsb_size         = 24,379,392 B (0x1740000); 20,578,304 B free -> FITS
+manifest_packages          = 83 (hostapd-mbedtls, hostapd-common, libmbedtls21, iw,
+                             wireless-regdb, wifi-scripts, kmod-hi5622-wifi,
+                             kmod-hi5622-cfg80211; NO hostapd-mini)
+
+# ===========================================================================
+# kmod-hi5622-wifi - THE CORRECTED FINAL ASSOCIATION MODULE
+# ===========================================================================
+module_artifact_path       = /tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+module_artifact_size       = 344,372 B
+module_artifact_sha256     = ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+module_artifact_params     = 56
+module_artifact_vermagic   = 6.18.60 SMP mod_unload ARMv7 p2v8
+module_artifact_depends    = cfg80211
+module_artifact_license    = GPL
+module_installed_size      = 325,932 B (/lib/modules/6.18.60/hi5622_wifi.ko)
+module_installed_sha256    = 4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
+module_text_size           = 144,572 B (.text; installed == artifact, strip removed only symbols/debug)
+module_carrier             = CORRECTED mgmt-TX carrier: raw HCC g0 id6 control message
+                             (12-B HCC header + 48-B device TX control + inline frame);
+                             completion DMAC 0x01F3 -> host g2 id13.  The superseded
+                             host-internal WAL 0x01F2 carrier log string is ABSENT.
+module_carrier_evidence    = hardware-accepted on the bench: posted 86 B, consumed 0 polls
+                             (recorded by the sibling-gpl/wifi-stability wave; this exact
+                             combined module was NOT re-fired by this lane)
+module_source_chain        = final all-patch tree (5b587949) + wpa3-sae + ap-mgmt
+                             + sta-ops + data-tx + sibling-gpl patch
+                             0001-mgmt-tx-hcc-g0id6-carrier.patch
+
+# ===========================================================================
+# HOSTAPD / USERSPACE CARRIED IN THE IMAGE
+# ===========================================================================
+hostapd_installed_size     = 1,032,951 B (/usr/sbin/hostapd)
+hostapd_installed_sha256   = 451dd49f0e759cd6da842aafc479fae6ad80ee094d498b270b263a9bddfb7469
+                             (hostapd-mbedtls full variant, CONFIG_SAE=y + mbedtls TLS)
+old_hostapd_mini           = 13cb3a4306f752f4e1638585e734cd29368ee393096b75931f89e71e01b21919
+                             (504,333 B, SAE-less; NOT in this image)
+iw                         = /usr/sbin/iw, ARM, carried
+iwinfo / ucode             = /usr/bin/iwinfo + /usr/share/ucode/{iwinfo,wifi/*.uc}
+                             + /usr/share/hostap/{common,wdev,wifi-detect}.uc, carried
+regdb                      = /lib/firmware/regulatory.db, carried
+kmods                      = /lib/modules/6.18.60/{cfg80211,hi5622_wifi}.ko, carried
+
+# ===========================================================================
+# ROOTFS PAYLOAD (byte-identical in the image; hashes from build-evidence/payload-manifest.txt)
+# ===========================================================================
+6ff692c535549dc239e3a1ff3bfc8babd7218367432a8ff4313bd8b24e2dc4cf  etc/config/hi5622
+8f278072f07bca5fc5ad263cb5495d221437a7474880a58b8ad2ed07186476f6  etc/hi5622/FIRMWARE-POLICY.txt
+f776437e6162b59cc63e47769f7a8e51c6991e2b210cc377669c7dbbe72f67d3  etc/hi5622/hostapd-open.conf
+bfc7faaf645e1afa08fe362d1023d0d476e06b8435a606be521ea37be108d935  etc/hi5622/hostapd-open.proven.conf
+d1f5f67cf2ee7bca656230c2104ab85fce120bf3392b97fc5e615c82634df09a  etc/hi5622/hostapd-wpa2.conf
+be3797285f8584c85775290205efa119cfb6ff720a2008cb540e7a40f207409e  etc/hi5622/hostapd-wpa2-hardened.conf
+d824fd1381881f62d255e26175b8e44e892e6c071190b68445e37ea05b3018af  etc/hi5622/hostapd-wpa2-wpa3.conf
+6ba5d4f1c6f7ed66a862bbc46e724b8bbf5c12e8e236eec43e58124cf5c4fd05  etc/hi5622/hostapd-wpa3-sae.conf
+5cd9f4eb6136cec0c8b992e8514872118c60b777b1a888f2e1ac26e6f8879097  etc/init.d/hi5622-wifi
+1175f50faae5e7e3849b978c47ec06f57b4050cc8c391beb1e99f3183e6513c5  etc/modprobe.d/hi5622-wifi.conf
+7267d5f13db1a7b2a92fc3c29a5178ba6dc59cf9bd967329b9ba7c7448cd40a0  usr/sbin/hi5622-load
+
+# ===========================================================================
+# POLICY
+# ===========================================================================
+# No vendor firmware/calibration byte is packaged: /lib/firmware contains only
+# regulatory.db, no FIRMWARE*.bin, no wifi_block.bin (manual push only; see
+# payload/etc/hi5622/FIRMWARE-POLICY.txt).  No credential/secret in tracked text;
+# the fixtures carry the project's throw-away test passphrases only.
+# The .ko / .bin / .ubi artefacts live under
+# /home/shibbityshwab/wifi-final-image-2-artifacts/ and are never committed.

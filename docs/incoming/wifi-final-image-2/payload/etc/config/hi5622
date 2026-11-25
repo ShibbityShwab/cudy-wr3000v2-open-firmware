@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: GPL-2.0
+# /etc/config/hi5622 - clean-room Hi5622V100 Wi-Fi image policy
+# (wifi-final-image-2, task-159: FINAL IMAGE #2).
+#
+# Image: wifi-final-image-2 (OpenWrt 6.18.60 bench image).
+# Driver: the CORRECTED FINAL ASSOCIATION clean-room module
+#   344,372 B sha256 ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+#   56 module parameters; vermagic "6.18.60 SMP mod_unload ARMv7 p2v8";
+#   depends=cfg80211.  Chain: final all-patch tree + wpa3-sae + ap-mgmt +
+#   sta-ops + data-tx + the sibling-derived CORRECTED mgmt-TX carrier
+#   (HCC g0 id6 control message, wifi-sibling-gpl patch 0001).
+#   Hardware-accepted on the bench: the corrected carrier posted 86 B and was
+#   consumed 0 polls; RX live bank CA 0x40050000 armed status 0x182.
+#
+# TWO SWITCHES, ON PURPOSE:
+#   hi5622.main.autoload=0  BENCH DEFAULT: nothing loads at boot.  The driver
+#                           boot ladder writes the Wi-Fi chip on load, so a
+#                           bench session stays attended (the operator runs
+#                           /etc/init.d/hi5622-wifi start or hi5622-load).
+#   hi5622.main.autoload=1  PRODUCTION-STYLE: /etc/init.d/hi5622-wifi loads
+#                           cfg80211 + the driver at boot (~40 s, the ladder's
+#                           fixed sleeps), then optionally starts the AP.
+#   hi5622.ap.enabled=1     start hostapd on the AP VAP after the C2 ladder.
+#
+# The association-chain feature gates (mgmt_tx / mgmt_rx / sta_ops / eapol_rx /
+# sta_user_del / data_tx) are FAIL-CLOSED (0) at boot; the association fire
+# recipe flips them to 1 in this file (or passes them on the insmod command
+# line), then runs hi5622-load.  See the image REPORT.md section 4.
+
+config driver 'main'
+	# 0 = bench policy (load by hand); 1 = load at boot via rc.d S96.
+	option autoload '0'
+	# Vendor-derived PD4 research firmware: pushed by hand to /lib/firmware/,
+	# never packaged in the image (firmware policy).
+	option fw_path 'hi_wifi/FIRMWARE.PD4.bin'
+	# Locally captured Wi-Fi PHY/radio custom block (0x9a8 B): never packaged.
+	option wifi_block_path 'hi_wifi/wifi_block.bin'
+	# H2D frame budget.  The final WPA2/RX rungs require 32.
+	option allow_frames '32'
+	option frame_gap_ms '100'
+	# ctx-create + txq-sync72 + TXQ address hand-off + AP/scan/key frames.
+	# The final WPA2/RX/association rungs require 10.
+	option h2d_send_budget '10'
+	# Mode-1 VAP base: g0 id1 keys, posted before scan/AP (the AP start path
+	# posts it itself; the once-guard prevents a duplicate).
+	option vap_start_first '1'
+	option vap_start_mode '1'
+	option vap_start_module '0'
+	# Explicit vendor 60 ms scan dwell instead of "0 = vendor default".
+	option scan_dwell_ms '60'
+	option hcc_poll_ms '5'
+	# --- final feature gates (validated single-boot recipe) -----------------
+	# RX consumer arm on the live bank (CA 0x40050000); drain needs on-air
+	# traffic, so this only arms the proven consumer.
+	option rx_enable '1'
+	# Five-message vendor AP order + firmware beacon path (no host template).
+	option beacon_static '1'
+	option beacon_vap_start '1'
+	# cfg80211 .add_key/.del_key/.set_default_key -> WAL g0 id1 0x0078/79/7A.
+	# Hardware-proven: WPA2-AP GTK installed (firmware workers CA 0x0A5825 /
+	# 0x0A5C9D); WPA3 IGTK/set_default_mgmt_key proven on air on the SAE build.
+	option wpa_keys '1'
+	option wpa_key_module '0'
+	# STA-join / HT / VHT / band experiments are default-fail-closed opt-ins.
+	option sta_join '0'
+	option ht_mode '0'
+	option vht_cap '0'
+	option band_vendor '0'
+	option scan_band_cfg '0'
+	# --- CORRECTED FINAL ASSOCIATION CHAIN (fail-closed defaults) -----------
+	# .mgmt_tx = HCC g0 id6 control message (12-B HCC header + 48-B device TX
+	# control + inline frame); completion DMAC 0x01F3 -> host g2 id13.
+	option mgmt_tx '0'
+	# .mgmt RX = D2H CRX event g1 id13 -> cfg80211_rx_mgmt_ext.
+	option mgmt_rx '0'
+	# .add/change/del/get/dump_station + per-STA firmware context
+	# (g0 id7 user_add + g0 id1 cmd 0x07d2 asoc-state sync).
+	option sta_ops '0'
+	# EAPOL/data RX delivery into the rx-static drain (802.3 -> netif_rx).
+	option eapol_rx '0'
+	# g0 id9 user_del on .del_station (default off: double-delete is the
+	# known E2 crash class).
+	option sta_user_del '0'
+	# ndo_start_xmit -> proven dp TX ring/TXQ path (EAPOL msg1/msg3 + data).
+	option data_tx '0'
+	# Peer-aware fail-closed policy for data_tx (1 = require a known station
+	# table entry for unicast data; EAPOL pre-auth frames always allowed).
+	option data_tx_peer '1'
+	# 0 = AUTO (EAPOL msg1/msg3 unprotected by design), 1 = ALWAYS protect,
+	# 2 = NEVER protect.
+	option data_tx_protect '0'
+	# Bounded TX completion poll (ms).
+	option data_tx_timeout_ms '200'
+	# Diagnostics off by default (mgmt_diag would dump a stack per mgmt_tx).
+	option hcc_trace '0'
+	option stop_ap_mode '0'
+	option mgmt_diag '0'
+	# Publish TXQ after the sync (part of the TX-COMPLETED milestone; module
+	# default is 1 - kept explicit as image policy).
+	option txq_publish '1'
+	# Run the C2 ladder (h2d_ctx_create=3 -> h2d_txq_sync72=1) after load.
+	option c2_ladder '1'
+	# 1 = fail the service when a gate does not come up; 0 = log and continue.
+	option strict '1'
+	# Seconds to wait for /sys/class/ieee80211/phy* after the module load.
+	option wiphy_timeout '30'
+
+config ap 'ap'
+	# 0 = do not start an AP (bench default); 1 = after the C2 ladder.
+	option enabled '0'
+	option ifname 'wlan0'
+	# auto = first wiphy registered by this load.
+	option phy 'auto'
+	# Proven interface type for this driver (iw ... type __ap).
+	option type '__ap'
+	# Regulatory country (e.g. US). Empty = leave the image regdomain as-is;
+	# the world regdomain is NO_IR, so an AP on a real channel needs a country.
+	option country ''
+	# open = proven baseline; /etc/hi5622/hostapd-wpa2.conf for WPA2-PSK,
+	# hostapd-wpa2-hardened.conf for WPA2+PMF, hostapd-wpa2-wpa3.conf for the
+	# WPA2/WPA3 transition and hostapd-wpa3-sae.conf for WPA3-SAE (MFP-required,
+	# BIP-CMAC-256).  The WPA2 profiles are the association-fire targets; the
+	# WPA3 profile already reached AP-ENABLED + IGTK on air as its own build.
+	option config '/etc/hi5622/hostapd-open.conf'

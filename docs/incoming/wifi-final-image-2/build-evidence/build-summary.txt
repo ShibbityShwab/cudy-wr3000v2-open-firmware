@@ -1,0 +1,39 @@
+# wifi-final-image-2 (task-159) build record
+build_start_utc=2026-11-25T05:44:21Z
+build_end_utc=2026-11-25T05:44:28Z
+build_duration_s=7
+openwrt_tree=/home/shibbityshwab/openwrt-lab-selectorfix-img
+tree_head=27663a0
+jobs=16
+target=hisilicon/luofu profile=DEVICE_cudy_wr3000-v2
+build_rc=0
+
+== image container (sysupgrade .bin, the flash unit) ==
+container_path=/home/shibbityshwab/openwrt-lab-selectorfix-img/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+container_size=7188799
+container_sha256=0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15
+previous_container_sha256=0d9429ec4681d43966bd2f23dc3fbe872f232961eaf142c16f565c67be5b5a15 (container present in the tree before this build; image B was 8944740e)
+
+== kernel slice - UNCHANGED requirement ==
+kernel_size=3372638
+kernel_sha256=13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f
+kernel_unchanged=YES
+
+== rootfs (rebuilt) ==
+rootfs_ubi_size=3801088
+rootfs_ubi_sha256=44df3a63cfd9b9811a4ad99d8f49ae917a49c4408719d0df4582ed50785faedb
+root_squashfs_size=3316684
+root_squashfs_sha256=f0f970e20d9ea412f6f535c835cadbb57655824d3236a0f63243f394a7dc7a94
+mtd14_rootfsb_size=24379392
+rootfs_ubi_fits_mtd14=YES
+
+== driver module ==
+module_artifact_size=344372
+module_artifact_sha256=ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+module_artifact_params=56
+module_installed_size=325932
+module_installed_sha256=4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
+
+== verify ==
+verify_rc=0
+local_artifacts=/home/shibbityshwab/wifi-final-image-2-artifacts

@@ -1,0 +1,19 @@
+# driver artifact identity (wifi-final-image-2, task-159)
+artifact_path=/tmp/sibling-mgmt-fix/hi5622_wifi.stripped.ko
+artifact_size=344372
+artifact_sha256=ab9e18a4fb4cedbbfd03349461c37ae0143ecec582f2395c0770c7415c72662e
+artifact_params=56
+artifact_vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+artifact_depends=cfg80211
+artifact_license=GPL
+installed_size=325932
+installed_sha256=4f1b45c187e9dfc61783a458f6a60056763f1da037bebec239b5b571f4ff4de1
+installed_params=56
+# feature strings asserted by the verifier:
+feature_present=himg_build_hcc_mgmt_tx
+feature_present=hmac_mgmt_tx_event_status
+feature_present=cfg80211_mgmt_tx_status_ext
+feature_present=cfg80211_rx_mgmt_ext
+feature_present=set_default_mgmt_key
+feature_present=data-tx tx: posts=
+feature_present=DP rx_arm
