@@ -1,0 +1,8 @@
+# key-0x0064 VAP-add wire frames (host-built KATs from src/vap_index_selftest.c)
+# carrier: g0 id1 config event | 12-B hdr + 8-B token + key u16 + len u16 + body(20) + 4 x FF
+
+frame index=0 band=1  000100003000010000005a5a0000000001000000640014000200000000000000000000000000000000000100ffffffff
+frame index=4 band=1  000100043000010000005a5a0000000001000000640014000204000004000000000000000000000000000100ffffffff
+
+# 0x0242 band-start frames: field B (hdr[3]) == the same VAP/module index (src/vap_index_selftest.c loop 0..0x12)
+#   primary 33 B: 0001 00<B> 21 00 01 00 00 00 5a 5a | 00 00 00 00 01 00 00 00 | 42 02 05 00 | 01 00 01 00 00 | ff ff ff ff

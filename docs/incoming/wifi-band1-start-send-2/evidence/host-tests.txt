@@ -1,0 +1,9 @@
+== 1. compile the model + the real sibling builders
+== 2. run the C selftest (gate/plan matrix, byte-exact frames)
+frame index=0 band=1  000100003000010000005a5a0000000001000000640014000200000000000000000000000000000000000100ffffffff
+frame index=4 band=1  000100043000010000005a5a0000000001000000640014000204000004000000000000000000000000000100ffffffff
+vap_index_selftest: 260 checks, 0 failures
+== 3. independent Python re-derivation + source contract
+vap_add_frame_test: 23 checks, 0 failures
+== TOTAL: 283 checks, 0 failures (C 260/0, Python 23/0)
+== ALL HOST TESTS PASS (no device contacted)

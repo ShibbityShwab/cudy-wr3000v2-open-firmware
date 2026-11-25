@@ -1,0 +1,171 @@
+--- a/hi5622_vapscan_provider.c	2026-11-25 23:19:08.243148968 +0700
++++ b/hi5622_vapscan_provider.c	2026-11-25 23:19:08.244441735 +0700
+@@ -200,6 +200,20 @@
+ module_param_named(vap_start_module, hi5622_vap_start_module, uint, 0444);
+ MODULE_PARM_DESC(vap_start_module, "module/VAP index for the start sequence");
+ 
++/* wifi-band1-start-send-2 lane (task-207): the VAP/module index the
++ * structural key-0x0064 VAP add creates and binds.  The frame carries it in
++ * TWO places that the firmware resolves separately: the body data[4] (the
++ * module context the worker creates/binds, CA 0x449E4 -> 0x961AE) and the
++ * header field B hdr[3] (the dispatcher's ctx lookup, CA 0x43D58 ->
++ * 0xFE578).  They must name the same context, and the later 0x0242 band-start
++ * frame's field B resolves that same ctx+0x4B8 band object.  Read-only after
++ * load; 0 = the single AP.  > 0x12 or a mismatch with vap_start_module is
++ * refused by the cfg80211 layer before any frame. */
++unsigned int hi5622_vap_add_index;
++module_param_named(vap_add_index, hi5622_vap_add_index, uint, 0444);
++MODULE_PARM_DESC(vap_add_index,
++		 "VAP/module index the key-0x0064 VAP add creates+binds in data[4] and hdr[3] (0=the single AP, <= 0x12)");
++
+ static u8 vapscan_iftype(u8 nl80211_iftype)
+ {
+ 	return nl80211_iftype == NL80211_IFTYPE_AP ? VSF_IFTYPE_AP :
+@@ -215,6 +229,12 @@
+ 	if (!wire || !out_len || !p || p->module > VSF_MODULE_MAX ||
+ 	    p->band > 1u || p->dst > 0x0fu)
+ 		return -EINVAL;
++	/* wifi-band1-start-send-2 (task-207): fail closed on an out-of-range
++	 * index and on a requested module that differs from the explicit VAP
++	 * index - the body data[4] and the header field B must name one ctx. */
++	if (hi5622_vap_add_index > VSF_MODULE_MAX ||
++	    p->module != (u8)hi5622_vap_add_index)
++		return -EINVAL;
+ 	f = kmalloc(sizeof(*f), GFP_KERNEL);
+ 	if (!f)
+ 		return -ENOMEM;
+@@ -223,13 +243,18 @@
+ 
+ 		vsf_vap_add_defaults(&gp);
+ 		gp.iftype = vapscan_iftype(p->iftype);
+-		gp.module = p->module;
++		/* VAP/module index -> body data[4] (the created ctx). */
++		gp.module = (u8)hi5622_vap_add_index;
++		/* Field B (hdr[3]): the dispatcher resolves ctx(0, hdr[3])
++		 * before the worker; the same index makes the bind and the
++		 * 0x0242 start resolve the same ctx+0x4B8 band object. */
++		gp.field_b = (u8)hi5622_vap_add_index;
+ 		/* Parent module index: use the module being created (the same
+ 		 * pattern the bench-validated C2 ctx-create frame uses).  The
+ 		 * firmware worker's parent lookup requires parent_ctx[1]==0, which
+ 		 * holds for the target module's untouched static context; using the
+ 		 * boot-created module 18 would depend on its inherited byte. */
+-		gp.parent = (u8)p->module;
++		gp.parent = (u8)hi5622_vap_add_index;
+ 		gp.band = p->band;
+ 		gp.dst = p->dst;
+ 		rc = vsf_build_vap_add(f, &gp);
+--- a/hi5622_scan.c	2026-11-25 23:19:08.243805225 +0700
++++ b/hi5622_scan.c	2026-11-25 23:19:08.245423809 +0700
+@@ -52,6 +52,9 @@
+  * this file owns only the cfg80211 ordering (VAP add -> VAP start -> scan). */
+ extern unsigned int hi5622_vap_start_first;
+ extern unsigned int hi5622_vap_start_module;
++/* wifi-band1-start-send-2 lane (task-207): provider-owned VAP/module index
++ * the structural key-0x0064 VAP add creates/binds (body data[4] + hdr[3]). */
++extern unsigned int hi5622_vap_add_index;
+ /* wifi-beacon-static lane (task-140): provider-owned carrier select for the
+  * channel-config frame (0 = g0 id1 key 0x0124, 1 = WAL g2 cmd 0x0124). */
+ extern unsigned int hi5622_ap_start_mode;
+@@ -1590,6 +1593,54 @@
+ 			state + HI5622_BAND_START_STATE_COUNTER_OFF);
+ }
+ 
++/* lane wifi-band1-start-send-2 (task-207): READ-ONLY outcome snapshot of the
++ * structural key-0x0064 VAP add.  Worker CA 0x449E4 resolves ctx(0, data[4])
++ * (0x961AE), creates/binds it and appends the index to the band object's VAP
++ * list at bandobj+0x12 (entries at bandobj+0): that list is what the 0x0242
++ * worker's band helper CA 0x4C3FC -> CA 0x4AE7C scans, and it needs EXACTLY
++ * one entry - otherwise the 0x0242 post leaves state[4]=0xFF and CA 0x4AF0C
++ * refuses.  The 0x0124 channel worker gates on ctx+0x4B0 (per-link) and the
++ * 0x0242 worker takes the band object from ctx+0x4B8.  This line is the
++ * decisive next-fire evidence: bandobject=ZERO means the VAP-add frame did
++ * not bind; bandlist_count=1 means the state[4]=0xFF is NOT a VAP-add
++ * failure (look at the 0x4C3FC/0x4AE7C path).  Log-only; never a wire
++ * input. */
++static void hi5622_scan_vap_add_readback(struct hi5622_pci *ctx,
++					 struct device *dev, u8 index, u8 band)
++{
++	u32 slot, base, mctx, perlink, vap, bandobj, count, published;
++	const char *verdict;
++
++	if (!ctx || !dev || !ctx->windows_programmed)
++		return;
++	slot = hi5622_fw_ram_read(ctx,
++			HI5622_STAB_MODULE_TABLE_SLOT0_CPU + (u32)index * 4u);
++	base = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_BASE_CPU);
++	mctx = hi5622_beacon5g_mctx_ca(slot, base);
++	perlink = mctx ? hi5622_fw_ram_read(ctx,
++			mctx + HI5622_BEACON5G_MCTX_LINK_OFF) : 0u;
++	vap = mctx ? hi5622_fw_ram_read(ctx,
++			mctx + HI5622_BEACON5G_MCTX_VAP_OFF) : 0u;
++	bandobj = mctx ? hi5622_fw_ram_read(ctx,
++			mctx + HI5622_BEACON5G_MCTX_BAND_OBJ_OFF) : 0u;
++	count = bandobj ? (hi5622_fw_ram_read(ctx, bandobj + 0x12u) & 0xffu) : 0u;
++	published = bandobj ? hi5622_fw_ram_read(ctx, bandobj + 0x1a00u) : 0u;
++	if (!mctx)
++		verdict = "module ctx unresolved - the key-0x0064 bind cannot have run";
++	else if (!bandobj)
++		verdict = "ctx+0x4B8 is ZERO - the key-0x0064 bind did NOT run (check data[4]/hdr[3]/band/published)";
++	else if (count == 1u)
++		verdict = "bound, band VAP list count=1 - a later state[4]=0xFF is NOT a VAP-add failure";
++	else if (count == 0u)
++		verdict = "band VAP list EMPTY - the key-0x0064 worker stopped before the list add";
++	else
++		verdict = "band VAP list count>1 - CA 0x4AE7C needs exactly one entry";
++	dev_info(dev,
++		 "cfg80211: vap_add post: index=%u band=%u ctx=0x%08x perlink=0x%08x vap=0x%08x bandobject=0x%08x bandlist_count=%u published=0x%08x (%s)\n",
++		 index, band, mctx, perlink, vap, bandobj, count, published,
++		 verdict);
++}
++
+ /* Human-readable guard verdict for the band_start dmesg evidence line. */
+ static const char *hi5622_band_start_guard_name(
+ 		const struct hi5622_band_start_state *st)
+@@ -1870,6 +1921,26 @@
+ 		rc = -EINVAL;
+ 		goto out;
+ 	}
++	/* lane wifi-band1-start-send-2 (task-207): the structural key-0x0064
++	 * VAP add carries its module/VAP index in the body data[4] AND the header
++	 * field B (hdr[3]); the bind ctx and the 0x0242 start ctx must be the
++	 * same, and the index must be inside the module table.  Fail closed
++	 * before any frame on a drift: the 0x0242 start against an unbound ctx
++	 * is exactly the state[4]=0xFF early-out. */
++	if (hi5622_vap_add_index > HI5622_BAND_START_MODULE_MAX) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - vap_add_index=%u is outside the module table (0..0x12); no frame sent\n",
++			 hi5622_vap_add_index);
++		rc = -EINVAL;
++		goto out;
++	}
++	if (hi5622_vap_add_index != hi5622_vap_start_module) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - vap_add_index=%u != vap_start_module=%u: the VAP-add bind ctx and the start ctx would differ; no frame sent\n",
++			 hi5622_vap_add_index, hi5622_vap_start_module);
++		rc = -EINVAL;
++		goto out;
++	}
+ 	/* Capture the pre-call VAP-base state BEFORE any post.  The firmware
+ 	 * populates module_ctx+0x190 ASYNCHRONOUSLY after vap_add/vap_start, so a
+ 	 * readback immediately after a fresh post is expected to be zero (bench R2
+@@ -1931,7 +2002,7 @@
+ 		if (!base_was_posted && !restart_plain) {
+ 			rc = hi5622_scan_post_vap_add_frame(
+ 				c->ctx, ops, (u8)dev->ieee80211_ptr->iftype,
+-				p->band, (u8)hi5622_vap_start_module,
++				p->band, (u8)hi5622_vap_add_index,
+ 				(u8)p->channel, 1u);
+ 			if (rc) {
+ 				dev_warn(wdev_dev,
+@@ -1942,6 +2013,10 @@
+ 			c->ctx->vap_base_posted = true;
+ 			c->ctx->vap_base_iftype =
+ 				(u8)dev->ieee80211_ptr->iftype;
++			/* Read-only: prove whether the 0x0064 bind/list add ran. */
++			hi5622_scan_vap_add_readback(c->ctx, wdev_dev,
++						     (u8)hi5622_vap_add_index,
++						     p->band);
+ 		} else {
+ 			dev_info(wdev_dev,
+ 				 "cfg80211: start_ap beacon_static: %s - no structural user_add (latch already set)\n",
