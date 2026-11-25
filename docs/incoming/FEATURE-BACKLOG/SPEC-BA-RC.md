@@ -40,3 +40,18 @@
   cal consumption).
 - PASS: the calibrated power/ IQ applied (the vendor's cal results used).
 - State: PARTIAL (the calibration analysis lanes exist).
+
+### BA-1 update (the lane's final commit 792d2af + the closing report)
+- Decoded byte-exact: the firmware owns the per-TID BA contexts; the host does the 802.11
+  negotiation + a session mirror. Three host->fw messages: **g0 0x0A** (44 B BA relay; subtype
+  1 = ADDBA rsp relay, subtype 2 = DELBA), **g0 0x0B** (20 B A-MPDU start/end), **g0 0x1C**
+  (32 B TX BA notify). OTA frames: ADDBA req/rsp 33 B, DELBA 30 B. D2H BA events: 2 create,
+  3 delete, 0x0F peer-DELBA, 0x1D unified action.
+- **Two findings**: (a) the vendor's userspace (the custom hostapd) does BA - stock hostapd
+  does not -> our driver must negotiate in-kernel (the minimal patch); (b) the TX direction
+  is the minimal BA-1 cut; the AP-as-RX-recipient path uses a user-sync writer whose wire
+  encoding is [U].
+- Delivered: the fail-closed skeleton (58 params, ba_enable=0, provably unwired), the
+  **183-check portable selftest** (PASS - the earlier PARTIAL is resolved), the 147 static
+  anchors, the B0-B7 recipe (B1/B2 evaluable now; B3-B6 blocked on the RX gate).
+
