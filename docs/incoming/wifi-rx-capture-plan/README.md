@@ -24,6 +24,7 @@ RX drain loops.
 | [REPORT.md](REPORT.md) | the experiment design: hypotheses, evidence base, exact read matrix and addresses, the new host-MAC interrupt status bit decode, crash-trigger analysis + isolation ladder, analysis criteria/decision tree, limits |
 | [RUNBOOK.md](RUNBOOK.md) | the attended procedure: preconditions, phase 0b air discriminator, the one-command capture run, crash handling, stop rules, evidence naming |
 | [ANALYSIS-TEMPLATE.md](ANALYSIS-TEMPLATE.md) | the fill-in worksheet for the bundle |
+| [PPDU-DESCRIPTOR-NOTES.md](PPDU-DESCRIPTOR-NOTES.md) | E-RX-1 follow-up addendum: the vendor RX buffer/add_buff contract (header+0x00 is device-authored, no host PPDU-descriptor pool), the bit10 masked/stock-latched caveat, and ranked next checks for the rx-format lane |
 | [scripts/router/rx-capture-router.sh](scripts/router/rx-capture-router.sh) | READ-ONLY router instrument: check, snapshot (sysfs + live bank + config block + FW exception state + RX ring memory + per-buffer header sweep), timestamped sampler with crash watch, collect |
 | [scripts/host/rx-capture-host.sh](scripts/host/rx-capture-host.sh) | host orchestrator: preflight, push, check, pre snapshot, sampler, client auth trigger, post snapshot, pull, analyze |
 | [scripts/host/analyze_capture.py](scripts/host/analyze_capture.py) | bundle classifier (8 verdicts) + synthetic-fixture selftest |
