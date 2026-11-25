@@ -1,0 +1,24 @@
+# the exact TWT dmesg/sysfs contract strings in the patched driver
+# generated from /tmp/ax-twt-build/hi5622_scan.c (the patched merged base)
+
+65: * by the cfg80211 layer (hi5622_cfg80211.c).  The TWT-enable post requires it
+178:/* lane wifi-ax-twt-impl (task-199), FAIL-CLOSED default 0.  TWT is the one
+1779:    /* lane wifi-ax-twt-impl (task-199): FAIL-CLOSED parameter/precondition
+1780:     * gate for the TWT-enable config event (g0 id1 key 0x035D).  Runs BEFORE
+1795:                 "cfg80211: start_ap REFUSED - twt=%u (%s) is not usable on this AP start (%d): needs 1 or 3 with beacon_static=1, beacon_vap_start=1, he_caps=1 and the 2.4 GHz band; no frame sent\n",
+2326:        /* lane wifi-ax-twt-impl (task-199): the TWT-enable config event
+2348:                     "cfg80211: start_ap beacon_static: TWT-enable REFUSED (%d) - no frame sent; AP start latched DIRTY, power-cycle\n",
+2365:                     "cfg80211: start_ap beacon_static: TWT-enable module context 0x%08x does not resolve to a decoded context (%d) - no frame sent; AP start latched DIRTY, power-cycle\n",
+2376:                     "cfg80211: start_ap beacon_static: TWT-enable builder refused (%d) - no frame sent; AP start latched DIRTY, power-cycle\n",
+2387:                     "cfg80211: start_ap beacon_static: TWT-enable frame (g0 id1 key 0x035D) not posted (%d) - AP start latched DIRTY, power-cycle\n",
+2417:                 "cfg80211: twt post: module ctx=0x%08x (field B %u) ctx+0xDA=0x%02x expected bits 6/7=0x%02x after %u ms (%s)\n",
+2421:                    "TWT-enable readback MATCHES" :
+2792:    /* lane wifi-ax-twt-impl (task-199): the TWT-enable parameter/outcome
+2795:    ret = hi5622_ax_twt_status_line(hi5622_twt, hi5622_he_caps,
+
+# plan step / parameter definitions in hi5622_scan_logic.c and hi5622_scan.c
+/tmp/ax-twt-build/hi5622_scan_logic.c:762:        out[n++] = HI5622_BEACON_STEP_TWT_ENABLE;
+/tmp/ax-twt-build/hi5622_scan_logic.c:776:    case HI5622_BEACON_STEP_TWT_ENABLE:    return "twt";
+/tmp/ax-twt-build/hi5622_scan.c:193:module_param_named(twt, hi5622_twt, uint, 0444);
+/tmp/ax-twt-build/hi5622_scan.c:194:MODULE_PARM_DESC(twt,
+/tmp/ax-twt-build/hi5622_scan_logic.h:310:    HI5622_BEACON_STEP_TWT_ENABLE = 8,    /* AX: g0 id1 key 0x035D */

@@ -37,6 +37,9 @@ PIN_F2_SCAN=8fbc8e1e180e3cd139aac0f4c28e6e8e0a8d314b62f6e917907b8a5b6523eca7
 PIN_F2_PROVIDER=c306e75fb4d640812278dc1ccdd59c8c197ba6e3f42da2b7f5ff98010d8b79ab
 PIN_F2_DFSMODE_H=cd3b76aa75c5153654ca1e981d0f767fc100e7cb8e83406c55a43d0b4ce3c70b
 PIN_F2_DFSMODE_C=977f285c58ef1ffdfca7812c4014da7602dc6a3f3b6fbb7839e1caedfdd13892
+PIN_F2_DESC_H=5321d1f7ff1f5e494ba65013fb815861d972e6f2161bf1ce8e0466665551f9d1
+PIN_F2_DESC_C=5af935f29aa9a329aba365da1753c5edd896b74cfe1c0c50665de13b39797810
+PIN_F2_KBUILD=900fb204ad817e787a0cde9201a02c6dc34d69d893ef0e4f06d140630fcb0759
 PIN_BASE_SCAN_LOGIC_C=75b9bdd5fd34bcd3862a7e185fb48bc98f6012c217b04fa5030ced899502f07c
 PIN_BASE_SCAN_LOGIC_H=b83e74cc5bd834eb981e0dc07f197e6c4c3cdc9bd4eb60107b35b1c973e0766e
 PIN_BASE_KBUILD=b4f98773547d0d7643be7c401d7d25cd40eae896b6ac49383647177f1731087e
@@ -52,6 +55,11 @@ PIN_BASE_HE_C=de2d78b5da48d9774099a7e03adc522a431a1ee8a029a70005393ae353273b9b
 PIN_BASE_TEXT=494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1
 PIN_TWT_TEXT=1d7d6ddae70a9044c917381c52a124fed6adf6546489fece2b0ab6de9f5eb8e4
 PIN_TWT_PARAMS=65
+# the OpenWrt installed form (strip-kmod.sh NO_RENAME=1): path-independent,
+# the form a fire deploys.  Reproduced by this script when strip-kmod.sh is
+# available (OpenWrt checkout); the .text must equal PIN_TWT_TEXT.
+PIN_TWT_INSTALLED=ed13145a99a4b5dacc3b043abccddec333d51e8d129410c1c869d94544c01f93
+PIN_TWT_INSTALLED_SIZE=362540
 
 die() { echo "build-twt-impl: $*" >&2; exit 1; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
@@ -112,6 +120,9 @@ expect_sha "$F2/hi5622_scan.c" "$PIN_F2_SCAN" "F2 hi5622_scan.c"
 expect_sha "$F2/hi5622_vapscan_provider.c" "$PIN_F2_PROVIDER" "F2 provider"
 expect_sha "$F2/hi5622_dfs_mode.h" "$PIN_F2_DFSMODE_H" "F2 dfs_mode.h (field-B fix)"
 expect_sha "$F2/hi5622_dfs_mode.c" "$PIN_F2_DFSMODE_C" "F2 dfs_mode.c"
+expect_sha "$F2/hi5622_desc_table.h" "$PIN_F2_DESC_H" "F2 desc_table.h (field-B fix)"
+expect_sha "$F2/hi5622_desc_table.c" "$PIN_F2_DESC_C" "F2 desc_table.c (field-B fix)"
+expect_sha "$F2/Kbuild" "$PIN_F2_KBUILD" "F2 Kbuild"
 [ -f "$F2/cfg80211-provider.symvers" ] || die "F2 cfg80211-provider.symvers missing"
 
 # ---- 2. merged IMAGE #3 base ------------------------------------------
@@ -187,6 +198,22 @@ T_TXT=$(text_sha "$OK")
 PARAMS=$(modinfo -p "$OK" | wc -l)
 [ "$PARAMS" -eq "$PIN_TWT_PARAMS" ] || die "param count $PARAMS != $PIN_TWT_PARAMS"
 modinfo -p "$OK" | grep -q '^twt:' || die "twt parameter missing from modinfo"
+
+# ---- 5. the installed form (OpenWrt strip-kmod.sh NO_RENAME=1) ---------
+INST="$ART/hi5622_wifi.twt.installed.ko"
+STRIPKMOD=${STRIPKMOD:-/home/shibbityshwab/openwrt-lab-upstream-target/scripts/strip-kmod.sh}
+if [ -x "$STRIPKMOD" ]; then
+	cp "$OK" "$INST"
+	CROSS="$CROSS" NO_RENAME=1 "$STRIPKMOD" "$INST"
+	I_SHA=$(sha "$INST")
+	I_SIZE=$(stat -c%s "$INST")
+	[ "$I_SHA" = "$PIN_TWT_INSTALLED" ] || 		die "installed form sha drifted: $I_SHA != $PIN_TWT_INSTALLED"
+	[ "$I_SIZE" -eq "$PIN_TWT_INSTALLED_SIZE" ] || 		die "installed form size drifted: $I_SIZE != $PIN_TWT_INSTALLED_SIZE"
+	[ "$(text_sha "$INST")" = "$PIN_TWT_TEXT" ] || 		die "installed form .text drifted"
+	echo "installed form: $I_SIZE B sha256 $I_SHA (.text == the pin)"
+else
+	echo "installed form: strip-kmod.sh absent - not reproduced"
+fi
 
 echo ""
 echo "== ARTIFACT (local evidence only; never committed)"

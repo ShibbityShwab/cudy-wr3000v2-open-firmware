@@ -59,7 +59,17 @@ static int good_plan(unsigned int twt, struct hi5622_ax_twt_plan *p,
 	return 0;
 }
 
-int main(void)
+static void dump_frame(const char *label, const u8 *buf, size_t len)
+{
+	size_t i;
+
+	printf("FRAME %s (%zu B): ", label, len);
+	for (i = 0; i < len; i++)
+		printf("%02x", buf[i]);
+	printf("\n");
+}
+
+int main(int argc, char **argv)
 {
 	static const char *const frame_twt1 =
 		"000100001d00010000005a5a00000000010000005d03010001"
@@ -202,6 +212,24 @@ int main(void)
 	   !strcmp(hi5622_ax_twt_mode_name(3u), "enable+required") &&
 	   !strcmp(hi5622_ax_twt_mode_name(2u), "invalid"));
 
+	if (argc > 1 && !strcmp(argv[1], "--frames")) {
+		struct hi5622_ax_twt_plan fp;
+		u8 fw[HI5622_AX_TWT_WIRE_LEN];
+		size_t fl = 0;
+
+		/* the exact wire bytes of the three shapes the fire recipe may
+		 * see (field B 0 for the AP-start module context; 1 is shown to
+		 * prove field B is not a constant of the key) */
+		good_plan(1u, &fp, 0u);
+		hi5622_ax_twt_build(fw, sizeof(fw), &fl, &fp);
+		dump_frame("twt=1 field_b=0 (enable)", fw, fl);
+		good_plan(3u, &fp, 0u);
+		hi5622_ax_twt_build(fw, sizeof(fw), &fl, &fp);
+		dump_frame("twt=3 field_b=0 (enable+required)", fw, fl);
+		good_plan(1u, &fp, 1u);
+		hi5622_ax_twt_build(fw, sizeof(fw), &fl, &fp);
+		dump_frame("twt=1 field_b=1 (non-AP-start context)", fw, fl);
+	}
 	printf("twt selftest: %d/%d PASS\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

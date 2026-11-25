@@ -1,0 +1,7 @@
+== 1. portable model selftest
+twt selftest: 54/54 PASS
+== 2. AP-start plan ordering (twt is the last step)
+plan-order selftest: 12/12 PASS
+== 3. independent Python re-derivation
+twt-frame xcheck: 62/62 PASS
+== HOST TESTS DONE (/tmp/wifi-ax-twt-impl-host)

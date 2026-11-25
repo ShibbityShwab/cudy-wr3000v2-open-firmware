@@ -1,0 +1,21 @@
+== build: base (/tmp/ax-twt-merged-base)
+make[1]: Entering directory '/tmp/ax-twt-merged-base'
+make[1]: Leaving directory '/tmp/ax-twt-merged-base'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+merged base: .text 494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1 (== IMAGE #3), unstripped 1441468 B
+== 4. applying /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-ax-twt-impl/patches/0001-twt-enable.patch
+== build: twt (/tmp/ax-twt-build)
+  LD [M]  hi5622_wifi.ko
+make[1]: Leaving directory '/tmp/ax-twt-build'
+make: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60'
+installed form: 362540 B sha256 ed13145a99a4b5dacc3b043abccddec333d51e8d129410c1c869d94544c01f93 (.text == the pin)
+
+== ARTIFACT (local evidence only; never committed)
+   tree            /tmp/ax-twt-build
+   unstripped      1454516 B  sha256 76b967c6ad02ef5e228907822c963131c0f3a36dc51167e3b1eac64668b49dba
+   activity strip  383376 B  sha256 d271d195272ce68802c6d13100bfa91d136cdaee6499270a70d98971efbaf9b2
+   .text           162196 B  sha256 1d7d6ddae70a9044c917381c52a124fed6adf6546489fece2b0ab6de9f5eb8e4
+   params          65 (merged base 64 + twt)
+   vermagic        6.18.60 SMP mod_unload ARMv7 p2v8 
+   TWT symbols     5 (build/field_b/mode_name/precheck/status_line)
+   TWT .text pin   1d7d6ddae70a9044c917381c52a124fed6adf6546489fece2b0ab6de9f5eb8e4
