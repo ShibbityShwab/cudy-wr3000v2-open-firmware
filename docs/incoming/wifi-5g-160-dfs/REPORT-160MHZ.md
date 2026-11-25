@@ -105,6 +105,32 @@ chandef actually drives on every AP start (the cfg80211 start_ap path uses
 the 0x0124 channel event; the F2 5 GHz AP did program the RF image with
 0x0124 alone).
 
+## 2a. Vendor userspace config path (stock rootfs) [V]
+
+The stock OpenWrt image carries the same knobs the project hostapd uses:
+* /etc/config/wireless radio1 (5 GHz): option ht160 '1', option htbw 'auto',
+  option hwmodes '11anacax' (stock rootfs etc/config/wireless, radio1 block).
+* /lib/netifd/hostapd.sh (OpenWrt 22.03.6 based): htmode mapping
+  VHT160/HE160 -> max_oper_chwidth=2 (line 1313, STA network_data), and
+  ieee80211h=1 is appended for hw_mode=a with 802.11h enabled (line 174) -
+  the stock DFS switch. The AP-side width is hostapd's own
+  vht_oper_chwidth (hostapd 2.12 config), not a netifd string.
+* hostapd vht_capab: the project fixtures rely on the driver wiphy cap
+  0x00400064 (hostapd takes the driver caps when vht_capab is unset). If a
+  local hostapd build must be forced, the 160 token is the supported-channel-
+  width-160 bit (hostapd defines VHT_CAP_SUPP_CHAN_WIDTH_160MHZ = BIT(2),
+  src/common/ieee802_11_defs.h:1430); keep the driver word authoritative.
+
+Cross-check that body[1] is a bandwidth selector and not a VAP index: the
+bench-fired F2 0x0124 body was {band=1, 0, ch40, 0} and the F2 hostapd
+fixture is a 20 MHz AP (no ht_capab) - body[1]=0 reads as the 20M selector.
+A VAP index 0 and a 20M selector 0 coincide for the first VAP, so the
+discriminator is the vendor code: hmac_config_set_channel passes [cfg+1]
+to hmac_band_set_channel_and_bandwith as its bandwidth argument, and the
+firmware CA 0x101890 field switch has no VAP-index semantics. The 80/160
+rung (body[1]=2/3) is where the two readings diverge and where P-160a
+decides.
+
 ## 3. Host implementation (summary; details in HOST-IMPLEMENTATION.md)
 
 1. Map the cfg80211 chandef width to the bandwidth selector:

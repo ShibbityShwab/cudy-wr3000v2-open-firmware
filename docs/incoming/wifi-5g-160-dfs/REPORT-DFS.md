@@ -60,6 +60,17 @@ task-206). Every DFS rung is GATED on the on-air beacon gate.
    table decode or a live trace). For the first rung the driver can do
    CAC-only (arm/disarm 0x07E7, run the 60 s timer, report CAC finished) and
    leave the radar D2H path as the second step.
+4a. **The "radar detection ISR" is firmware-side, not a host IRQ [V].**
+   There is no host interrupt handler for radar in the vendor module: the
+   host arms/disarms the firmware radar detector with 0x07E7 and the
+   firmware's MAC/PHY machinery decides (the host module's radar-adjacent
+   helpers are configuration writers - e.g.
+   hal_set_radar_det_en_cfg_radar_det_en 0x32B2C and the shuangta_set_dfs_*
+   spectral/LMI setters - and hmac_dfs_radar_detect_event calls
+   hmac_phy_event_stop). The verdict reaches the host as the D2H event above.
+   Implementation work is therefore the D2H decode + cfg80211 event mapping,
+   not an IRQ handler.
+
 5. **Host-side DFS checks [V]:** wal_cfg80211_set_chan_dfs_check (0x102980)
    checks the per-channel status byte (band+0x32A+idx*4+3 & 0x7F against 4 =
    usable) and the extended-channel list before a channel set;
