@@ -1,0 +1,17 @@
+# wifi-rc-impl-2 module build record (host-only; .ko is local evidence only)
+# base: the IMAGE #3 merged driver source tree (evidence/base-pin.txt)
+#       + patches/0001-rate-ctl-2.patch (evidence/patch-apply.txt)
+# build: make ARCH=arm CROSS_COMPILE=arm-openwrt-linux-muslgnueabi- -C linux-6.18.60 M=<tree> modules
+# toolchain: OpenWrt GCC 14.4.0 musl-eabi (arm_cortex-a9)
+# result: 0 warnings, 0 errors, 0 conflict markers
+module_sha256 ca22773a861db31b524edd69f0c5522b03862207191b1d8b83ba302fc0c97d8b
+module_size 1519716
+module_text_sha256 ba81e4b38b4a965143b7a7689c9639525e9af9852e05c968c9da65ff42ab7839
+module_params 67
+module_activity_sha256 3d43a3cd261d28245e47a964161a0d605caae97a70baa81bea1eee630e294536
+module_activity_size 401884
+
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+depends=cfg80211
+# note: the sha256 is build-path dependent via debug info; the .text sha is the
+# stable identity (other lanes compare .text).  The module is UNSTRIPPED here.

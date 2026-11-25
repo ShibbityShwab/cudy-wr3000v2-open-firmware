@@ -10,7 +10,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  	live->txq_addr_sent = h->h2d_txq_addr_sent > 0u;
  	live->phase = core->phase;
  	live->frames_sent = h->h2d_frames_sent;
-@@ -176,6 +178,62 @@
+@@ -176,6 +178,66 @@
  }
  
  /* ------------------------------------------------------------------ */
@@ -50,6 +50,10 @@ diff -ruN a/h2d_send.c b/h2d_send.c
 +	h = ctx->hcc;
 +	if (!h)
 +		return -ENODEV;
++	/* The firmware-RAM window exists only after prepare programmed the iATU
++	 * windows; before that a read would be meaningless.  Fail closed. */
++	if (!ctx->windows_programmed)
++		return -EBUSY;
 +	ctx0 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU);
 +	ctx190 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU + H2D_CTX190_OFF);
 +	ctx434 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU + H2D_CTX434_OFF);
@@ -73,7 +77,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  /* the send path                                                       */
  /* ------------------------------------------------------------------ */
  /* txq_devva != 0 selects the data-plane hand-off (g0 id1 key 0x0320); its
-@@ -256,7 +314,21 @@
+@@ -256,7 +318,21 @@
  		goto out;
  	}
  
@@ -96,7 +100,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  	 * the service-thread tick only reads/times the mailbox state). */
  	mutex_lock(&h->lock);
  	h2d_live_fill(ctx, &live);
-@@ -338,8 +410,15 @@
+@@ -338,8 +414,15 @@
  		h->h2d_txq_addr_sent++;
  	else if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
  		h->h2d_txq_sync_sent++;
@@ -113,7 +117,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  	h->h2d_last_msg = txq_devva != 0u ? (u32)H2D_MSG_COUNT : (u32)msg;
  	h->h2d_last_gate = (u32)H2D_GATE_OK;
  	h->h2d_last_total = total;
-@@ -449,6 +528,9 @@
+@@ -449,6 +532,9 @@
  	else
  		return -EINVAL;
  	ret = h2d_post(ctx, msg, 0u, 0u, NULL, 0u);
@@ -123,7 +127,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  	return ret ? ret : (ssize_t)count;
  }
  static DEVICE_ATTR_WO(h2d_ctx_create);
-@@ -529,6 +611,11 @@
+@@ -529,6 +615,11 @@
  			 h2d_gate_name(h2d_gate_check_txq_addr(&live)),
  			 live.out0, live.mbox_inflight);
  	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
@@ -135,7 +139,7 @@ diff -ruN a/h2d_send.c b/h2d_send.c
  			 "counters: ok=%llu timeout=%llu refused=%llu desync=%u txq_addr_sent=%u last_out0=0x%08x max_polls=%u\n",
  			 (unsigned long long)h->h2d_send_ok,
  			 (unsigned long long)h->h2d_send_timeout,
-@@ -692,10 +779,33 @@
+@@ -692,10 +783,33 @@
  }
  static DEVICE_ATTR_RO(h2d_plan);
  

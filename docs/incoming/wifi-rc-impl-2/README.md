@@ -59,11 +59,21 @@ IMAGE #3 module-build note, set \`BASE_TREE\` if it is not
 
 ## Reproduce
 
-    python3 tools/make-patch.py --verify     # regenerate the patch (deterministic)
+    python3 tools/make-patch.py --verify     # base pin + deterministic patch apply
     ./tools/run-host-tests.sh                # 3 host suites (frame/C2/matrix)
-    ./tools/build-rc2.sh                     # stage base + patch + tests + cross build
+    ./tools/build-rc2.sh                     # + cross build + artifact identity record
 
-No device contact, no image, no flash. The .ko is local evidence only.
+("--regen" regenerates the patch from a base/patched tree pair.)  No device
+contact, no image, no flash. The .ko is local evidence only.
+
+## Headline evidence
+
+    host suites      frame KAT 37/37, C2 order 25/25, matrix 76/76 (evidence/rc2_*.txt)
+    base + patch     pin 2d87525e..., patch sha256 67083c2d..., 14 files verified
+    build            1,519,716 B unstripped / 401,884 B activity (sha 3d43a3cd...),
+                     .text sha256 ba81e4b3..., 67 params, 0 warnings, 2x identical
+    FIRMWARE FINDING the IMAGE #3 payload loader still writes h2d_ctx_create=3;
+                     a retry image must write 1 (REPORT.md sec 2).
 
 ## The fire
 

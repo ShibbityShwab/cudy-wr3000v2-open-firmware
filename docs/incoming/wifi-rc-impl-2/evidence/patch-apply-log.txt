@@ -1,0 +1,5 @@
+stage: 97 source files -> /tmp/rc2-build
+pin: base tree OK (9 pinned files + manifest 2d87525e1bab6bbf)
+patch: applied cleanly (71453 bytes, sha256 67083c2d31c19d9f8e4e7c0260a8d618d60ec4bf93015421871c116eec2c16bb)
+verify: 14 patched files match the committed hashes (patch sha256 67083c2d31c19d9f8e4e7c0260a8d618d60ec4bf93015421871c116eec2c16bb)
+RESULT: PASS
