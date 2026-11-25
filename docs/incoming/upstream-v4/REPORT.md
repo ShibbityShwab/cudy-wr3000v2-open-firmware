@@ -1,0 +1,239 @@
+# upstream-v4 REPORT - 013a -> DT reset-gpios fold, regenerated series, v2 review-form status
+
+**Lane:** `upstream-v4` / `platform-fold` (shared task **task-171**).
+**Host-only**: no router, no bench link, no UART/TFTP/flash, no vendor binary
+touched.  **Session date 2026-11-29.**  This report supersedes the open-item
+statements of [../upstream-v3/REPORT.md](../upstream-v3/REPORT.md) where they
+disagree.
+
+## 1. Verdict in one paragraph
+
+The 013a -> DT `reset-gpios` fold is **done and committed**: the endpoint reset
+pulse is now devicetree data on the RC0 node, consumed by the PCIe driver
+through optional `reset-gpios` + `reset-assert-us`/`reset-deassert-us`
+properties that the binding documents; the separate bench patch 013a is gone
+from L0 (66 files) and the release line is back to **55 include / 11 exclude**.
+DTS-0001 was regenerated from the new 715-line single source, the 26-patch
+review form was regenerated from the new 0013 source/message, and every host
+validator re-ran **PASS** (L2: 26/26 patch(1)+git am, identical trees,
+checkpatch 0 errors / 73 warnings; L1: 55/55 patch(1), 0 fuzz, DTS + DTS-0001
+contracts OK; folded driver W=1 compile RC=0).  The **30-patch v2 review form
+is still not generated**: the fold removed the last open content *decision*,
+but 16 further content folds, a fold-pipeline design decision, one attended
+boot of the active-DTS change and the v2 generator/package rebuild remain -
+itemised in [V2-REVIEW-FORM-STATUS.md](V2-REVIEW-FORM-STATUS.md).  Nothing was
+posted or pushed; no hardware was touched.
+
+## 2. What the fold changed
+
+### 2.1 Driver (target patch 013, review-form 0013)
+
+`drivers/pci/controller/dwc/pcie-luofu.c` replaces 013a's hardcoded
+GPIO0 register writes with the GPIO-consumer API and devicetree data:
+
+- new `luofu_pcie_ep_reset()`: `devm_gpiod_get_array_optional(dev, "reset",
+  GPIOD_ASIS)`; if the property is absent it returns 0 (behaviour unchanged for
+  boards without the lines).  Otherwise it asserts every line
+  (`gpiod_direction_output(desc, 1)` - logical active, i.e. physical low for
+  the board's `GPIO_ACTIVE_LOW` resets), holds `reset-assert-us`, releases
+  them (`gpiod_direction_output(desc, 0)`), waits `reset-deassert-us`, and
+  logs one line;
+- the call is placed in `luofu_pcie_probe()` **before
+  `clk_prepare_enable()`**, i.e. before the RC clock and the LTSSM start -
+  the same ordering 013a used and the vendor requires;
+- defaults `LUOFU_PCIE_EP_RESET_ASSERT_US = 20000` and
+  `LUOFU_PCIE_EP_RESET_DEASSERT_US = 100000` are the GP1-hardware-validated
+  timings; the DTS overrides them explicitly with the same values, so the
+  behaviour is byte-for-byte the validated sequence;
+- the stale header/host_init comments that described the retired
+  `wifi-pcie-hog` as the owner of the lines were rewritten; the "does not do
+  DT-driven GPIO sequencing" TODO is removed.
+
+No other driver behaviour changed.  The polarity is board data
+(`GPIO_ACTIVE_LOW`), so the same code is correct on a board that wires the
+lines differently.
+
+### 2.2 Binding (`Documentation/devicetree/bindings/pci/hisilicon,luofu-pcie.yaml`)
+
+Three new documented properties: `reset-gpios` (optional, one or more lines;
+description carries the R116 GPIO0 20/21/28 fact and the before-clock/LTSSM
+ordering), `reset-assert-us` (default 20000), `reset-deassert-us` (default
+100000).  The property names follow the standard PHY reset conventions.
+`unevaluatedProperties: false` is kept; the schema YAML parses (PyYAML).
+`dt_binding_check` could not be re-run in this session (dtschema is not
+installed - the same limitation the v3 lane recorded); the last recorded pass
+is the 2026-11-22 run for the pre-fold binding
+(`validation/dt-binding-check.log`), and the new properties are plain scalar
+GPIO/timing properties with no schema-exotic types.
+
+### 2.3 Board DTS (single source, DTS-0001 payload)
+
+`target-skeleton/dts/luofu-r116.dts` grows 702 -> **715 lines**.  On
+`pcie0: pcie@10160000`:
+
+    reset-gpios = <&porta 20 GPIO_ACTIVE_LOW>,
+                  <&porta 21 GPIO_ACTIVE_LOW>,
+                  <&porta 28 GPIO_ACTIVE_LOW>;
+    reset-assert-us = <20000>;
+    reset-deassert-us = <100000>;
+
+The gpio0 port comment now points at that property (the lines must not be a
+gpio-hog: a hog would release the endpoint reset before the driver's pulse).
+The header comment records that this is an **active devicetree change that has
+not been boot-tested yet** and that GP1 remains the hardware-validated line.
+No gpio-hog, no hardcoded addresses.
+
+### 2.4 Release line and fix-up artefacts
+
+- `013a-arm-pci-luofu-endpoint-reset-pulse.patch` deleted from L0; L0 is
+  66 files (001-060 + 062-067).
+- `release-line/manifest.tsv`: 55 include / 11 exclude, 013 row re-hashed and
+  re-worded; `release-line/INCLUDED.txt` 55 lines.
+- `upstream/series-6.18/series/0013-...` and
+  `upstream/series-6.18/01-commit-messages.md` regenerated by
+  `tools/gen-series.py` from the new source patch and the new 0013 commit
+  message (the body of 0013 is generated, not hand-edited).
+
+## 3. Artefacts (sha256)
+
+| artefact | sha256 | notes |
+| --- | --- | --- |
+| L0 patch 013 (also the 0013 body) | `96c91d71abe74aa3ada428324b91ab08532efc39eb1d9708e1814f618247db32` | 1067 lines; 919 added/changed lines checked by checkpatch, 0 errors / 19 warnings |
+| review-form `series/0013` | `875d4b08d66c0e037e77828e8836a6da8bfc68edcc0186ac2e5fbe0d39481630` | format-patch style, generated |
+| `commit-messages/0013` | `1a254c475e9b0801ef3329118cddf09b9fed442fb2a3fc6f04a8df7b005caf3a` | describes the fold + the pending boot honestly |
+| single-source board DTS | `6774221ef49b10888bfb277f2c7620858a798a3cf228b1660cb483df50e6b062` | 715 lines |
+| DTS-0001 `dts-series/0001-...` | `6fa1c6901d40bc6788c7170fd99e13e4c6f1ecd07e552f3cd8ba093a78b95b01` | 716 lines, 703-line filtered payload |
+| `release-line/manifest.tsv` | `e077544b548b46c24f1b0992ea1d02f1ae126feeb148e778fdf643c0fa0bb060` | 55 include / 11 exclude |
+| `release-line/INCLUDED.txt` | `cd7ae90c8791700661bf017742f7f46b3c66d12865fdadb05a7b9fab89351b2e` | 55 lines |
+| `01-commit-messages.md` | `9318ef6448f117f08066919d52d91d7be2306394401cf539b5a2fc037beb3393` | regenerated |
+| folded driver (for the compile test) | `ab3e190ac936c654f2cfcc429605e394579b465186e2d9231757ec32f033b0a4` | extracted from patch 013 |
+
+Delivery copies of the four patch/message artefacts are in
+[artifacts/](artifacts/); canonical files stay in the tree.
+
+## 4. Validation (host-only, all logs delivered)
+
+Logs are in [validation/](validation/) and the canonical release-line copy is
+`upstream/series-6.18/validation/release-line-v4/`.
+
+### 4.1 L2 review form - `tools/run-validation.sh`
+
+    pristine linux-6.18.60 (sha256 3c2f44ef...)
+    26/26 patch(1) RC=0 (3 offset hunks, 0 fuzz, 0 rejects)
+    26/26 git am RC=0; patch(1) tree and git-am tree identical (diff -r clean)
+    checkpatch default: 0 errors / 73 warnings
+    checkpatch --strict: 0 errors / 73 warnings
+    PASS
+
+The warning count is unchanged from the v1 form; the fold adds no new
+warning (patch 0013 alone: 0 errors / 19 warnings - 18 pre-existing block
+comment style + the known binding-separate-patch warning).
+
+### 4.2 L1 release line - `tools/check-release-line.sh`
+
+    manifest: 55 included, 11 excluded
+    patch(1): 55/55 RC=0, 152 file events, 3 offset hunks, 0 fuzz, 0 rejects
+    strict git apply: all 55 without fuzz
+    board DTS: cpp+dtc RC=0, 0/0 stderr, DTB 12,848 B sha256 1c200daf...,
+               totalsize 8-byte aligned in this dtc run
+    DTS contract: console=/serial@1010f000, flashinfo compatible/reg/atag OK,
+               enable-method=hisilicon,luofu-smp
+    DTS series: apply RC=0, byte-identical to the filtered target DTS,
+               DTB 12,680 B sha256 2a5eb334..., aligned, contract OK, no W23 leak
+    PASS
+
+Note: the v3 run had unaligned DTB totalsizes and exercised the pad step; the
+v4 DTS happens to compile 8-byte aligned with the host dtc v1.8.1, so the pad
+step was not needed in this run.  DTB sizes/hashes are dtc-build dependent;
+the image build still runs `Build/luofu-pad-dtb` as a guard.
+
+### 4.3 Driver compile smoke test
+
+The folded `pcie-luofu.c` was compiled against a reflink copy of the target
+kernel build tree (`openwrt-lab-selectorfix-img/build_dir/.../linux-6.18.60`,
+which already carries the target patches and a full build) with the OpenWrt
+GCC 14.4.0 toolchain:
+
+    make ARCH=arm CROSS_COMPILE=arm-openwrt-linux- W=1 \
+         drivers/pci/controller/dwc/pcie-luofu.o
+    CC drivers/pci/controller/dwc/pcie-luofu.o   EXIT=0
+
+No driver warnings at W=1.  Log: `validation/compile/pcie-luofu-compile.log`.
+
+### 4.4 Checks NOT re-run
+
+- `dt_binding_check`: dtschema is not installed in this session (exactly the
+  v3 limitation).  The updated YAML parses; the last recorded binding check is
+  the 2026-11-22 RC=0 run.
+- full kernel compile: not re-run (one-file driver change; the surrounding
+  stack's last full build was RC=0).  Owed for the v2 form.
+- hardware: **not touched**.  The v4 DTS/driver form is an active change and
+  has NOT been boot-tested; one attended boot (recovery armed) is the gate.
+
+## 5. v2 review-form status (summary)
+
+The fold was one of 17 fold verdicts; it is the only one that was blocked on a
+*content decision*.  Generation of the 30-patch v2 is still blocked on:
+
+1. the **16 remaining content folds** (table in
+   [V2-REVIEW-FORM-STATUS.md](V2-REVIEW-FORM-STATUS.md) section 1);
+2. the **fold-pipeline decision**: gen-series.py enforces one L0 patch -> one
+   review-form entry; v2 folds merge patches, so either L0 is rewritten with
+   the absorbed patches deleted (bench line re-validation + boot) or the
+   generator gains an upstream-composition source tree;
+3. **one attended boot** of the v4 active-DTS change;
+4. the **v2 generator/package rebuild**: SERIES 26 -> 30, commit messages
+   0027-0030 (drafts exist), GROUPS/mapping/cover letter, full acceptance
+   re-run (full compile, dt_binding_check, image chain), submission package
+   regeneration.
+
+Details, acceptance-criteria status and the ordered next steps:
+[V2-REVIEW-FORM-STATUS.md](V2-REVIEW-FORM-STATUS.md).
+
+## 6. Hardware status and the remaining boot
+
+The reset-pulse *semantics* are hardware-validated: GP1 (2026-11-24) booted a
+kernel whose RC0 probe pulsed GPIO0 20/21/28 before the clock/LTSSM;
+the endpoint mask ROM ran S0/S1 and both links trained, both endpoints
+enumerated.  What is new in v4 is the *form* (DT property + GPIO-consumer
+driver code) - functionally identical, but by project rule every active-DTS
+change needs one attended boot.  Acceptance for that boot:
+
+- recovery armed; 2 CPUs up; serial console; NAND/UBI mounts; no Oops/BUG/panic;
+- dmesg `endpoint reset pulse on 3 board line(s): 20000 us asserted, 100000 us
+  settled` (the new dev_info) from the RC0 probe;
+- both RC links at LTSSM L0; both `59e7:0005` endpoints at bus 0/dev 0/fn 0 of
+  each domain; GPIO0 20/21/28 released high afterwards.
+
+Until then GP1 stays the hardware-validated line and the fold's DTS half is
+host-validated only.
+
+## 7. Limits and boundaries held
+
+- **Host-only**: no device, bench link, UART, TFTP or flash; the Lead fires.
+- **No vendor bytes/secrets**: only hashes; no vendor object/firmware/
+  calibration/per-unit value added.  The 12 KB of compiled DTBs in the
+  validation logs are produced from our own DTS text (same as the committed
+  v3 validation logs).
+- **No push**, no history rewrite, no release decision; commits inside
+  `opensource/` only.
+- Not done: remaining folds, L0 rewrite, v2 generation, full compile,
+  dt_binding_check, attended boot, submission-package full regeneration (only
+  hash refresh), any posting.
+
+## 8. Reproduction (host-only)
+
+```sh
+cd opensource
+# review form apply/checkpatch (26 patches)
+upstream/series-6.18/tools/run-validation.sh --use-tree <pristine-6.18.60> /tmp/v4-l2
+# release line + DTS/DTS-0001 contracts (55 patches)
+upstream/series-6.18/tools/check-release-line.sh --use-tree <pristine-6.18.60> /tmp/v4-l1
+# review-form drift check
+(cd upstream/series-6.18 && python3 tools/gen-series.py --check)
+# DTS-0001 regeneration (if the board DTS changes)
+(cd upstream/series-6.18 && python3 tools/gen-dts-series-patch.py \
+    --pristine <pristine-6.18.60> \
+    --target-dts ../../target-skeleton/dts/luofu-r116.dts \
+    --out dts-series/0001-arm-dts-hisilicon-luofu-r116-loader-handoff.patch)
+```

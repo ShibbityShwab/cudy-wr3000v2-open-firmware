@@ -1,0 +1,52 @@
+Applying: ARM: mach-hisilicon: add Hi5671Y "luofu" machine support
+AM_RC[0001-arm-mach-hisilicon-luofu.patch]=0
+Applying: ARM: luofu: add ARCH_LUOFU to Kconfig and set its text offset
+AM_RC[0002-arm-kconfig-textofs.patch]=0
+Applying: ARM: head: materialize TEXT_OFFSET with mov_l
+AM_RC[0003-arm-textofs-nonimmediate.patch]=0
+Applying: clk: hisilicon: add Luofu CRG clock and reset controller
+AM_RC[0004-arm-clk-reset-luofu-crg.patch]=0
+Applying: watchdog: luofu: add Hi5671Y watchdog support
+AM_RC[0005-arm-watchdog-luofu-wdt.patch]=0
+Applying: spi: spi-luofu-fmc: add Luofu FMC SPI-NAND controller
+AM_RC[0006-arm-mtd-nand-luofu-fmc.patch]=0
+Applying: net: mdio: luofu: add MDIO bus controller
+AM_RC[0007-net-mdio-luofu.patch]=0
+Applying: net: phy: add driver for HiSilicon Luofu "Genius" PHYs
+AM_RC[0008-net-phy-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add partial Luofu GEMAC driver
+AM_RC[0009-net-gmac-luofu.patch]=0
+Applying: power: reset: add Luofu machine restart driver
+AM_RC[0010-arm-luofu-restart.patch]=0
+Applying: pinctrl: hisilicon: add Luofu peripheral pin controller
+AM_RC[0011-pinctrl-luofu.patch]=0
+Applying: thermal: add Luofu thermal sensor driver
+AM_RC[0012-arm-thermal-luofu-tvsensor.patch]=0
+Applying: PCI: dwc: add Luofu PCIe host controller
+AM_RC[0013-arm-pci-luofu-host.patch]=0
+Applying: clk: hisilicon: fix Luofu CRG reset polarity
+AM_RC[0014-arm-crg-reset-polarity.patch]=0
+Applying: net: ethernet: hisilicon: add Luofu PIE packet engine draft
+AM_RC[0015-net-pie-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add Luofu switch probe skeleton
+AM_RC[0016-net-lsw-luofu.patch]=0
+Applying: soc: hisilicon: add Luofu A/B boot selector
+AM_RC[0017-soc-luofu-boot-selector.patch]=0
+Applying: ARM: mach-hisilicon: add Hi5671Y SMP bring-up support
+AM_RC[0018-arm-mach-hisilicon-smp.patch]=0
+Applying: clk: hisilicon: add the Luofu CRG clock tree
+AM_RC[0019-arm-clk-luofu-clock-tree.patch]=0
+Applying: net: ethernet: hisilicon: add the Luofu PIE datapath and GEMAC front end
+AM_RC[0020-net-pie-datapath-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add the Luofu LSW read-only baseline probe
+AM_RC[0021-net-lsw-init-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add the gated Luofu LSW write path
+AM_RC[0022-net-lsw-qidmap-write-luofu.patch]=0
+Applying: net: ethernet: hisilicon: gate the Luofu GEMAC netdev on the LSW egress map
+AM_RC[0023-net-gmac-netdev-connect-luofu.patch]=0
+Applying: net: ethernet: hisilicon: decode Luofu PIE RX completions and TX descriptors
+AM_RC[0024-net-pie-completion-decode-luofu.patch]=0
+Applying: net: ethernet: hisilicon: add the gated Luofu LSW egress write stage
+AM_RC[0025-net-lsw-egress-luofu.patch]=0
+Applying: net: ethernet: hisilicon: use the bdinfo MAC in the Luofu GEMAC netdev
+AM_RC[0026-net-gmac-bdinfo-mac-nvmem.patch]=0

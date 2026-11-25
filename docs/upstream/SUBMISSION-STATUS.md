@@ -56,6 +56,34 @@ The load-bearing changes to the 2026-11-22 verdict below:
 - **Do not send the 2026-11-22 `submission/` package or its cover-email draft**: it is tied to
   the stale v1 hashes. Regenerate it with the v2 artefacts.
 
+## 0.1 2026-11-29 v4 update (supersedes the v2-fold paragraphs above)
+
+The v4 lane executed the `013a` -> DT `reset-gpios` fold and re-validated the
+package host-side; the detailed report is
+`../incoming/upstream-v4/REPORT.md` (status:
+`../incoming/upstream-v4/V2-REVIEW-FORM-STATUS.md`).
+
+- **The fold is committed.**  Review-form 0013 now carries the optional
+  `reset-gpios` / `reset-assert-us` / `reset-deassert-us` handling, the binding
+  documents the properties, and the 715-line board DTS supplies the RC0 lines
+  (`<&porta 20/21/28 GPIO_ACTIVE_LOW>`, 20 ms hold / 100 ms settle).  `013a` is
+  deleted from L0; the release line is therefore **55 include / 11 exclude**
+  again (the "must become 56" item above is resolved the other way: the fold
+  removes the separate patch).
+- **Re-validated:** L2 26/26 patch(1)+git am, identical trees, checkpatch
+  0 errors / 73 warnings, `gen-series.py --check` clean; L1 validator PASS
+  55/55, 0 fuzz, DTS + DTS-0001 contracts OK; DTS-0001 v4 sha256
+  `6fa1c690...`; folded driver compiles RC=0 at W=1 (OpenWrt GCC 14.4.0).
+- **Still open:** the v2 30-patch form is **not generated** - the fold was the
+  last content *decision*, but the other 16 content folds (027/031/032/036/038/
+  041/043/044/046/048/051/053/059/060/066/067) and **one attended boot of the
+  active-DTS change** remain, plus the full submission-package refresh (v1
+  manifest was hash-refreshed only).  The "review form is STALE and must not be
+  posted as-is" verdict above stays true.
+- **DTS claims above are stale:** DTS-0001 no longer contains the
+  `wifi-pcie-hog`; the single source is 715 lines and the board DTB compiles to
+  12,848 B (host dtc) without needing the pad step in this run.
+
 ## 1. Verdict (one screen)
 
 - **Target stack:** the L0 patch stack (66 files) boots a 2-CPU OpenWrt 6.18.60

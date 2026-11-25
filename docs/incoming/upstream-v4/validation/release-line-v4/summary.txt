@@ -1,0 +1,14 @@
+release line: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/release-line/manifest.tsv
+workdir: /home/shibbityshwab/uv4-val/val-l1
+pristine version: 6.18.60
+manifest: 55 included, 11 excluded
+patch(1): 55/55 patches RC=0, 152 file events, 3 hunks with offset, 0 hunks with fuzz, 0 rejects
+strict git apply: all 55 patches apply without fuzz
+board DTS: cpp RC=0, dtc RC=0, stderr 0/0 bytes, DTB 12848 B sha256 1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8
+target DTS: DTB totalsize 12848 B is 8-byte aligned
+DTS contract: console=/serial@1010f000 flashinfo-compatible=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+DTS series: board DTS byte-identical to the filtered target DTS (release-line-only W23 thermal delta stripped)
+DTS series: patch apply RC=0, cpp+dtc RC=0, stderr 0/0 bytes, DTB 12680 B sha256 2a5eb334a6f551005e641a297bcc71e52ef74b7038ed5d7288b253b1de0fc89a
+DTS series: DTB totalsize 12680 B is 8-byte aligned
+DTS series contract: console=/serial@1010f000 flashinfo=hisilicon,luofu-flashinfo hsan,flashinfo_reserved reg=80600000 4000 atag-offset=1000 enable-method=hisilicon,luofu-smp
+PASS: release line applies and the loader hand-off DTS contract is present. No hardware and no kernel build was involved.

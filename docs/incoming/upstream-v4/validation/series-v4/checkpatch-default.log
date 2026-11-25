@@ -1,0 +1,513 @@
+########## 0001-arm-mach-hisilicon-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#38: 
+new file mode 100644
+
+total: 0 errors, 1 warnings, 95 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0001-arm-mach-hisilicon-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0002-arm-kconfig-textofs.patch
+total: 0 errors, 0 warnings, 25 lines checked
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0002-arm-kconfig-textofs.patch has no obvious style problems and is ready for submission.
+########## 0003-arm-textofs-nonimmediate.patch
+total: 0 errors, 0 warnings, 42 lines checked
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0003-arm-textofs-nonimmediate.patch has no obvious style problems and is ready for submission.
+########## 0004-arm-clk-reset-luofu-crg.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#76: 
+new file mode 100644
+
+WARNING: line length of 112 exceeds 100 columns
+#176: FILE: drivers/clk/hisilicon/crg-luofu.c:97:
++	[LUOFU_CLK_SFC]		= { .name = "sfc_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x00 },
+
+WARNING: line length of 112 exceeds 100 columns
+#177: FILE: drivers/clk/hisilicon/crg-luofu.c:98:
++	[LUOFU_CLK_GPIO0]	= { .name = "gpio0_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x14 },
+
+WARNING: line length of 112 exceeds 100 columns
+#178: FILE: drivers/clk/hisilicon/crg-luofu.c:99:
++	[LUOFU_CLK_GPIO1]	= { .name = "gpio1_clk",	.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x15 },
+
+WARNING: line length of 112 exceeds 100 columns
+#179: FILE: drivers/clk/hisilicon/crg-luofu.c:100:
++	[LUOFU_CLK_I2C0]	= { .name = "i2c0_clk",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x18 },
+
+WARNING: line length of 112 exceeds 100 columns
+#180: FILE: drivers/clk/hisilicon/crg-luofu.c:101:
++	[LUOFU_CLK_PCIE0]	= { .name = "pcie0_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0c },
+
+WARNING: line length of 112 exceeds 100 columns
+#181: FILE: drivers/clk/hisilicon/crg-luofu.c:102:
++	[LUOFU_CLK_PCIE1]	= { .name = "pcie1_clk",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x0d },
+
+WARNING: line length of 112 exceeds 100 columns
+#182: FILE: drivers/clk/hisilicon/crg-luofu.c:103:
++	[LUOFU_CLK_GMAC0]	= { .name = "gemac_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x13 },
+
+WARNING: line length of 112 exceeds 100 columns
+#183: FILE: drivers/clk/hisilicon/crg-luofu.c:104:
++	[LUOFU_CLK_LEDPWM]	= { .name = "led_pwm",		.offset = LUOFU_CRG_GATE0_OFFSET, .bit = 0x0e },
+
+WARNING: line length of 112 exceeds 100 columns
+#184: FILE: drivers/clk/hisilicon/crg-luofu.c:105:
++	[LUOFU_CLK_LSW_DP]	= { .name = "lsw_dp_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x00 },
+
+WARNING: line length of 112 exceeds 100 columns
+#185: FILE: drivers/clk/hisilicon/crg-luofu.c:106:
++	[LUOFU_CLK_LSW_PFE]	= { .name = "lsw_pfe_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x01 },
+
+WARNING: line length of 112 exceeds 100 columns
+#186: FILE: drivers/clk/hisilicon/crg-luofu.c:107:
++	[LUOFU_CLK_MDIO]	= { .name = "mdio_clk0",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x03 },
+
+WARNING: line length of 112 exceeds 100 columns
+#187: FILE: drivers/clk/hisilicon/crg-luofu.c:108:
++	[LUOFU_CLK_GMAC1]	= { .name = "gemac_clk1",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x14 },
+
+WARNING: line length of 112 exceeds 100 columns
+#188: FILE: drivers/clk/hisilicon/crg-luofu.c:109:
++	[LUOFU_CLK_GMAC2]	= { .name = "gemac_clk2",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x15 },
+
+WARNING: line length of 112 exceeds 100 columns
+#189: FILE: drivers/clk/hisilicon/crg-luofu.c:110:
++	[LUOFU_CLK_GMAC3]	= { .name = "gemac_clk3",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x16 },
+
+WARNING: line length of 112 exceeds 100 columns
+#190: FILE: drivers/clk/hisilicon/crg-luofu.c:111:
++	[LUOFU_CLK_GMAC4]	= { .name = "gemac_clk4",	.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x17 },
+
+WARNING: line length of 112 exceeds 100 columns
+#191: FILE: drivers/clk/hisilicon/crg-luofu.c:112:
++	[LUOFU_CLK_PIE]		= { .name = "pie_clk0",		.offset = LUOFU_CRG_GATE1_OFFSET, .bit = 0x19 },
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 18 warnings, 492 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0004-arm-clk-reset-luofu-crg.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0005-arm-watchdog-luofu-wdt.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#71: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 328 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0005-arm-watchdog-luofu-wdt.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0006-arm-mtd-nand-luofu-fmc.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#80: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 767 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0006-arm-mtd-nand-luofu-fmc.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0007-net-mdio-luofu.patch
+WARNING: please write a help paragraph that fully describes the config symbol with at least 4 lines
+#41: FILE: drivers/net/mdio/Kconfig:107:
++config LUOFU_MDIO
++	tristate "HiSilicon Luofu MDIO bus controller"
++	depends on HAS_IOMEM && OF_MDIO
++	help
++	  This module provides a driver for the MDIO bus controller of the
++	  HiSilicon Hi5671Y "luofu" SoC. It is a polled clause 22 master for
++	  the PHYs behind the internal switch.
++
+
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#64: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 3 warnings, 325 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0007-net-mdio-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0008-net-phy-luofu.patch
+WARNING: please write a help paragraph that fully describes the config symbol with at least 4 lines
+#36: FILE: drivers/net/phy/Kconfig:331:
++config LUOFU_PHY
++	tristate "HiSilicon Luofu Genius PHYs"
++	help
++	  Currently supports the HiSilicon "Genius" clause 22 PHYs found
++	  behind the internal switch of the Hi5671Y "luofu" SoC (PHY ID
++	  0x20669a00, mask 0xffffff00).
++
+
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#58: 
+new file mode 100644
+
+total: 0 errors, 2 warnings, 0 checks, 72 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0008-net-phy-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0009-net-gmac-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#69: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 255 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0009-net-gmac-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0010-arm-luofu-restart.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#72: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 394 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0010-arm-luofu-restart.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0011-pinctrl-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#65: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 1003 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0011-pinctrl-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0012-arm-thermal-luofu-tvsensor.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#72: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 217 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0012-arm-thermal-luofu-tvsensor.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0013-arm-pci-luofu-host.patch
+WARNING: Block comments use a trailing */ on a separate line
+#220: FILE: drivers/pci/controller/dwc/pcie-luofu.c:118:
++ * is written (pcie-seq-re 2026-11-22). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#356: FILE: drivers/pci/controller/dwc/pcie-luofu.c:254:
++	 * configuration request without a link may SError this SoC. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#421: FILE: drivers/pci/controller/dwc/pcie-luofu.c:319:
++	 * boot; this early probe needs an explicit settle time). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#435: FILE: drivers/pci/controller/dwc/pcie-luofu.c:333:
++	 * mode value is 4<<28 = 0x40000000, matching this write). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#448: FILE: drivers/pci/controller/dwc/pcie-luofu.c:346:
++	 * DBI writes. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#466: FILE: drivers/pci/controller/dwc/pcie-luofu.c:364:
++	 * request hit the live link machine. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#501: FILE: drivers/pci/controller/dwc/pcie-luofu.c:399:
++	 * mask, gate clear). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#512: FILE: drivers/pci/controller/dwc/pcie-luofu.c:410:
++	 * 0x80c = 0x12c) and the header words zeroed. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#520: FILE: drivers/pci/controller/dwc/pcie-luofu.c:418:
++	 * SET during training instead of clearing it. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#523: FILE: drivers/pci/controller/dwc/pcie-luofu.c:421:
++	 * one wrapper register we cannot read back; re-writing it is free). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#528: FILE: drivers/pci/controller/dwc/pcie-luofu.c:426:
++	 * the resets have fully settled. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#536: FILE: drivers/pci/controller/dwc/pcie-luofu.c:434:
++	 * re-kick the LTSSM enable once after a short delay. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#585: FILE: drivers/pci/controller/dwc/pcie-luofu.c:483:
++	 * Gate on (preserving LTSSM), dbi+0x80c |= 0x20000, gate off. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#715: FILE: drivers/pci/controller/dwc/pcie-luofu.c:613:
++	 * bring-up workaround, not a modelled ACP power domain. */
+
+WARNING: Block comments use a trailing */ on a separate line
+#733: FILE: drivers/pci/controller/dwc/pcie-luofu.c:631:
++	 * is enabled and the LTSSM starts (vendor order; 2026-11-24). */
+
+WARNING: Block comments use a trailing */ on a separate line
+#762: FILE: drivers/pci/controller/dwc/pcie-luofu.c:660:
++	 * settle, then deassert in the vendor order with longer settles. */
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 17 warnings, 923 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0013-arm-pci-luofu-host.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0014-arm-crg-reset-polarity.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 45 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0014-arm-crg-reset-polarity.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0015-net-pie-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#67: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 715 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0015-net-pie-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0016-net-lsw-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#67: 
+new file mode 100644
+
+CHECK: Alignment should match open parenthesis
+#295: FILE: drivers/net/ethernet/hisilicon/luofu-switch.c:225:
++		lsw->window[i] = devm_platform_ioremap_resource_byname(pdev,
++								      name);
+
+CHECK: Alignment should match open parenthesis
+#327: FILE: drivers/net/ethernet/hisilicon/luofu-switch.c:257:
++		lsw->reset[i] = devm_reset_control_get_exclusive(lsw->dev,
++							 luofu_lsw_reset_names[i]);
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 646 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0016-net-lsw-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0017-soc-luofu-boot-selector.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#84: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 3 warnings, 436 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0017-soc-luofu-boot-selector.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0018-arm-mach-hisilicon-smp.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#130: 
+new file mode 100644
+
+total: 0 errors, 1 warnings, 189 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0018-arm-mach-hisilicon-smp.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0019-arm-clk-luofu-clock-tree.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 931 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0019-arm-clk-luofu-clock-tree.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0020-net-pie-datapath-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#1649: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 2111 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0020-net-pie-datapath-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0021-net-lsw-init-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#89: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 1456 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0021-net-lsw-init-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0022-net-lsw-qidmap-write-luofu.patch
+WARNING: added, moved or deleted file(s), does MAINTAINERS need updating?
+#142: 
+new file mode 100644
+
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 2 warnings, 1051 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0022-net-lsw-qidmap-write-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0023-net-gmac-netdev-connect-luofu.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 178 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0023-net-gmac-netdev-connect-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0024-net-pie-completion-decode-luofu.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 951 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0024-net-pie-completion-decode-luofu.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.
+########## 0025-net-lsw-egress-luofu.patch
+total: 0 errors, 0 warnings, 0 checks, 623 lines checked
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0025-net-lsw-egress-luofu.patch has no obvious style problems and is ready for submission.
+########## 0026-net-gmac-bdinfo-mac-nvmem.patch
+WARNING: DT binding docs and includes should be a separate patch. See: Documentation/devicetree/bindings/submitting-patches.rst
+
+total: 0 errors, 1 warnings, 89 lines checked
+
+NOTE: For some of the reported defects, checkpatch may be able to
+      mechanically convert to the typical style using --fix or --fix-inplace.
+
+/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/upstream/series-6.18/series/0026-net-gmac-bdinfo-mac-nvmem.patch has style problems, please review.
+
+NOTE: If any of the errors are false positives, please report
+      them to the maintainer, see CHECKPATCH in MAINTAINERS.

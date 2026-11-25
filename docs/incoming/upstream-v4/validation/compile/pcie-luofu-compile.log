@@ -1,0 +1,12 @@
+# host-only compile smoke test of the folded PCIe driver (target patch 013 / review-form 0013)
+# tree: reflink copy of openwrt-lab-selectorfix-img build_dir kernel linux-6.18.60
+# date: 2026-11-29
+# toolchain: OpenWrt GCC 14.4.0 (staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi)
+# command: make ARCH=arm CROSS_COMPILE=arm-openwrt-linux- W=1 drivers/pci/controller/dwc/pcie-luofu.o
+# input driver sha256: ab3e190ac936c654f2cfcc429605e394579b465186e2d9231757ec32f033b0a4
+
+  CALL    scripts/checksyscalls.sh
+  CC      drivers/pci/controller/dwc/pcie-luofu.o
+
+EXIT=0
+-rw-r--r-- 1 shibbityshwab shibbityshwab 44528 พ.ย.  25 16:25 drivers/pci/controller/dwc/pcie-luofu.o
