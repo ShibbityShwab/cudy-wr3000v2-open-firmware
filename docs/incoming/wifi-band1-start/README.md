@@ -57,10 +57,10 @@ G+0x370 no-writer proof), ../wifi-fw-beacon-tx (VAP start -> 0x971D8),
 ## Reproduce
 
 ```
-.full-venv python (capstone 5.0.7):
-/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python \
-  tools/fw_band1_start_re.py --selftest     # 47 PASS, 0 FAIL
-  ... --start / --xrefs / --hooks / --keys / --probe / --recipe / --modules
+PY=/home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/.provision-venv/bin/python
+$PY tools/fw_band1_start_re.py --selftest    # 47 PASS, 0 FAIL (capstone 5.0.7)
+$PY tools/fw_band1_start_re.py --start       # and --xrefs --hooks --keys
+$PY tools/fw_band1_start_re.py --probe       # and --recipe --modules
 ```
 
 Artifact (local, uncommitted): `/home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin`,
