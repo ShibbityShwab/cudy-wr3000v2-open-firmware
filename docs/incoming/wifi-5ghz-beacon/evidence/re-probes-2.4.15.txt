@@ -1,0 +1,59 @@
+vendor host module: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/rootfs-2.4.15/lib/hisilicon/ko/hi5622v100_wifi.ko (3581748 B, sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2)
+disassembler: /home/shibbityshwab/openwrt-lab-upstream-target/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-objdump
+PASS symbol present: hmac_band_set_band
+PASS symbol present: hmac_band_set_channel
+PASS symbol present: hmac_band_set_channel_and_bandwith
+PASS symbol present: hmac_band_module_init
+PASS symbol present: hmac_band_get_by_id
+PASS symbol present: hmac_config_set_channel
+PASS symbol present: hmac_config_set_freq
+PASS symbol present: hmac_config_add_vap
+PASS symbol present: hmac_config_add_vap_check
+PASS symbol present: hmac_config_add_vap_init
+PASS symbol present: hmac_config_add_vap_sync_all
+PASS symbol present: hmac_vap_add_multi_user
+PASS symbol present: hmac_vap_init_band
+PASS symbol present: hmac_config_send_event
+PASS symbol present: wal_cfg80211_start_ap
+PASS symbol present: wal_send_set_ssid_event
+PASS symbol present: wal_hipriv_add_vap
+PASS symbol present: wal_send_cfg_event
+PASS symbol present: wal_check_and_release_msg_resp
+PASS symbol present: wal_cfg80211_start_ap_write_msg
+PASS A1 hmac_band_set_band stores the band byte at band+0xd28
+PASS A2 hmac_band_set_channel stores the channel at band+0xd29
+PASS A3 ..._and_bandwith stores channel +0xd29 and bandwidth at +0x10d2
+PASS B1 config_set_channel calls the host band bookkeeping first
+PASS B2 config_set_channel posts the firmware config event
+PASS B3 the config event cmd is 0x0124 (292)
+PASS B4 (string probe below)
+PASS B4 hmac_config_set_channel carries its 'post event to dmac' log string
+PASS C1 add_vap runs check -> init
+PASS C2 the VAP is created before its users (multi_user in init/chain)
+PASS C3 add_vap posts its H2D event through sync_all
+PASS C4 add_vap_check validates the band type/id/chip triple
+PASS D1 start_ap's first callee is not set-SSID (channel helper first)
+PASS D2 the channel helper posts a cfg event (0x0124 carrier)
+PASS D3 the channel helper WAITS for the firmware response (synchronous)
+PASS D4 the 4-byte channel body is built {band, priv[2], channel}
+PASS D5 start_ap order: set-SSID before auth
+PASS D5b start_ap order: auth before AP-config fill
+PASS D5c start_ap order: AP-config fill before the AP-config/VAP-start write
+PASS D6 write_msg sends AP config then VAP start
+PASS D7 wal_start_vap waits for the firmware VAP-start response
+PASS E1 wal_hipriv_add_vap calls hmac_band_type_to_band_id
+PASS E1 wal_hipriv_add_vap calls hmac_band_get_wiphy
+PASS E1 wal_hipriv_add_vap calls alloc_netdev_mqs
+PASS E1 wal_hipriv_add_vap calls wal_send_cfg_event
+PASS E1 wal_hipriv_add_vap calls register_netdev
+PASS E1 wal_hipriv_add_vap calls wal_check_and_release_msg_resp
+PASS E2 ... parses the '2g' band argument
+PASS E3 ... parses the '5g' band argument
+PASS E4 ... stores the CHIP id into netdev dev_priv[2] after the create
+PASS E5 the 0x0124 helper uses dev_priv[0] as a VAP index (<=18) - NOT a band byte
+known vendor build: 2.4.15 (sha256 22fa789a3d43...)
+PASS F hmac_band_set_channel @0x13f49c (cited 0x13f49c)
+PASS F hmac_band_set_channel_and_bandwith @0x13f520 (cited 0x13f520)
+PASS F hmac_band_set_band @0x13f460 (cited 0x13f460)
+PASS F hmac_config_add_vap @0x15c0e8 (cited 0x15c0e8)
+beacon5g_re: 55 probes, 0 failures

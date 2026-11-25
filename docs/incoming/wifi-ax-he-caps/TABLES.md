@@ -199,7 +199,7 @@ firmware's own beacon then carries the IE is exactly what the fire evaluates.
 | other bands | - | never advertised (no 6 GHz band exists) |
 | hostapd `ieee80211ax=1` | "Driver does not support HE", AP fails closed | HTTP gate passes, HE IEs in the start_ap beacon tail |
 | `he_caps>1` | - | module init fails (-EINVAL); no wiphy, no AP (never guessed) |
-| data contract | - | the static cfg80211 entries are memcmp-checked against the portable decoded blob at band setup; mismatch refuses the band |
+| data contract | - | the cfg80211 entry is BUILT from the portable decoded blob (single source in `src/hi5622_he_caps.h`); the build script refuses capability literals duplicated in the driver; a failed blob/allocation refuses the band |
 
 ## T10. The exact bytes the fire expects [H]
 
@@ -225,6 +225,6 @@ presence + the capabilities element bytes, not the operation params.
 | policy: `he_caps=1` + band 1 | T3 5 GHz blob + 28 B IE | idem |
 | policy: `he_caps=2` | -EINVAL, no blob, no IE | idem |
 | policy: band outside 0..1 | -EINVAL | idem |
-| data-contract | static cfg80211 entries == portable blob (mac/phy/mcs/ppe) | the driver checks memcmp at band setup; the host checker `tools/check-data-contract.py` re-parses both sources |
+| data-contract | capability values only in the portable contract macros; the driver consumes the blob; the build script refuses duplicated literals | build-script source guard (`rx_mcs_* = 0x` / static `phy_cap_info`); `iw phy` shows the same caps at the fire |
 | build | 0 warnings / 0 errors against linux-6.18.60, undefsym clean | build script |
 | artifact | 59 params (58 vap5g base + `he_caps`), `he_caps` default 0, 4 HE feature strings, 12 cfg80211 symvers, .text identical after `strip --strip-debug` | build script + `evidence/build-artifact.txt` |

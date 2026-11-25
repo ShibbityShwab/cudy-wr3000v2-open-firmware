@@ -1,0 +1,452 @@
+== 1. portable channel-activation planner (src/)
+beacon5g selftest: 5 GHz AP-start channel-activation planner
+PASS plan: default band-1 accepted
+PASS plan: default wait 0 (legacy, 2.4/5G)
+PASS plan: default keeps the read-only gate pack
+PASS plan: default ctx from slot0/base
+PASS plan: beacon_static=0 accepted (legacy non-beacon path)
+PASS plan: beacon_static=0 wait 0
+PASS plan: beacon_static=0 no readback work
+PASS plan: 2.4 GHz accepted
+PASS plan: 2.4 GHz wait 0 (byte/timing identical)
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: band-1 accepted
+PASS matrix: band-1 wait == parameter
+PASS matrix: 2.4 GHz ignores the wait
+PASS matrix: beacon_static=0 ignores the wait
+PASS matrix: unreadable module table -> ctx 0 (fail closed)
+PASS refuse: NULL out
+PASS refuse: wait beyond the 1000 ms bound
+PASS refuse: band 2 (never a guessed band)
+PASS refuse: band 0xffffffff
+PASS addr: slot0 CPU -> committed BAR0 0x829458
+PASS addr: base CPU -> committed BAR0 0x82a504
+PASS addr: band-0 publish word -> BAR0 0x816408
+PASS addr: band-1 publish word -> BAR0 0x817f70 (0x15e570+0x1a00)
+PASS audit: old slot0 constant is the correct one + 0x4000
+PASS audit: old base constant is the correct one + 0x8000
+PASS mctx: slot0 with base 0
+PASS mctx: base is u16
+PASS mctx: base high half ignored (u16 read)
+PASS mctx: slot0 0 -> 0 (fail closed)
+PASS mctx: ctx above the firmware RAM window -> 0 (fail closed)
+PASS ctx: band 1 ch 36 valid -> ready
+PASS ctx: valid 0 -> not ready
+PASS ctx: band mismatch -> not ready
+PASS ctx: channel mismatch -> not ready
+PASS ctx: channel 0 -> not ready
+PASS ctx: 2.4 GHz ch 6 valid -> ready (generic check)
+PASS ctx: E2 logged word 0x00175468 is not a ready channel ctx
+PASS ctx: band 2 -> not ready
+beacon5g selftest: 437 checks, 0 failures
+== 2. patch contract on the driver tree (/tmp/beacon5g-build)
+PASS corrected module-table slot0 constant (BAR0 0x829458)
+PASS corrected module-table base constant (BAR0 0x82a504)
+PASS ap_chan_wait_ms parameter is declared
+PASS band-1 bounded wait log
+PASS fail-closed wait timeout abort
+PASS read-only activation gate pack
+PASS planner is used by start_ap
+PASS fail-closed parameter validation in start_ap
+PASS old mis-addressed readback constants are gone
+PASS Kbuild lists hi5622_beacon5g.o
+host tests PASS (no device contacted)

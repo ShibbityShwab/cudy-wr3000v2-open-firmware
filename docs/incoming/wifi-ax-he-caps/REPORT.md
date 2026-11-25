@@ -124,24 +124,28 @@ One module parameter, default off:
     he_caps>1            - refuse: hi5622_cfg80211_init() fails with -EINVAL,
                            no wiphy, no AP; never guessed
 
-Implementation notes:
+Implementation notes (patch: `patches/0001-he-caps.patch`, 169 lines):
 
-* the cfg80211 side is two static `struct ieee80211_sband_iftype_data`
-  arrays (one per band), selected in `hi5622_cfg11_setup_one_band()` and
-  installed with the 6.18 helper `ieee80211_set_sband_iftype_data()`; the
-  fields that 6.18 added (EHT/UHR/nested data) stay zero, which is correct
-  for a Wi-Fi 6 radio;
-* the values are not trusted blindly: at band setup the driver rebuilds the
-  same blob from the portable `hi5622_he_caps.c` and **memcmp**s it against
-  the static entry (mac/phy/mcs/ppe).  A drift refuses the band (-EINVAL)
-  instead of advertising a wrong capability;
+* the cfg80211 side builds one `struct ieee80211_sband_iftype_data` per
+  installed band **from the portable blob** (`hi5622_he_caps_fill()`) in
+  `hi5622_cfg11_setup_one_band()` and installs it with the 6.18 helper
+  `_ieee80211_set_sband_iftype_data()`; the fields that 6.18 added
+  (EHT/UHR/nested data) stay zero, which is correct for a Wi-Fi 6 radio; the
+  per-band entry is freed on remove;
+* the capability values exist in exactly one place: the contract macros in
+  `src/hi5622_he_caps.h`.  The driver never duplicates them as literals
+  (the build script refuses if it does), and a failed blob/allocation refuses
+  the band instead of advertising a half state.  `he_caps>1` fails the probe
+  with -EINVAL (no wiphy; never guessed);
 * everything is behind `he_caps`, so the proven AP path is unchanged unless
   the Lead opts in; the status sysfs line reports the flag for the fire log.
 
-Host tests (`tools/run-host-tests.sh`) cover the decision matrix, the
-band-specific blobs, the data contract and the exact T10 IE bytes; the build
-script pins the 58-param vap5g base module and asserts the 59-param artifact
-contract (BUILD-NOTES).
+Host tests (`tools/run-host-tests.sh`: 109 contract checks + 22 on-air
+checker checks, no device) cover the decision matrix, the band-specific
+blobs, refusal paths, the exact T10 element bytes and every verdict class of
+the offline on-air checker.  The build script pins the 58-param vap5g base
+module and asserts the 59-param artifact contract (BUILD-NOTES): stripped
+356,564 B sha256 `475975d3...`, 0 warnings, .text identical after strip.
 
 ## 6. What a PASS proves, what a FAIL falsifies, and the limits
 

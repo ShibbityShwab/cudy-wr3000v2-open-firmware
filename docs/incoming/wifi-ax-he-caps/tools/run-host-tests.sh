@@ -14,3 +14,7 @@ $CC $CFLAGS -I"$LANE/src" \
 	-o "$BIN"
 echo "== run selftest"
 "$BIN"
+
+echo
+echo "== part 2: run the offline on-air HE checker selftest"
+PYTHONPATH="$LANE/tools" python3 "$LANE/tools/check-he-ie-selftest.py"

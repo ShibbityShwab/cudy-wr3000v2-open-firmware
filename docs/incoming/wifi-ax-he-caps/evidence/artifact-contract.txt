@@ -1,0 +1,32 @@
+# artifact contract transcript - lane wifi-ax-he-caps (task-177), host-only
+# 2026-11-25 (lane wifi-ax-he-caps; host-only build)
+
+== size/sha256
+/tmp/wifi-he-caps-artifact/hi5622_wifi.ko 356564 B
+475975d32c9e56e2de1974d28ea983f1e0e7e36c4a0465ae4eeb7ea19755cdea  /tmp/wifi-he-caps-artifact/hi5622_wifi.ko
+
+== modinfo params (59)
+he_caps: (uint)
+
+== vermagic
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+
+== feature strings
+wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u he_caps=%u
+cfg80211: he_caps=%u invalid (0=off, 1=vendor HE caps); refusing the wiphy - no probe, no AP
+cfg80211: HE (802.11ax) caps advertised on %s (AP iftype): MAC %02x %02x %02x %02x %02x %02x, PHY0 0x%02x, MCS rx80/tx80 0x%04x/0x%04x rx160/tx160 0x%04x/0x%04x (2SS MCS0-9, no PPE, no 6GHz) - hostapd ieee80211ax=1 gate unlocked
+
+== cfg80211 import contract lines: 12
+
+== build warnings/errors/undefined: 0
+
+== data-contract source guard: capability literals in the driver (expect none)
+none - values come from the portable contract
+
+== patched-tree marker lines
+52:#include "hi5622_he_caps.h"
+409:static int hi5622_cfg11_he_apply(struct hi5622_cfg80211 *c,
+529:		ret = hi5622_cfg11_he_apply(c, sband, band_idx);
+700:			"cfg80211: he_caps=%u invalid (0=off, 1=vendor HE caps); refusing the wiphy - no probe, no AP\n",
+951:			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u he_caps=%u\n%s",
+36:		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_he_caps.o \
