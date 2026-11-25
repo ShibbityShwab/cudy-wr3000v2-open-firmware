@@ -453,6 +453,8 @@ only variable - a SAE profile in P5 is a separate boot):
 3. **Boot ladder** (sec. 3.6) -> golden page, ready pair.
 4. **C2**: `echo 1 > $D/h2d_ctx_create` -> read `h2d_status` (ctx created, consumed
    0 polls); `echo 1 > $D/h2d_txq_sync72` -> `h2d_status ok=2 timeout=0 refused=0`.
+   (The proven wrapper is `assoc-router-fire.sh --c2`, which encodes the value; if
+   this build's grammar differs the router script/the lane FIRE-RECIPE is authoritative.)
 5. **AP FIRST** (the ordering is hardware-corrected - do not reorder):
    ```sh
    iw phy phy0 interface add wlan0 type __ap
@@ -864,10 +866,11 @@ echo 1 > $D/h2d_txq_addr_sync         # if the module/recipe includes it
 ```sh
 iw phy phy0 interface add wlan5 type __ap
 ip link set wlan5 up
-/usr/sbin/hostapd -dd -t /etc/hi5622/hostapd-5ghz-open.conf 2>&1 | tee /tmp/hostapd-5g.log
-# (config: ../wifi-5ghz-bringup/ladders/hostapd-5ghz-open.conf - hw_mode=a,
-#  channel=36, 20 MHz, OPEN, beacon_int 100, country_code=US; push it or use
-#  the lane's file path; substitute the interface name if the image names it differently)
+# host: tools/rscp.sh ../wifi-5ghz-bringup/ladders/hostapd-5ghz-open.conf \
+#         root@192.168.1.1:/tmp/hostapd-5ghz-open.conf
+/usr/sbin/hostapd -dd -t /tmp/hostapd-5ghz-open.conf 2>&1 | tee /tmp/hostapd-5g.log
+# (the lane config: hw_mode=a, channel=36, 20 MHz, OPEN, beacon_int 100,
+#  country_code=US; substitute the interface name if the image names it differently)
 ```
 
 PASS (all of):
