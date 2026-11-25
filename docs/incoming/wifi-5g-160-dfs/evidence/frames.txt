@@ -1,0 +1,103 @@
+PASS firmware size 928920
+PASS firmware sha256 pinned
+PASS host module size 3581748
+PASS host module sha256 pinned
+PASS fw key 0x00F7 -> row 92 worker 0x45A30
+PASS fw key 0x0124 -> row 108 worker 0x841B8
+PASS fw key 0x0136 -> row 95 worker 0xB5F3C
+PASS fw key 0x0147 -> row 100 worker 0x436BC
+PASS fw key 0x01F7 -> row 93 worker 0xB5B9C
+PASS fw key 0x07E7 -> row 94 worker 0xB58FC
+PASS fw band-1 29 channels
+PASS fw band-1 flag byte 0xFF
+PASS fw band-0 14 channels
+PASS fw init-able UNII-2/2e = 16 channels (52-64, 100-144)
+PASS fw CA 0x101BA0 literal = CA 0x10BE68 (RF descriptor table)
+PASS fw insn 0x436BC push
+PASS fw insn 0x436EA strb.w
+PASS fw insn 0xB5900 ldrb
+PASS fw insn 0xB5F46 add
+PASS fw insn 0x101894 cmp
+PASS ko symbol hmac_band_set_channel_and_bandwith = 0x13F520
+PASS ko symbol hmac_cac_check_and_start_bss = 0x13FFA8
+PASS ko symbol hmac_chan_follow_reset_channel = 0x76D4C
+PASS ko symbol hmac_check_set_channel_radar_status = 0x763D4
+PASS ko symbol hmac_config_cac_sync_state = 0xAD1D4
+PASS ko symbol hmac_config_dfs_radartool = 0x71CD8
+PASS ko symbol hmac_config_set_bw = 0x73A58
+PASS ko symbol hmac_config_set_channel = 0x764E4
+PASS ko symbol hmac_dfs_ap_up_radar_handler = 0xAE218
+PASS ko symbol hmac_dfs_cac_start = 0xAD420
+PASS ko symbol hmac_dfs_cac_stop = 0xACD2C
+PASS ko symbol hmac_dfs_cac_timeout_fn = 0xAE584
+PASS ko symbol hmac_dfs_channel_list_init = 0xAC600
+PASS ko symbol hmac_dfs_init = 0xAC588
+PASS ko symbol hmac_dfs_nol_timeout_fn = 0xAB7FC
+PASS ko symbol hmac_dfs_off_cac_stop = 0xAD0DC
+PASS ko symbol hmac_dfs_off_chan_cac_timeout_fn = 0xAB034
+PASS ko symbol hmac_dfs_radar_detect_event = 0xAC7C0
+PASS ko symbol hmac_dfs_radar_wait = 0xAD7A4
+PASS ko symbol hmac_dfs_switch_channel_for_radar = 0xADBCC
+PASS ko symbol hmac_report_cac_finish = 0xACAEC
+PASS ko symbol hmac_report_cac_start = 0xAD22C
+PASS ko symbol wal_cfg80211_chan_dfs_check_resume = 0x102B44
+PASS ko symbol wal_cfg80211_convert_value_to_vht_width = 0x101328
+PASS ko symbol wal_cfg80211_convert_width_to_value = 0x101A98
+PASS ko symbol wal_cfg80211_set_chan_dfs_check = 0x102980
+PASS ko insn 0x73A68 movw
+PASS ko insn 0x76744 mov
+PASS ko insn 0x76E48 mov
+PASS ko insn 0xAD478 movw
+PASS ko insn 0xAE684 movw
+PASS ko insn 0xAD1EC movw
+PASS ko insn 0x71DF8 movw
+PASS ko insn 0xAD55C movw
+PASS ko insn 0xAE618 movw
+PASS ko insn 0xAD510 movw
+PASS ko insn 0x13F52C strb
+PASS ko insn 0x13F530 strb
+PASS ko insn 0xAD460 strb
+PASS ko insn 0xAD474 strb
+PASS ko insn 0xAC66C cmp
+PASS ko insn 0xAC6D4 sub
+PASS ko insn 0xAC6D8 sub
+PASS ko insn 0xAC6E0 cmp
+PASS ko insn 0xAC58C movw
+PASS ko insn 0xAC5BC mov
+PASS ko insn 0xAC5C0 movt
+PASS ko insn 0xAC5D4 movw
+PASS ko insn 0xAC5D8 movt
+PASS ko insn 0xAC5DC movw
+PASS ko insn 0xAC5E0 movt
+PASS ko insn 0xAC5AC movw
+PASS ko insn 0xAC5B0 movt
+PASS ko insn 0x101328 cmp
+PASS ko insn 0x101330 cmp
+PASS ko insn 0x102F04 mov
+PASS ko insn 0x71DB4 ldr
+PASS ko 0xAD480 calls hmac_config_send_event
+PASS ko table: width->value table (NL80211_CHAN_WIDTH 0..5)
+PASS DFS CAC default 60000 ms
+PASS DFS TDWR CAC 600000 ms (0x27C0 | 9<<16)
+PASS DFS NOL 1800000 ms (0x7740 | 27<<16)
+PASS DFS 60 min field 3600000 ms (0xEE80 | 54<<16)
+PASS DFS 6 min field 360000 ms (0x7E40 | 5<<16)
+
+SELFTEST: 84 PASS, 0 FAIL
+
+== H2D g0 id1 config event frames (derived layout) ==
+  0x0124 channel config, len 4:
+    body[0] = band (0=2.4G, 1=5G)
+    body[1] = bandwidth selector (0=20M, 1=40M, 2=80M,
+              3=160M [I]; the 0x0124 worker stores it to
+              module ctx+0x12; the 5 GHz RF branch CA 0x40684
+              passes it as field to CA 0x101890)
+    body[2] = channel number (firmware band table)
+    body[3] = 0
+  0x07E7 CAC/radar state sync, len 1:
+    body[0] = 1 arm radar detect + CAC active, 0 disarm/finish
+  0x0136 radartool, len = strlen: the radartool command STRING
+    (firmware 28-entry command table CA 0x105B68)
+  0x0147 set bandwidth, len 1:
+    body[0] = MAC bandwidth byte -> firmware obj+0x531
+    (WAL set_bw/hipriv path; not the AP width path)
