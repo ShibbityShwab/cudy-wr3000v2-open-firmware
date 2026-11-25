@@ -63,3 +63,9 @@ wc -l build/rx-init-msg/wifi.dis                 # 437446
   pointer).
 * No stock-boot H2D trace exists in the repository; whether a working vendor boot sends key
   0x0004 is [U] and needs the bench.
+* Reconciliation of the two generators: the report/TABLES were produced by the fuller extraction
+  (244 static keys + 5 dynamic); the committed simplified generator
+  (\`tools/vendor_msg_scan.py\`, literal-pool resolution included) prints 243 static + 6 dynamic.
+  The one-key delta is a call site whose key is loaded from a structure rather than an immediate
+  (no literal pool entry); it is in the runtime WMM/PM family and does not affect the live-key
+  cross-check or the 0x0004 conclusion.
