@@ -583,12 +583,12 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 if [ "$STRICT" -eq 1 ]; then
 	if [ "$PATH_MODE" = "rootfs-only" ]; then
-		say "RESULT: PASS - fire-ready for the ROOTFS-ONLY path: write mtd14 only (ubiformat), never kernelb, then the pair-b handover (RUNBOOK.md section 7)."
+		say "RESULT: PASS - fire-ready for the ROOTFS-ONLY path: write mtd14 only (ubiformat), never kernelb, then the pair-b handover (RUNBOOK.md section 6)."
 	else
-		say "RESULT: PASS - fire-ready for the FULL CONTAINER path: write kernelb (validated slice) + rootfsb from the container, then the pair-b handover (RUNBOOK.md section 8)."
+		say "RESULT: PASS - fire-ready for the FULL CONTAINER path: write kernelb (validated slice) + rootfsb from the container, then the pair-b handover (RUNBOOK.md section 7)."
 	fi
 else
-	say "RESULT: PASS - host artifacts are the pinned IMAGE #3 build. NOT fire-ready yet: rerun with --strict --stock-witness FILE --proc-mtd FILE before any write (RUNBOOK.md section 6)."
+	say "RESULT: PASS - host artifacts are the pinned IMAGE #3 build. NOT fire-ready yet: rerun with --strict --stock-witness FILE --proc-mtd FILE before any write (RUNBOOK.md section 3 and 5.3)."
 fi
 say "REMINDER: the fire still needs a human at the bench, tools/recovery-card.sh READY, tools/bench-link.sh PASS and a running read-only UART capture (RUNBOOK.md section 2)."
 exit 0
