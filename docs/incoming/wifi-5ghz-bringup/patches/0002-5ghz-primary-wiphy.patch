@@ -1,0 +1,447 @@
+diff -ruN c/hi5622_band5g.c b2/hi5622_band5g.c
+--- c/hi5622_band5g.c	2026-11-25 12:39:05.509522537 +0700
++++ b2/hi5622_band5g.c	2026-11-25 12:40:11.093432517 +0700
+@@ -259,3 +259,57 @@
+ {
+ 	return band == HI5622_BAND5G_5GHZ ? "5GHz" : "2.4GHz";
+ }
++
++/* ---------------------------------------------------------------------
++ * One-radio/two-band wiphy plan (lane wifi-5ghz-bringup, task-154)
++ * -------------------------------------------------------------------*/
++int hi5622_band5g_wiphy_bands(u32 band5g_enable, int pci_domain,
++			      u8 *out_bands, unsigned int max,
++			      unsigned int *out_n)
++{
++	if (!out_bands || !out_n || pci_domain < 0)
++		return -EINVAL;
++	*out_n = 0;
++
++	/* band5g=0: preserve the bench-validated per-endpoint single-band model
++	 * (the same rule as hi5622_cfg11_pick_band()'s domain auto value). */
++	if (!band5g_enable) {
++		if (max < 1u)
++			return -ENOSPC;
++		out_bands[0] = (pci_domain == 1) ? HI5622_BAND5G_5GHZ :
++						      HI5622_BAND5G_2GHZ;
++		*out_n = 1u;
++		return 0;
++	}
++
++	/* band5g=1: only the primary endpoint carries a wiphy; it carries both
++	 * bands because the chip is one radio with two band tables.  The second
++	 * host view has no wiphy: there is no second HCC service to drive one
++	 * (see REPORT.md "one chip, two host views"). */
++	if (pci_domain != 0)
++		return 0;
++	if (max < HI5622_BAND5G_MAX_WIPHY_BANDS)
++		return -ENOSPC;
++	out_bands[0] = HI5622_BAND5G_2GHZ;
++	out_bands[1] = HI5622_BAND5G_5GHZ;
++	*out_n = HI5622_BAND5G_MAX_WIPHY_BANDS;
++	return 0;
++}
++
++int hi5622_band5g_freq_band(u16 freq)
++{
++	u8 band;
++
++	for (band = 0; band <= HI5622_BAND5G_5GHZ; band++) {
++		const struct hi5622_band5g_chan *tbl;
++		u16 n = 0, i;
++
++		tbl = hi5622_band5g_channels(band, &n);
++		if (!tbl || !n)
++			continue;
++		for (i = 0; i < n; i++)
++			if (tbl[i].freq == freq)
++				return (int)band;
++	}
++	return -ENOENT;
++}
+diff -ruN c/hi5622_band5g.h b2/hi5622_band5g.h
+--- c/hi5622_band5g.h	2026-11-25 12:39:05.509466021 +0700
++++ b2/hi5622_band5g.h	2026-11-25 12:40:11.090918515 +0700
+@@ -47,6 +47,32 @@
+ #define HI5622_BAND5G_2G_COUNT		14u
+ #define HI5622_BAND5G_5G_COUNT		29u
+ 
++/* One-radio/two-band wiphy plan (lane wifi-5ghz-bringup, shared task task-154).
++ *
++ * The two PCI endpoints on this board are two HOST VIEWS of ONE chip: the
++ * vendor boot log prints "chip 0" for both buses, both functions' BAR0 windows
++ * alias the same on-chip register space, and only register instance 0 is
++ * initialised/serviced (opensource/docs/phase21/sibling-ep.md A.3/A.4).  A
++ * wiphy is therefore not a per-endpoint radio: with the 5 GHz profile enabled
++ * the PRIMARY endpoint (PCI domain 0 - the only endpoint the boot ladder and
++ * the single HCC service may run on) carries BOTH bands, and the second host
++ * view carries no wiphy at all.  enable=0 keeps the bench-validated
++ * per-endpoint single-band model unchanged (domain 0 = 2.4 GHz, domain 1 =
++ * 5 GHz, the hi5622_cfg11_pick_band() auto rule).
++ */
++#define HI5622_BAND5G_MAX_WIPHY_BANDS	2u
++
++/* Fill out_bands[]/out_n with the bands this endpoint's wiphy must carry.
++ * Returns 0 on success (out_n == 0 means "no wiphy on this endpoint"),
++ * -EINVAL for bad arguments, -ENOSPC when max is too small. */
++int hi5622_band5g_wiphy_bands(u32 band5g_enable, int pci_domain,
++			      u8 *out_bands, unsigned int max,
++			      unsigned int *out_n);
++
++/* Band (0 = 2.4 GHz, 1 = 5 GHz) of a centre frequency using the two vendor
++ * band tables; -ENOENT when the frequency is in neither table. */
++int hi5622_band5g_freq_band(u16 freq);
++
+ /* Channel flags (derived from the vendor wiphy tables + the regulatory
+  * rules the bench-validated driver already applies; the kernel regdb still
+  * has the final say at wiphy registration). */
+diff -ruN c/hi5622_cfg80211.c b2/hi5622_cfg80211.c
+--- c/hi5622_cfg80211.c	2026-11-25 12:39:05.537672475 +0700
++++ b2/hi5622_cfg80211.c	2026-11-25 12:40:40.280969746 +0700
+@@ -84,16 +84,23 @@
+ 		 "use the vendor band tables instead of the shipped lists (2.4 GHz ch1-14, 5 GHz 29 channels incl. ch144 and the 4.9 GHz block; 0=off default)");
+ 
+ /* wifi-5ghz lane (task-145, host-only static RE): one switch for the complete
+- * 5 GHz profile on the 5 GHz endpoint wiphy - vendor 29-channel table (ch144 +
+- * 4.9 GHz block), HT cap 0x0062 (20/40+SGI), VHT cap 0x00400064 (160 MHz) with
+- * the 2-SS MCS map - and the fail-closed gate for the 5 GHz AP-start path
+- * (channel config 0x0124 + H1 band config g0 id10 validate against the vendor
+- * tables; 5 GHz AP start is refused while this is 0).  The explicit ht_mode /
+- * vht_cap / band_vendor parameters still take precedence when set. */
++ * 5 GHz profile - vendor 29-channel table (ch144 + 4.9 GHz block), HT cap
++ * 0x0062 (20/40+SGI), VHT cap 0x00400064 (160 MHz) with the 2-SS MCS map - and
++ * the fail-closed gate for the 5 GHz AP-start path (channel config 0x0124 + H1
++ * band config g0 id10 validate against the vendor tables; 5 GHz AP start is
++ * refused while this is 0).  The explicit ht_mode / vht_cap / band_vendor
++ * parameters still take precedence when set.
++ *
++ * wifi-5ghz-bringup lane (task-154): the 5 GHz profile is NOT a second
++ * endpoint radio.  The board's two PCI functions are two host views of one
++ * chip (both print chip 0, the BAR0 windows alias the same register space, and
++ * only register instance 0 is initialised), so with band5g=1 the PRIMARY
++ * endpoint's wiphy (domain 0) carries BOTH bands and the second host view
++ * carries no wiphy - see hi5622_band5g_wiphy_bands(). */
+ unsigned int hi5622_band5g;
+ module_param_named(band5g, hi5622_band5g, uint, 0644);
+ MODULE_PARM_DESC(band5g,
+-		 "5GHz band enable: 0=off (default, bench-validated 2.4 GHz behaviour; 5 GHz AP start fail-closed), 1=register the 5 GHz endpoint with the vendor 29-ch/HT 0x62/VHT 0x400064 profile and allow 5 GHz AP start");
++		 "5GHz band enable: 0=off (default, bench-validated 2.4 GHz per-endpoint behaviour; 5 GHz AP start fail-closed), 1=one-radio/two-band profile: the primary endpoint's wiphy carries the vendor 29-ch/HT 0x62/VHT 0x400064 5 GHz band IN ADDITION to 2.4 GHz and the secondary host view gets no wiphy; 5 GHz AP start and the H1 5 GHz band config are then allowed");
+ 
+ /* Documentation-purpose locally-administered address (02:...) - never a
+  * per-unit MAC; each VAP derives its own last byte from the slot. */
+@@ -286,6 +293,19 @@
+ 	return band == HI5622_BAND_2GHZ ? "2.4GHz" : "5GHz";
+ }
+ 
++/* Number of bands installed in this wiphy (1 normally, 2 for the
++ * band5g=1 primary-endpoint one-radio/two-band profile). */
++static unsigned int hi5622_cfg11_wiphy_bands(const struct hi5622_cfg80211 *c)
++{
++	unsigned int n = 0;
++
++	if (c->wiphy->bands[NL80211_BAND_2GHZ])
++		n++;
++	if (c->wiphy->bands[NL80211_BAND_5GHZ])
++		n++;
++	return n;
++}
++
+ /* Vendor-derived channel array (hi5622_sta_logic.c tables: 2.4 GHz ch1-14,
+  * 5 GHz 29 channels including ch144 and the 4.9 GHz public-safety block).
+  * Only used when the band_vendor module parameter is set; the shipped
+@@ -364,7 +384,7 @@
+ /* Copy the static capability templates into the wiphy (cfg80211's
+  * regulatory core modifies the channel arrays, so two wiphys must never
+  * share them). */
+-static int hi5622_cfg11_setup_band(struct hi5622_cfg80211 *c)
++static int hi5622_cfg11_setup_one_band(struct hi5622_cfg80211 *c, u8 band)
+ {
+ 	const struct ieee80211_supported_band *tpl;
+ 	struct ieee80211_supported_band *sband;
+@@ -373,7 +393,7 @@
+ 	enum nl80211_band band_idx;
+ 	int ret;
+ 
+-	if (c->band == HI5622_BAND_2GHZ) {
++	if (band == HI5622_BAND_2GHZ) {
+ 		tpl = &hi5622_band_2g_tpl;
+ 		band_idx = NL80211_BAND_2GHZ;
+ 	} else {
+@@ -402,7 +422,7 @@
+ 		sband->ht_cap.ampdu_density = HI5622_STA_HT_AMPDU_DENSITY;
+ 	} else if (hi5622_band5g && band_idx == NL80211_BAND_5GHZ) {
+ 		/* wifi-5ghz lane: vendor 5 GHz HT word (20/40 + SGI20/40). */
+-		sband->ht_cap.cap = hi5622_band5g_ht_cap_word(c->band);
++		sband->ht_cap.cap = hi5622_band5g_ht_cap_word(band);
+ 		sband->ht_cap.ampdu_factor = HI5622_STA_HT_AMPDU_FACTOR;
+ 		sband->ht_cap.ampdu_density = HI5622_STA_HT_AMPDU_DENSITY;
+ 	}
+@@ -410,8 +430,8 @@
+ 	    band_idx == NL80211_BAND_5GHZ) {
+ 		sband->vht_cap.vht_supported = true;
+ 		sband->vht_cap.cap = hi5622_vht_cap ?
+-				     hi5622_sta_vht_cap_word(c->band) :
+-				     hi5622_band5g_vht_cap_word(c->band);
++				     hi5622_sta_vht_cap_word(band) :
++				     hi5622_band5g_vht_cap_word(band);
+ 		sband->vht_cap.vht_mcs.rx_highest = 0;
+ 		sband->vht_cap.vht_mcs.tx_highest = 0;
+ 		sband->vht_cap.vht_mcs.rx_mcs_map = HI5622_STA_VHT_MCS_MAP;
+@@ -423,11 +443,9 @@
+ 		unsigned int vn = 0;
+ 
+ 		if (hi5622_band_vendor)
+-			ret = hi5622_cfg11_vendor_channels(c->band, &vchans,
+-							   &vn);
++			ret = hi5622_cfg11_vendor_channels(band, &vchans, &vn);
+ 		else
+-			ret = hi5622_cfg11_band5g_channels(c->band, &vchans,
+-							   &vn);
++			ret = hi5622_cfg11_band5g_channels(band, &vchans, &vn);
+ 		if (ret) {
+ 			kfree(sband->channels);
+ 			kfree(sband->bitrates);
+@@ -490,10 +508,11 @@
+ 	c->wiphy_registered = true;
+ 	mutex_unlock(&c->lock);
+ 	dev_info(dev,
+-		 "cfg80211: wiphy registered after the ready handshake (band %s, ch %u/%u GHz, AP+STA+monitor, ciphers %u) - M0 gate met: iw phy / iw dev enumerate\n",
++		 "cfg80211: wiphy registered after the ready handshake (%u band(s): %s%s%s, AP+STA+monitor, ciphers %u) - M0 gate met: iw phy / iw dev enumerate\n",
++		 hi5622_cfg11_wiphy_bands(c),
+ 		 hi5622_cfg11_band_name(c->band),
+-		 c->band == HI5622_BAND_2GHZ ? 1u : 36u,
+-		 c->band == HI5622_BAND_2GHZ ? 13u : 140u,
++		 hi5622_cfg11_wiphy_bands(c) > 1u ? " + " : "",
++		 hi5622_cfg11_wiphy_bands(c) > 1u ? "5GHz" : "",
+ 		 (unsigned)ARRAY_SIZE(hi5622_cipher_suites));
+ }
+ 
+@@ -573,6 +592,8 @@
+ {
+ 	struct hi5622_cfg80211 *c;
+ 	struct wiphy *wiphy;
++	u8 plan[HI5622_BAND5G_MAX_WIPHY_BANDS] = {};
++	unsigned int plan_n = 0, bi;
+ 	int band, ret;
+ 
+ 	if (!ctx)
+@@ -592,7 +613,33 @@
+ 			 hi5622_ht_mode, HI5622_STA_HT_MODE_MAX);
+ 		hi5622_ht_mode = HI5622_STA_HT_MODE_BASELINE;
+ 	}
+-	band = hi5622_cfg11_pick_band(ctx);
++	/* wifi-5ghz-bringup lane (task-154): the wiphy band plan.  band5g=0
++	 * keeps the bench-validated per-endpoint single-band model (band_force /
++	 * PCI domain auto).  band5g=1 selects the one-radio/two-band model: the
++	 * primary endpoint carries both bands, the second host view carries no
++	 * wiphy (it has no independent HCC service to drive one). */
++	if (hi5622_band5g) {
++		int domain = pci_domain_nr(ctx->pdev->bus);
++
++		ret = hi5622_band5g_wiphy_bands(hi5622_band5g, domain, plan,
++						ARRAY_SIZE(plan), &plan_n);
++		if (ret) {
++			dev_err(&ctx->pdev->dev,
++				"cfg80211: wiphy band plan failed (%d)\n", ret);
++			return ret;
++		}
++		if (!plan_n) {
++			dev_info(&ctx->pdev->dev,
++				 "cfg80211: endpoint %s is the SECONDARY host view of the same Wi-Fi chip (domain %d; one HCC service, domain 0) - no wiphy allocated here; band5g=1 advertises BOTH bands on the primary endpoint's wiphy, so the 5 GHz AP runs on that phy\n",
++				 pci_name(ctx->pdev), domain);
++			return 0;
++		}
++		band = (int)plan[0];
++	} else {
++		plan[0] = (u8)hi5622_cfg11_pick_band(ctx);
++		plan_n = 1u;
++		band = (int)plan[0];
++	}
+ 	wiphy = wiphy_new_nm(&hi5622_cfg11_ops, sizeof(*c), NULL);
+ 	if (!wiphy) {
+ 		dev_err(&ctx->pdev->dev, "cfg80211: wiphy_new_nm failed\n");
+@@ -661,12 +708,15 @@
+ 		    sizeof(wiphy->fw_version)) < 0)
+ 		dev_warn(&ctx->pdev->dev, "cfg80211: fw_version truncated\n");
+ 
+-	ret = hi5622_cfg11_setup_band(c);
+-	if (ret) {
+-		dev_err(&ctx->pdev->dev,
+-			"cfg80211: band setup failed (%d)\n", ret);
+-		wiphy_free(wiphy);
+-		return ret;
++	for (bi = 0; bi < plan_n; bi++) {
++		ret = hi5622_cfg11_setup_one_band(c, plan[bi]);
++		if (ret) {
++			dev_err(&ctx->pdev->dev,
++				"cfg80211: band setup failed for %s (%d)\n",
++				hi5622_cfg11_band_name(plan[bi]), ret);
++			wiphy_free(wiphy);
++			return ret;
++		}
+ 	}
+ 	ret = hi5622_scan_init(c);
+ 	if (ret) {
+@@ -677,12 +727,18 @@
+ 	}
+ 	ctx->cfg = c;
+ 	dev_info(&ctx->pdev->dev,
+-		 "cfg80211: wiphy allocated for endpoint %s (band %s, %s; wiphy registration is gated on the HCC ready handshake; scan/AP wiring M2/M3)\n",
+-		 pci_name(ctx->pdev), hi5622_cfg11_band_name(c->band),
+-		 band == HI5622_BAND_2GHZ ? "13 channels 1-13" :
+-		 (hi5622_band5g ?
+-		  "29 vendor 5 GHz channels (band5g=1 profile)" :
+-		  "19 LU-plan channels 36-48/52-64/100-140"));
++		 "cfg80211: wiphy allocated for endpoint %s (%u band(s): %s%s%s; wiphy registration is gated on the HCC ready handshake; scan/AP wiring M2/M3)\n",
++		 pci_name(ctx->pdev), plan_n,
++		 hi5622_cfg11_band_name(plan[0]),
++		 plan_n > 1u ? " + " : "",
++		 plan_n > 1u ? hi5622_cfg11_band_name(plan[1]) : "");
++	if (plan_n > 1u)
++		dev_info(&ctx->pdev->dev,
++			 "cfg80211: band5g=1 ONE-RADIO/TWO-BAND profile active - this wiphy carries 2.4 GHz (%d ch) + 5 GHz (%d vendor ch, HT 0x%04x, VHT 0x%08x); hostapd hw_mode=a on this phy drives the 5 GHz AP\n",
++			 c->wiphy->bands[NL80211_BAND_2GHZ]->n_channels,
++			 c->wiphy->bands[NL80211_BAND_5GHZ]->n_channels,
++			 c->wiphy->bands[NL80211_BAND_5GHZ]->ht_cap.cap,
++			 c->wiphy->bands[NL80211_BAND_5GHZ]->vht_cap.cap);
+ 	return 0;
+ }
+ 
+@@ -802,9 +858,10 @@
+ 			n += m;
+ 	}
+ 	ret = sysfs_emit(buf,
+-			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s band5g=%u\n%s",
++			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u\n%s",
+ 			 hi5622_cfg11_auto, hi5622_band_force,
+-			 hi5622_cfg11_band_name(c->band), hi5622_band5g, tmp);
++			 hi5622_cfg11_band_name(c->band),
++			 hi5622_cfg11_wiphy_bands(c), hi5622_band5g, tmp);
+ 	kfree(tmp);
+ 	return ret;
+ }
+diff -ruN c/hi5622_scan.c b2/hi5622_scan.c
+--- c/hi5622_scan.c	2026-11-25 12:39:05.509998364 +0700
++++ b2/hi5622_scan.c	2026-11-25 12:40:55.742873271 +0700
+@@ -1017,6 +1017,35 @@
+  * already be owned by the scan.  On a post failure the request is released
+  * (the caller does not call cfg80211_scan_done for the first batch, matching
+  * the .scan op contract). */
++/* wifi-5ghz-bringup lane (task-154): band of a scan request batch, derived
++ * from the requested centre frequencies (the firmware scan request carries ONE
++ * chip_id, so a cfg80211 request must be single-band; the 2.4 GHz and 5 GHz
++ * vendor tables are both present on the band5g=1 primary wiphy).  Falls back
++ * to the legacy wiphy band byte when no frequency resolves; *mixed is set when
++ * the batch spans both bands (the first channel's band is then used and the
++ * caller logs the limitation). */
++static u8 hi5622_scan_batch_band(struct hi5622_scan *s, u32 first, u32 n,
++				 bool *mixed)
++{
++	struct hi5622_cfg80211 *c = s->cfg;
++	u8 band = c->band;
++	int b0;
++	u32 i;
++
++	*mixed = false;
++	if (first >= s->n_freqs)
++		return band;
++	b0 = hi5622_band5g_freq_band(s->freqs[first]);
++	if (b0 < 0)
++		return band;
++	band = (u8)b0;
++	for (i = first + 1u; i < first + n && i < s->n_freqs; i++) {
++		if (hi5622_band5g_freq_band(s->freqs[i]) != b0)
++			*mixed = true;
++	}
++	return band;
++}
++
+ static int hi5622_scan_send_batch(struct hi5622_scan *s, u32 first, u32 n)
+ {
+ 	struct hi5622_cfg80211 *c = s->cfg;
+@@ -1044,7 +1073,15 @@
+ 	p->user_id = (u8)s->user_id;
+ 	p->iftype = (u8)(req && req->wdev ? req->wdev->iftype :
+ 			 NL80211_IFTYPE_STATION);
+-	p->band = c->band;
++	{
++		bool mixed = false;
++
++		p->band = hi5622_scan_batch_band(s, first, n, &mixed);
++		if (mixed)
++			dev_warn(dev,
++				 "cfg80211: scan batch mixes 2.4 GHz and 5 GHz channels; the firmware scan request carries one band - using %s for this batch, split the request\n",
++				 p->band ? "5GHz" : "2.4GHz");
++	}
+ 	p->flags = req ? req->flags : 0;
+ 	p->dwell_ms = hi5622_scan_pick_dwell(dev);
+ 	p->n_ssids = req ? (u32)req->n_ssids : 0;
+@@ -1167,6 +1204,7 @@
+ 	struct device *dev = wiphy_dev(wiphy);
+ 	const struct hi5622_frame_ops *ops;
+ 	u32 i, n, first_len;
++	u8 scan_band;
+ 	int rc;
+ 
+ 	if (!s || !s->initialized)
+@@ -1236,6 +1274,12 @@
+ 	s->batch_n = 0;
+ 	s->request = request;
+ 	first_len = hi5622_scan_batch_len(n, s->batch_param, 0u);
++	{
++		bool mixed = false;
++
++		/* The VAP start band must match the scan request's chip_id. */
++		scan_band = hi5622_scan_batch_band(s, 0u, n, &mixed);
++	}
+ 	mutex_unlock(&s->lock);
+ 	/* The bench-validated VAP base ordering is kept: post the vendor VAP
+ 	 * start order once before the first scan request (mode-1 ladder). */
+@@ -1244,7 +1288,7 @@
+ 
+ 		rc = hi5622_scan_post_vap_start(c->ctx, ops,
+ 						(u8)request->wdev->iftype,
+-						c->band,
++						scan_band,
+ 						(u8)hi5622_vap_start_module);
+ 		/* Stability hardening: never post a scan request against a dead
+ 		 * firmware VAP object (same crash class as the AP path). */
+@@ -1572,7 +1616,7 @@
+ 		if (!base_was_posted && !restart_plain) {
+ 			rc = hi5622_scan_post_vap_add_frame(
+ 				c->ctx, ops, (u8)dev->ieee80211_ptr->iftype,
+-				c->band, (u8)hi5622_vap_start_module,
++				p->band, (u8)hi5622_vap_start_module,
+ 				(u8)p->channel, 1u);
+ 			if (rc) {
+ 				dev_warn(wdev_dev,
+@@ -1655,7 +1699,7 @@
+ 		 * (skipped when a scan or a previous AP start already posted it). */
+ 		rc = hi5622_scan_post_vap_base_once(c->ctx, ops,
+ 						(u8)dev->ieee80211_ptr->iftype,
+-						c->band,
++						p->band,
+ 						(u8)hi5622_vap_start_module);
+ 		if (rc) {
+ 			dev_warn(wdev_dev,
+@@ -1751,7 +1795,7 @@
+ 			 * sequence already ends with its VAP start (skipped). */
+ 			rc = hi5622_scan_post_vap_start_frame(
+ 				c->ctx, ops,
+-				(u8)dev->ieee80211_ptr->iftype, c->band,
++				(u8)dev->ieee80211_ptr->iftype, p->band,
+ 				(u8)hi5622_vap_start_module,
+ 				(u8)p->channel, 5u);
+ 			if (rc) {
+@@ -1915,6 +1959,11 @@
+ 	p.name[sizeof(p.name) - 1] = '\0';
+ 	memcpy(p.mac, vm.addr, sizeof(p.mac));
+ 	p.iftype = (u8)vm.iftype;
++	/* wifi-5ghz-bringup: the interface exists before a channel is selected,
++	 * so the user_add band is the wiphy's legacy band byte; the band of a
++	 * 5 GHz AP is carried by the subsequent vap_add/channel-config messages
++	 * (p->band from the start_ap chandef).  [U] whether the firmware
++	 * requires the two to agree - the fire ladder records it. */
+ 	p.band = c->band;
+ 	p.user_id = (u8)(slot & 0xffu);
+ 	p.vap_id = (u8)(slot & 0xffu);
