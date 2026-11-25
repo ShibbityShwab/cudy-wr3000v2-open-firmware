@@ -1,0 +1,436 @@
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -40,6 +40,7 @@
+ #include "hi5622_vapscan_map.h"
+ #include "hi5622_band5g.h"
+ #include "hi5622_vapmsg5g.h"
++#include "hi5622_beacon5g.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -95,6 +96,27 @@
+ MODULE_PARM_DESC(vap5g,
+ 		 "5GHz AP user/VAP message order: 0=legacy ordering (default, fail closed), 1=vendor order (defer the interface-creation user add and post it after the AP vap_add on a multi-band wiphy); >1 refused");
+ 
++/* lane wifi-5ghz-beacon (task-175), FAIL-CLOSED default 0.  Vendor decode
++ * (2.5.24 and 2.4.15 host modules): the vendor AP start posts its five
++ * frames SYNCHRONOUSLY - the 0x0124 channel helper runs wal_send_cfg_event
++ * and then wal_check_and_release_msg_resp (it waits for the firmware's
++ * module-channel-config response) BEFORE the SSID / AP config / VAP start
++ * frames, and the VAP create and VAP start wait for their responses too.
++ * Our beacon_static ladder posts all frames back-to-back and only waits
++ * for the coalesced H2D announce (the transport drain, not the firmware
++ * worker).  The 0x0124 worker programs the RF channel; for band 1 that is
++ * the 5 GHz RF path, and a VAP start that runs before it lands leaves the
++ * firmware beacon engine without a channel (the 2.4 GHz path tolerates
++ * the race).  0 = legacy (bench-fired vap5g module, no wait);
++ * 1..1000 = bounded wait, after the ap_chan frame on a band-1 AP, until
++ * the firmware module channel context (ctx+0x10, worker body map
++ * channel/band/valid) reports the programmed tuple; a timeout aborts
++ * BEFORE any AP frame (fail closed).  >1000 refused.  One meaning per load. */
++static unsigned int hi5622_ap_chan_wait_ms;
++module_param_named(ap_chan_wait_ms, hi5622_ap_chan_wait_ms, uint, 0444);
++MODULE_PARM_DESC(ap_chan_wait_ms,
++		 "5GHz AP start: 0=legacy no wait (default), 1..1000=bounded wait for the firmware module channel context after ap_chan (timeout aborts before any AP frame), >1000 refused");
++
+ /* scan-complete lane (task-123): the bench measured the firmware returning 6
+  * of the 13 requested per-channel results within the wifi-scan-ap lane's 5 s
+  * bound (~830 ms/channel, ledger 2026-11-26 14:00), so a 13-channel request
+@@ -1397,29 +1419,19 @@
+ 		 "stop_ap policy: 0=host-side only (default, no firmware write); 1=DISABLED (bench crash)");
+ 
+ /* Stale-firmware-VAP guard (hardware-confirmed crash class; bench boots A/D).
+- * READ-ONLY readback of the bench-proven AP-start ladder addresses. */
+-#define HI5622_STAB_MODULE_TABLE_SLOT0_CPU	0x175458u /* BAR0 0x829458 */
+-#define HI5622_STAB_MODULE_TABLE_BASE_CPU	0x17a504u /* BAR0 0x82a504 */
++ * READ-ONLY readback of the bench-proven AP-start ladder addresses.
++ *
++ * lane wifi-5ghz-beacon (task-175) CORRECTION: these are the committed
++ * bench-validated module-table CPU addresses (slot 0 BAR0 0x829458, base
++ * u16 BAR0 0x82a504; BAR0 = CPU + 0x6b8000 per hi5622_contract.h).  The
++ * previous constants (0x175458 / 0x17a504) were those same BAR0 numbers
++ * minus the wrong window base, i.e. +0x4000 / +0x8000 off, so every
++ * E2-era readback ("VAP object readback=ZERO", "channel ctx ... valid=0")
++ * was reading an unrelated word rather than the firmware objects.  See
++ * wifi-5ghz-beacon/TABLES.md T6. */
++#define HI5622_STAB_MODULE_TABLE_SLOT0_CPU	0x171458u /* BAR0 0x829458 */
++#define HI5622_STAB_MODULE_TABLE_BASE_CPU	0x172504u /* BAR0 0x82a504 */
+ #define HI5622_STAB_VAP_PTR_OFF			0x190u
+-/* wifi-beacon-static lane (task-140): the module channel-config worker
+- * (CA 0x841B8) stores its 4-byte body at module_ctx +0x10..+0x13:
+- *   byte +0x10 = channel, +0x11 = band, +0x12 = body[1] (vendor mac_vap+2),
+- *   +0x13 = channel-valid flag.  Read back through the same bench-proven
+- * module-table slot-0 recipe - READ-ONLY, evidence for the ladder. */
+-#define HI5622_BEACON_MCTX_OFF		0x10u
+-
+-static u32 hi5622_scan_module_ctx_ca(struct hi5622_pci *ctx)
+-{
+-	u32 table, base;
+-
+-	if (!ctx || !ctx->windows_programmed)
+-		return 0;
+-	table = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
+-	if (!table)
+-		return 0;
+-	base = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_BASE_CPU);
+-	return table + base;
+-}
+ 
+ static bool hi5622_scan_vap_object_valid(struct hi5622_pci *ctx)
+ {
+@@ -1431,7 +1443,9 @@
+ 	if (!table)
+ 		return false;
+ 	base = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_BASE_CPU);
+-	ctx_ca = table + base;
++	ctx_ca = hi5622_beacon5g_mctx_ca(table, base);
++	if (!ctx_ca)
++		return false;
+ 	vap = hi5622_fw_ram_read(ctx, ctx_ca + HI5622_STAB_VAP_PTR_OFF);
+ 	return vap != 0;
+ }
+@@ -1455,6 +1469,48 @@
+ 	}
+ }
+ 
++/* lane wifi-5ghz-beacon (task-175): READ-ONLY 5 GHz activation gate pack.\n * The firmware AP-start workers gate on objects the host cannot create:\n *   - the VAP-add worker binds module+0x4B0 (per-link context) and
++ *     +0x4B8 (band object) from [A4FC8(0, band)+0x1A00] and requires that
++ *     per-band link/bank publish word to be non-zero;
++ *   - the 0x0124 channel worker bails on module+0x4B0 == 0 before it stores
++ *     its body at ctx+0x10;
++ *   - the VAP-start worker requires module+0x4B8 != 0.
++ * The band-0 publish word (CA 0x15e408) is published by the boot task; the
++ * band-1 word (CA 0x15ff70) is the 5 GHz per-link/bank context.  These
++ * reads decide whether the firmware band-1 path exists at all - they are
++ * log-only (non-gating) and change no wire byte. */
++static void hi5622_scan_beacon5g_gates(struct hi5622_pci *ctx,
++				       struct device *dev)
++{
++	u32 slot0, base, mctx, chrd, vap, link, bandobj, pub0, pub1;
++
++	if (!ctx || !ctx->windows_programmed || !dev)
++		return;
++	slot0 = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
++	base = hi5622_fw_ram_read(ctx, HI5622_STAB_MODULE_TABLE_BASE_CPU);
++	mctx = hi5622_beacon5g_mctx_ca(slot0, base);
++	if (!mctx) {
++		dev_info(dev,
++			 "cfg80211: start_ap beacon_static module ctx: slot0=0x%08x base=0x%08x -> ctx UNRESOLVED (no dereference)\n",
++			 slot0, base);
++		return;
++	}
++	chrd = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_CHAN_OFF);
++	vap = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_VAP_OFF);
++	link = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_LINK_OFF);
++	bandobj = hi5622_fw_ram_read(ctx, mctx + HI5622_BEACON5G_MCTX_BAND_OBJ_OFF);
++	dev_info(dev,
++		 "cfg80211: start_ap beacon_static module ctx readback: slot0=0x%08x base=0x%08x ctx=0x%08x chan=0x%08x (channel=%u band=%u field=%u valid=%u) vap=0x%08x perlink=0x%08x bandobject=0x%08x\n",
++		 slot0, base, mctx, chrd, chrd & 0xffu, (chrd >> 8) & 0xffu,
++		 (chrd >> 16) & 0xffu, (chrd >> 24) & 0xffu, vap, link, bandobj);
++	pub0 = hi5622_fw_ram_read(ctx, HI5622_BEACON5G_BAND0_PUBLISH_CPU);
++	pub1 = hi5622_fw_ram_read(ctx, HI5622_BEACON5G_BAND1_PUBLISH_CPU);
++	dev_info(dev,
++		 "cfg80211: start_ap beacon_static band publish words: band0=0x%08x (live bank0 0x%08x) band1=0x%08x (live bank1 0x%08x) - band1==0 means the firmware band-1 link/bank context was never published and no host frame can make 5GHz beacons\n",
++		 pub0, HI5622_BEACON5G_BANK0_CTX_CPU, pub1,
++		 HI5622_BEACON5G_BANK1_CTX_CPU);
++}
++
+ static int hi5622_scan_fill_ap_start(struct hi5622_scan *s,
+ 				     const struct cfg80211_ap_settings *set,
+ 				     struct hi5622_ap_start_params *p)
+@@ -1759,14 +1815,66 @@
+ 			 "cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config\n",
+ 			 posted, plan_n, len, p->band, p->channel);
+ 		{
+-			u32 mctx = hi5622_scan_module_ctx_ca(c->ctx);
+-			u32 chrd = mctx ? hi5622_fw_ram_read(c->ctx,
+-						     mctx + HI5622_BEACON_MCTX_OFF) : 0xffffffffu;
++			/* lane wifi-5ghz-beacon (task-175): vendor-synchronous channel
++			 * activation.  The vendor waits for the firmware's 0x0124
++			 * channel-config response before the AP frames; our ladder only
++			 * drains the H2D announce.  Fail closed on an invalid parameter
++			 * and on a wait timeout (no AP frame is sent against an
++			 * unprogrammed 5 GHz RF path). */
++			struct hi5622_beacon5g_plan b5;
++			int prc = hi5622_beacon5g_plan(
++				hi5622_ap_chan_wait_ms, hi5622_beacon_static, p->band,
++				hi5622_fw_ram_read(c->ctx,
++					HI5622_STAB_MODULE_TABLE_SLOT0_CPU),
++				hi5622_fw_ram_read(c->ctx,
++					HI5622_STAB_MODULE_TABLE_BASE_CPU), &b5);
+ 
+-			dev_info(wdev_dev,
+-				 "cfg80211: start_ap beacon_static channel ctx readback: module_ctx+0x10 u32=0x%08x (channel=%u band=%u field=%u valid=%u)\n",
+-				 chrd, chrd & 0xffu, (chrd >> 8) & 0xffu,
+-				 (chrd >> 16) & 0xffu, (chrd >> 24) & 0xffu);
++			if (prc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static REFUSED - ap_chan_wait_ms=%u is not a valid channel-activation parameter (%d); no AP frame sent\n",
++					 hi5622_ap_chan_wait_ms, prc);
++				rc = prc;
++				goto out;
++			}
++			if (b5.wait_ms) {
++				u32 waited = 0, chrd = 0;
++				bool ready = false;
++
++				if (!b5.mctx) {
++					dev_warn(wdev_dev,
++						 "cfg80211: 5GHz channel activation: module table unresolved - sleeping %u ms blind (readback unavailable), continuing\n",
++						 b5.wait_ms);
++					msleep(b5.wait_ms);
++				} else {
++					dev_info(wdev_dev,
++						 "cfg80211: 5GHz channel activation: waiting up to %u ms for the firmware module channel context (ctx 0x%08x, channel=%u band=%u)\n",
++						 b5.wait_ms, b5.mctx,
++						 (unsigned)p->channel, (unsigned)p->band);
++					while (waited < b5.wait_ms) {
++						chrd = hi5622_fw_ram_read(c->ctx,
++							 b5.mctx + HI5622_BEACON5G_MCTX_CHAN_OFF);
++						ready = hi5622_beacon5g_chan_ctx_ready(chrd,
++								 p->band, p->channel);
++						if (ready)
++							break;
++						msleep(HI5622_BEACON5G_WAIT_POLL_MS);
++						waited += HI5622_BEACON5G_WAIT_POLL_MS;
++					}
++					if (!ready) {
++						dev_warn(wdev_dev,
++							 "cfg80211: start_ap beacon_static REFUSED - the firmware module channel context did not report channel=%u band=%u valid after %u ms (ctx 0x%08x word=0x%08x); the 5GHz channel/RF was not programmed - no AP frame sent, power-cycle\n",
++							 (unsigned)p->channel,
++							 (unsigned)p->band, waited,
++							 b5.mctx, chrd);
++						rc = -EIO;
++						goto out;
++					}
++					dev_info(wdev_dev,
++						 "cfg80211: 5GHz channel activation: firmware channel context programmed after %u ms (word=0x%08x)\n",
++						 waited, chrd);
++				}
++			}
++			hi5622_scan_beacon5g_gates(c->ctx, wdev_dev);
+ 		}
+ 	} else {
+ 		/* v7 base: post the vendor mode-1 VAP base once per module load
+--- /dev/null
++++ b/hi5622_beacon5g.h
+@@ -0,0 +1,148 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_beacon5g.h - fail-closed 5 GHz AP-start channel-activation planner
++ * (Hi5622V100 clean-room host, Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-5ghz-beacon, shared task task-175,
++ * 2026-11-25).  No vendor source, object code, firmware byte, calibration
++ * value or secret is reproduced here.  The derivation is in ../REPORT.md;
++ * the evidence tables are ../TABLES.md.
++ *
++ * WHY THIS FILE EXISTS
++ * --------------------
++ * The 5 GHz AP reaches AP-ENABLED with the full vendor message order and a
++ * golden page, but its beacons never reach the air, while the 2.4 GHz AP with
++ * the same driver code beacons.  The vendor host module decode (2.5.24 and
++ * 2.4.15 builds, ../TABLES.md T1-T4) shows:
++ *
++ *  - the vendor AP start is five frames and no more: 0x0124 channel config,
++ *    0x0005 SSID, 0x006D auth, 0x0127 AP config, 0x0065 VAP start.  There is
++ *    no per-band host activation message and no band byte in the set-SSID
++ *    call (its second argument is the VAP index, not the band);
++ *  - the only 0x0124 sender is hmac_config_set_channel, and the only
++ *    hmac_band_set_channel/_and_bandwith callers are that builder (AP path)
++ *    and hmac_config_set_freq (STA join sync, cmd 0x0052).  Those band-struct
++ *    writes (band+0xd28 type, +0xd29 channel, +0x10d2 bandwidth) are HOST
++ *    bookkeeping - they put no message on the wire;
++ *  - the vendor's 0x0124 channel config is SYNCHRONOUS: the helper calls
++ *    wal_send_cfg_event and then wal_check_and_release_msg_resp, i.e. it
++ *    waits for the firmware's channel-config response before the SSID/AP
++ *    config/VAP start frames are posted.  Its AP VAP create and VAP start
++ *    likewise wait for the firmware response.  Our ladder posts all frames
++ *    back-to-back and only waits for the coalesced H2D announce consumption,
++ *    which is the transport drain, not the firmware worker's completion.
++ *
++ * The firmware's channel worker (CA 0x841B8) is what programs the RF channel;
++ * it validates (band, channel), stores the 4-byte body at module_ctx+0x10
++ * (channel, band, body[1], valid=1) and then runs the PHY channel program.
++ * For band 1 that programming is the 5 GHz RF path.  Our five frames are
++ * posted within microseconds, so on the 2-band profile the AP config/VAP
++ * start can run before the 5 GHz channel/RF programming has finished; the
++ * 2.4 GHz path tolerates it because its channel/RF state is fast/default.
++ *
++ * This file holds the decision as pure host-testable code:
++ *
++ *   ap_chan_wait_ms=0 (default, legacy, fail closed)  = no wait, behaviour of
++ *   the bench-fired vap5g module is unchanged;
++ *   1..1000 = on a band-1 AP (beacon_static=1 only) wait, after the ap_chan
++ *   frame, until the firmware module channel context at module_ctx+0x10
++ *   reports the programmed (channel, band, valid) tuple, bounded by the
++ *   parameter; a timeout aborts the start BEFORE any AP frame (fail closed,
++ *   never shotguns the AP frames at an unprogrammed band).  Every other value
++ *   or band is refused (-EINVAL), never guessed.
++ *
++ * The readback constants are also corrected here (../TABLES.md T6): the
++ * previous tree constants for the module table were derived with the wrong
++ * BAR0 window base and addressed 0x171458+0x4000 / 0x172504+0x8000, so the
++ * E2 fire's "VAP object readback=ZERO" and "channel ctx readback garbage"
++ * are NOT evidence about the firmware objects.  BAR0 = CPU + 0x6b8000
++ * (hi5622_contract.h HI5622_FW_RAM_BAR_BASE): module-table slot 0 CPU
++ * 0x171458 = BAR0 0x829458 and the base u16 CPU 0x172504 = BAR0 0x82a504,
++ * exactly the committed bench-validated recipe.
++ *
++ * Pure C99: the same code compiles in the kernel module and in the host
++ * selftest (src/beacon5g_selftest.c).
++ */
++#ifndef HI5622_BEACON5G_H
++#define HI5622_BEACON5G_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#else
++#include <errno.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef int32_t  s32;
++typedef uint32_t u32;
++#endif
++#endif
++
++/* Bounded wait: 0 = legacy (no wait), >0 = poll the firmware module channel
++ * context after the ap_chan frame.  Anything above the maximum is refused. */
++#define HI5622_BEACON5G_WAIT_MAX_MS		1000u
++#define HI5622_BEACON5G_WAIT_POLL_MS		5u
++
++/* Firmware RAM convention (project-wide [V*]): host BAR0 of a CPU-RAM object
++ * = CPU + 0x6b8000 (region 5 base; hi5622_contract.h). */
++#define HI5622_BEACON5G_BAR0_BASE		0x6b8000u
++
++/* Committed, bench-validated module-table recipe [V*] (CPU addresses; the
++ * BAR0 forms 0x829458 / 0x82a504 are the ones the fire recipes read).
++ * ctx0 = u32(slot0) + u16(base). */
++#define HI5622_BEACON5G_MCTX_SLOT0_CPU		0x171458u	/* BAR0 0x829458 */
++#define HI5622_BEACON5G_MCTX_BASE_CPU		0x172504u	/* BAR0 0x82a504 */
++
++/* Firmware module context object fields [V] (committed lanes; see TABLES.md
++ * T7).  The channel config worker stores its 4-byte body at ctx+0x10. */
++#define HI5622_BEACON5G_MCTX_CHAN_OFF		0x010u
++#define HI5622_BEACON5G_MCTX_VAP_OFF		0x190u
++#define HI5622_BEACON5G_MCTX_LINK_OFF		0x4b0u
++#define HI5622_BEACON5G_MCTX_BAND_OBJ_OFF	0x4b8u
++
++/* Per-band link/bank publish words [V] from the committed boot-gate decode:
++ * band 0 object CA 0x15ca08 + 0x1a00 = 0x15e408 (BAR0 0x816408),
++ * band 1 object CA 0x15e570 + 0x1a00 = 0x15ff70 (BAR0 0x817f70).  The live
++ * values are the per-bank contexts (bank0 0x00174bf0 / bank1 0x00175a18). */
++#define HI5622_BEACON5G_BAND0_PUBLISH_CPU	0x15e408u	/* BAR0 0x816408 */
++#define HI5622_BEACON5G_BAND1_PUBLISH_CPU	0x15ff70u	/* BAR0 0x817f70 */
++#define HI5622_BEACON5G_BANK0_CTX_CPU		0x174bf0u
++#define HI5622_BEACON5G_BANK1_CTX_CPU		0x175a18u
++
++/* What one band-1 AP start must do after the ap_chan frame. */
++struct hi5622_beacon5g_plan {
++	unsigned int	wait_ms;	/* 0 = legacy (no wait) */
++	bool		readback;	/* log the read-only gate pack */
++	u32		mctx;		/* ctx0 CA, 0 = unresolved */
++};
++
++/* Fill *out with the channel-activation decision.
++ *  - 0 on success; legacy (wait_ms = 0, mctx = 0) for a non-band-1 AP, for
++ *    beacon_static != 1 and for wait_param == 0;
++ *  - -EINVAL for NULL out, wait_param > HI5622_BEACON5G_WAIT_MAX_MS or
++ *    band > 1 (fail closed, never guess).
++ * The caller passes the current module-table words it read from firmware RAM
++ * (0/0 when the chip is not yet readable). */
++int hi5622_beacon5g_plan(unsigned int wait_param, unsigned int beacon_static,
++			 unsigned int band, u32 slot0, u32 base,
++			 struct hi5622_beacon5g_plan *out);
++
++/* ctx0 = slot0 + u16(base); 0 when slot0 is 0 or the sum leaves the firmware
++ * RAM window [0x100000, 0x217ffff] (fail closed: the caller must not
++ * dereference a guessed context). */
++u32 hi5622_beacon5g_mctx_ca(u32 slot0, u32 base);
++
++/* True when the module channel config worker's 4-byte body at ctx+0x10
++ * reports (channel, band, valid).  The worker stores body[2] (channel) at
++ * byte 0, body[0] (band) at byte 1, body[1] at byte 2 and 1 at byte 3 after
++ * its band/channel validation [V] - so this is the firmware's own
++ * "channel programmed" flag, not a timing guess. */
++bool hi5622_beacon5g_chan_ctx_ready(u32 word, unsigned int band,
++				    unsigned int channel);
++
++#endif /* HI5622_BEACON5G_H */
+--- /dev/null
++++ b/hi5622_beacon5g.c
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_beacon5g.c - fail-closed 5 GHz AP-start channel-activation planner
++ * (lane wifi-5ghz-beacon, shared task task-175).  Pure C99; see the header
++ * for the derivation and ../REPORT.md for the vendor decode.
++ */
++#include "hi5622_beacon5g.h"
++
++/* Firmware RAM window bounds (region 5; project convention, hi5622_contract.h:
++ * CPU 0x00100000..0x0217ffff).  A ctx outside it is a bad read, not a
++ * context: return 0 so the caller fails closed instead of dereferencing. */
++#define HI5622_BEACON5G_RAM_LO		0x00100000u
++#define HI5622_BEACON5G_RAM_HI		0x0217ffffu
++
++u32 hi5622_beacon5g_mctx_ca(u32 slot0, u32 base)
++{
++	u32 ca;
++
++	if (!slot0)
++		return 0;
++	ca = slot0 + (u32)(u16)base;
++	if (ca < HI5622_BEACON5G_RAM_LO || ca > HI5622_BEACON5G_RAM_HI)
++		return 0;
++	return ca;
++}
++
++bool hi5622_beacon5g_chan_ctx_ready(u32 word, unsigned int band,
++				    unsigned int channel)
++{
++	if (band > 1u || channel == 0u || channel > 0xffffu)
++		return false;
++	/* Worker body map [V]: +0x10 channel, +0x11 band, +0x13 valid. */
++	return (unsigned int)(word & 0xffu) == channel &&
++	       (unsigned int)((word >> 8) & 0xffu) == band &&
++	       ((word >> 24) & 0xffu) == 1u;
++}
++
++int hi5622_beacon5g_plan(unsigned int wait_param, unsigned int beacon_static,
++			 unsigned int band, u32 slot0, u32 base,
++			 struct hi5622_beacon5g_plan *out)
++{
++	if (!out || band > 1u || wait_param > HI5622_BEACON5G_WAIT_MAX_MS)
++		return -EINVAL;
++	out->wait_ms = 0;
++	out->readback = (beacon_static == 1u);
++	out->mctx = 0;
++	if (beacon_static != 1u)
++		return 0;
++	out->mctx = hi5622_beacon5g_mctx_ca(slot0, base);
++	/* The legacy 2.4 GHz path is bench-validated byte-for-byte; the wait is
++	 * only meaningful for the band-1 AP (the 5 GHz RF path).  wait 0 = the
++	 * bench-fired vap5g module behaviour, unchanged. */
++	if (band == 1u)
++		out->wait_ms = wait_param;
++	return 0;
++}
+--- a/Kbuild
++++ b/Kbuild
+@@ -33,7 +33,8 @@
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+-		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_key_frames.o hi5622_keys.o \
++		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
++		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \

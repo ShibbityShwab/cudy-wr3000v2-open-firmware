@@ -1,0 +1,4 @@
+== build selftest (cc)
+== run selftest
+he_caps_selftest: 109 checks, 0 failures
+PASS

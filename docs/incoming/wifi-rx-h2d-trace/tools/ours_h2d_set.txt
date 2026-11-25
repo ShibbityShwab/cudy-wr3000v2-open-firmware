@@ -1,0 +1,18 @@
+# ours_h2d_set.txt - our driver's committed H2D emission set (the "ours" side of the diff).
+# lane rx-h2d-trace (task-176); sources: wifi-h2d-send, wifi-ctx-create, wifi-5ghz-vap-msg,
+# wifi-rx-init-msg (all committed). Format: <group> <kind> <value> <expected-total|0> <name>
+#   group: g0 = chip group 0, g1 = band-core group (hcc_msg_tx_to_core), g2 = WAL group-2 family
+#   kind : key = g0 id1 config key, id = g0 direct message id, cmd = WAL/other command id
+#   expected-total: 0 = length is dynamic/unknown for this family
+g0 key 0x0064 0 ctx-create-vap-add
+g0 key 0x00d8 48 txq-mib-config
+g0 key 0x0320 32 txq-address-sync
+g0 key 0x0065 40 vap-start
+g0 id 0x0006 0 mgmt-tx
+g0 id 0x0007 180 user-add
+g0 id 0x0008 180 user-add-notify
+g2 cmd 0x0124 0 ap-start-channel
+g2 cmd 0x0005 0 ap-start-ssid
+g2 cmd 0x006d 0 ap-start-auth
+g2 cmd 0x0127 0 ap-start-config
+g2 cmd 0x0065 0 ap-start-vap

@@ -1,0 +1,9 @@
+base artifact pinned: 13e7bf4c44772011e88903136c0c051d06d9ae5eab3c5e24df1ebb20f2cc1abf
+base tree staged: 87 files
+patch + data contract: OK
+
+artifact : /tmp/wifi-he-caps-artifact/hi5622_wifi.ko
+size     : 356564 B
+sha256   : 475975d32c9e56e2de1974d28ea983f1e0e7e36c4a0465ae4eeb7ea19755cdea
+params   : 59 (58 vap5g + he_caps, default 0)
+notice   : he_caps=1 advertises the vendor-decoded HE caps (AP iftype)

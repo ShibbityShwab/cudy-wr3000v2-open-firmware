@@ -1,0 +1,5 @@
+# pinned base module (built by ../wifi-5ghz-vap-msg/tools/build-vapmsg5g-ready.sh)
+artifact: /tmp/wifi-vapmsg5g-artifact/hi5622_wifi.ko
+size    : 353652 B
+sha256  : 13e7bf4c44772011e88903136c0c051d06d9ae5eab3c5e24df1ebb20f2cc1abf
+params  : 58 (vap5g default 0)

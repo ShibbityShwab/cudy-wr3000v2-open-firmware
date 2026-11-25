@@ -1,0 +1,169 @@
+diff -ruN a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+--- a/hi5622_cfg80211.c	2026-11-25 17:57:35.760432862 +0700
++++ b/hi5622_cfg80211.c	2026-11-25 17:59:05.830806513 +0700
+@@ -49,6 +49,7 @@
+ #include "hi5622_sta_ops.h"
+ #include "hi5622_data_tx.h"
+ #include "hi5622_band5g.h"
++#include "hi5622_he_caps.h"
+ 
+ /* ---------------------------------------------------------------------
+  * Module parameters (host-only bench experiments; defaults are the safe
+@@ -102,6 +103,19 @@
+ MODULE_PARM_DESC(band5g,
+ 		 "5GHz band enable: 0=off (default, bench-validated 2.4 GHz per-endpoint behaviour; 5 GHz AP start fail-closed), 1=one-radio/two-band profile: the primary endpoint's wiphy carries the vendor 29-ch/HT 0x62/VHT 0x400064 5 GHz band IN ADDITION to 2.4 GHz and the secondary host view gets no wiphy; 5 GHz AP start and the H1 5 GHz band config are then allowed");
+ 
++/* wifi-ax-he-caps lane (task-177), FAIL-CLOSED default 0.  The shipped
++ * hostapd refuses an AP with ieee80211ax=1 ("Driver does not support HE")
++ * unless the wiphy advertises HE capabilities for the AP iftype.  The vendor
++ * driver advertises exactly one sparse HE iftype_data entry per band (AP
++ * only; documented in docs/incoming/wifi-ax-he-caps/TABLES.md T3).  0 = off:
++ * no iftype_data at all, byte-identical behaviour to the bench-validated
++ * module; 1 = advertise the vendor-decoded HE caps on the installed bands;
++ * anything else is refused at init (-EINVAL) - never guessed. */
++unsigned int hi5622_he_caps;
++module_param_named(he_caps, hi5622_he_caps, uint, 0644);
++MODULE_PARM_DESC(he_caps,
++		 "HE (802.11ax) wiphy advertisement: 0=off (default, fail closed, no HE iftype_data), 1=vendor-decoded HE caps for the AP iftype on the installed bands (2.4GHz 40MHz / 5GHz 40+80+160MHz, 2SS MCS0-9, no PPE, no 6GHz); >1 refused at init");
++
+ /* Documentation-purpose locally-administered address (02:...) - never a
+  * per-unit MAC; each VAP derives its own last byte from the slot. */
+ static const u8 hi5622_cfg11_perm_addr[ETH_ALEN] = {
+@@ -381,6 +395,60 @@
+ 	return 0;
+ }
+ 
++/* ---------------------------------------------------------------------
++ * HE (802.11ax) wiphy advertisement - wifi-ax-he-caps lane (task-177)
++ *
++ * The capability blob comes from the portable contract (hi5622_he_caps.c),
++ * the same code the host selftest compiles: one source for the module and
++ * the tests.  Vendor parity: AP iftype only, sparse caps, no PPE thresholds
++ * and no 6 GHz capability (the Hi5622V100 has no 6 GHz radio; every EHT/UHR
++ * field of the 6.18 struct stays zero because Wi-Fi 7 is not on this
++ * silicon).  Fail-closed: a bad blob or a failed allocation refuses the band
++ * setup, so the wiphy never carries a half-advertised HE state.
++ * -------------------------------------------------------------------*/
++static int hi5622_cfg11_he_apply(struct hi5622_cfg80211 *c,
++				 struct ieee80211_supported_band *sband,
++				 enum nl80211_band band_idx)
++{
++	struct ieee80211_sband_iftype_data *iftd;
++	struct hi5622_he_caps caps;
++	u8 band = (band_idx == NL80211_BAND_5GHZ) ?
++		  HI5622_BAND_5GHZ : HI5622_BAND_2GHZ;
++	int rc;
++
++	rc = hi5622_he_caps_fill(band, &caps);
++	if (rc)
++		return rc;
++	if (!caps.has_he || !caps.types_mask)
++		return -EINVAL;
++	iftd = kzalloc(sizeof(*iftd), GFP_KERNEL);
++	if (!iftd)
++		return -ENOMEM;
++	iftd->types_mask = caps.types_mask;
++	iftd->he_cap.has_he = true;
++	memcpy(iftd->he_cap.he_cap_elem.mac_cap_info, caps.mac_cap,
++	       sizeof(caps.mac_cap));
++	memcpy(iftd->he_cap.he_cap_elem.phy_cap_info, caps.phy_cap,
++	       sizeof(caps.phy_cap));
++	iftd->he_cap.he_mcs_nss_supp.rx_mcs_80 = cpu_to_le16(caps.he_mcs[0]);
++	iftd->he_cap.he_mcs_nss_supp.tx_mcs_80 = cpu_to_le16(caps.he_mcs[1]);
++	iftd->he_cap.he_mcs_nss_supp.rx_mcs_160 = cpu_to_le16(caps.he_mcs[2]);
++	iftd->he_cap.he_mcs_nss_supp.tx_mcs_160 = cpu_to_le16(caps.he_mcs[3]);
++	iftd->he_cap.he_mcs_nss_supp.rx_mcs_80p80 = cpu_to_le16(caps.he_mcs[4]);
++	iftd->he_cap.he_mcs_nss_supp.tx_mcs_80p80 = cpu_to_le16(caps.he_mcs[5]);
++	memcpy(iftd->he_cap.ppe_thres, caps.ppe_thres, sizeof(caps.ppe_thres));
++	iftd->he_6ghz_capa.capa = cpu_to_le16(caps.he_6ghz_capa);
++	_ieee80211_set_sband_iftype_data(sband, iftd, 1);
++	dev_info(&c->ctx->pdev->dev,
++		 "cfg80211: HE (802.11ax) caps advertised on %s (AP iftype): MAC %02x %02x %02x %02x %02x %02x, PHY0 0x%02x, MCS rx80/tx80 0x%04x/0x%04x rx160/tx160 0x%04x/0x%04x (2SS MCS0-9, no PPE, no 6GHz) - hostapd ieee80211ax=1 gate unlocked\n",
++		 hi5622_he_caps_band_name(band),
++		 caps.mac_cap[0], caps.mac_cap[1], caps.mac_cap[2],
++		 caps.mac_cap[3], caps.mac_cap[4], caps.mac_cap[5],
++		 caps.phy_cap[0],
++		 caps.he_mcs[0], caps.he_mcs[1], caps.he_mcs[2], caps.he_mcs[3]);
++	return 0;
++}
++
+ /* Copy the static capability templates into the wiphy (cfg80211's
+  * regulatory core modifies the channel arrays, so two wiphys must never
+  * share them). */
+@@ -456,6 +524,16 @@
+ 		sband->channels = vchans;
+ 		sband->n_channels = (int)vn;
+ 	}
++	/* wifi-ax-he-caps lane (task-177): opt-in HE wiphy advertisement. */
++	if (hi5622_he_caps) {
++		ret = hi5622_cfg11_he_apply(c, sband, band_idx);
++		if (ret) {
++			kfree(sband->channels);
++			kfree(sband->bitrates);
++			kfree(sband);
++			return ret;
++		}
++	}
+ 	c->wiphy->bands[band_idx] = sband;
+ 	if (hi5622_band5g && band_idx == NL80211_BAND_5GHZ)
+ 		dev_info(&c->ctx->pdev->dev,
+@@ -613,6 +691,16 @@
+ 			 hi5622_ht_mode, HI5622_STA_HT_MODE_MAX);
+ 		hi5622_ht_mode = HI5622_STA_HT_MODE_BASELINE;
+ 	}
++	/* wifi-ax-he-caps lane (task-177): out-of-contract HE mode is refused
++	 * here, before any wiphy exists - never guessed.  The fire recipe gates
++	 * on the parameter readback first, so this only fires on a typo. */
++	ret = hi5622_he_caps_policy(hi5622_he_caps);
++	if (ret < 0) {
++		dev_err(&ctx->pdev->dev,
++			"cfg80211: he_caps=%u invalid (0=off, 1=vendor HE caps); refusing the wiphy - no probe, no AP\n",
++			hi5622_he_caps);
++		return ret;
++	}
+ 	/* wifi-5ghz-bringup lane (task-154): the wiphy band plan.  band5g=0
+ 	 * keeps the bench-validated per-endpoint single-band model (band_force /
+ 	 * PCI domain auto).  band5g=1 selects the one-radio/two-band model: the
+@@ -791,6 +879,7 @@
+ 	if (c->wiphy->bands[NL80211_BAND_2GHZ]) {
+ 		struct ieee80211_supported_band *s = c->wiphy->bands[NL80211_BAND_2GHZ];
+ 
++		kfree((void __force *)s->iftype_data);
+ 		kfree(s->channels);
+ 		kfree(s->bitrates);
+ 		kfree(s);
+@@ -799,6 +888,7 @@
+ 	if (c->wiphy->bands[NL80211_BAND_5GHZ]) {
+ 		struct ieee80211_supported_band *s = c->wiphy->bands[NL80211_BAND_5GHZ];
+ 
++		kfree((void __force *)s->iftype_data);
+ 		kfree(s->channels);
+ 		kfree(s->bitrates);
+ 		kfree(s);
+@@ -858,10 +948,11 @@
+ 			n += m;
+ 	}
+ 	ret = sysfs_emit(buf,
+-			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u\n%s",
++			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u he_caps=%u\n%s",
+ 			 hi5622_cfg11_auto, hi5622_band_force,
+ 			 hi5622_cfg11_band_name(c->band),
+-			 hi5622_cfg11_wiphy_bands(c), hi5622_band5g, tmp);
++			 hi5622_cfg11_wiphy_bands(c), hi5622_band5g,
++			 hi5622_he_caps, tmp);
+ 	kfree(tmp);
+ 	return ret;
+ }
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-25 17:57:35.760454994 +0700
++++ b/Kbuild	2026-11-25 17:59:05.830838754 +0700
+@@ -33,7 +33,8 @@
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+-		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_key_frames.o hi5622_keys.o \
++		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_he_caps.o \
++		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \
