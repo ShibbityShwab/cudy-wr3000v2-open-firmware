@@ -42,7 +42,9 @@ the Lead; **[I]** inference; **[U]** needs a device read.
    +0x14 u32 channel bitmap (2.4G uses bits 0..13, 5G bits 0..28). **[V]**
 3. **Three writers of the pool exist:** (a) the **boot init block** at
    CA 0x485FA..0x4861E (builds the default 2-record pool, then calls the
-   populator at CA 0x48620); (b) the **H2D key 0x00F7 worker CA 0x45A30**
+   populator at CA 0x48620; it sits inside a larger pre-HCC init function body
+   with no direct bl caller, so the entry is [I]); (b) the **H2D key 0x00F7
+   worker CA 0x45A30**
    (installs a **host-supplied descriptor blob** into the pool via a
    memcpy_s-like helper, then calls the populator at CA 0x45A76); (c) the
    **H2D key 0x00DA worker CA 0x43460** (edits a record's +0x0C/+0x0E channel
@@ -146,7 +148,7 @@ So the populator is a pure "channel bitmap -> channel map" expansion. It runs
 
 | caller | trigger | what it installs | call site |
 | --- | --- | --- | --- |
-| CA 0x48520 block | firmware boot init (unconditional) | the 2-record default pool | CA 0x48620 `bl 0x1017F8` |
+| CA 0x48520 block | firmware pre-HCC init body (unconditional at boot [I]) | the 2-record default pool | CA 0x48620 `bl 0x1017F8` |
 | CA 0x45A30 | **H2D key 0x00F7** (H2D table row 92) | host descriptor blob -> pool | CA 0x45A76 `bl 0x1017F8` |
 | CA 0x43460 | H2D key 0x00DA (row 22) | edits record +0x0C/+0x0E only | does not call the populator |
 

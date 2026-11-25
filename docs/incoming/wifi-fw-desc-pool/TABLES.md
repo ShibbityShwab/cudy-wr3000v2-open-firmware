@@ -45,7 +45,7 @@ Boot-default 5G slot = 1 -> word 0x00000201 -> byte2 = 0x02 -> valid bit **0**.
 | band-0 map | CA 0x117B48 | 14 rows {channel, slot, 0, 0}; 14 bitmap bits |
 | band-1 map | CA 0x117AD4 | 29 rows {channel, slot, 0, 0}; 29 bitmap bits |
 | pool base literal | CA 0x10188C = 0x001ADB80; +0x118 -> 0x1ADC98 | the header/pool split |
-| boot builder | CA 0x485FA..0x4861E, `bl 0x1017F8` at CA 0x48620 | writes count + rec0/rec1 defaults |
+| boot builder | CA 0x485FA..0x4861E, `bl 0x1017F8` at CA 0x48620 | writes count + rec0/rec1 defaults; sits inside a larger pre-HCC init function body with no direct bl caller [I] |
 | **H2D 0x00F7** | table-A row 92 -> worker **CA 0x45A30**; populator call CA 0x45A76 | host descriptor download |
 | **H2D 0x00DA** | table-A row 22 -> worker **CA 0x43460** | edits a record's +0x0C/+0x0E only |
 | pool-state gate | CA 0x1037BC(pool, body) | nonzero -> install path [I] |
