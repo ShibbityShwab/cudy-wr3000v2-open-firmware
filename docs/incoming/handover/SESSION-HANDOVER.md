@@ -111,7 +111,8 @@ Build + host-test the v2 mmap sampler and run the retry exactly as
 on the stock root shell: `/usr/bin/omo_h2dsampler -p -w 0x583f2000` must print
 `access=mmap`, a non-zero SR0 base, `depth=0x1f`, `ring=YES`, and
 `pread_control=FAIL errno=14` (the measured v1 defect, expected). Capture args
-`-w 0x583f2000 -W 180 -t 240`; decode with `tools/decode_h2d.py`; do not rerun the v1 binary.
+`-w 0x583f2000 -W 180 -t 240`; decode with the lane's `decode_h2d.py`
+(`opensource/docs/incoming/wifi-rx-h2d-trace/tools/decode_h2d.py`); do not rerun the v1 binary.
 Access rules: BENCH-FACTS section 7.
 
 ### E. Close-out rules (carried from AGENTS/BENCH-FACTS)
