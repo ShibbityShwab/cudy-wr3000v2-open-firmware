@@ -1,10 +1,11 @@
-# wifi-rc-impl-2 base pin - the IMAGE #3 merged driver source tree
-# (wifi-image-3/build-evidence/module-build/source-chain.txt: F2 chain + rx-watermark + BA + HE)
-# staged from /tmp/wifi-image-3-module, scratch local evidence; source files pinned below
-files_total 153
-c_h_files 94
-module_artifact_activity_sha256 545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99
-module_artifact_installed_sha256 a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed
+# wifi-rc-impl-2 base pin - the IMAGE #3 merged driver source tree (sources only)
+# provenance: ../wifi-image-3/build-evidence/module-build/source-chain.txt
+# (F2 5 GHz chain + RX-watermark T4 + BA skeleton + HE caps; 64-param module)
+# local scratch tree; the .ko artifacts are never committed
+source_files 97
+c_h_files 93
+source_manifest_sha256 2d87525e1bab6bbf94486244b55fd1396e2ad691645d40c8469d247ffd766c45
+# manifest command: (cd <base tree>; python3 <this lane>/tools/make-patch.py --manifest --base . | sha256sum)
 adb2bf18fbde070dcee250472dac3046014040842cb2dd77abfd277e7e1969fd  h2d_send.c
 c7f59fbc4f04f145a10babb839b39533c5c9f5235dec3822329873ced8c0e632  h2d_send.h
 2226688e52289af0e60cb02bfe41c0bb8c1513fdc13250f7494a4ff59da2d820  h2d_send_logic.c

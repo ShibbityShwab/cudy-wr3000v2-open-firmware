@@ -1,0 +1,2061 @@
+diff -ruN a/h2d_send.c b/h2d_send.c
+--- a/h2d_send.c
++++ b/h2d_send.c
+@@ -117,6 +117,8 @@
+ 	 * actually committed: only a real TXQ frame sets live->txq_submitted. */
+ 	live->txq_submitted = h->h2d_txq_sync_sent > 0u;
+ 	live->ctx_created = h->h2d_ctx_create_sent > 0u;
++	live->ctx_create_type = h->h2d_ctx_create_type;
++	live->ctx_attested = h->h2d_ctx_attest_ok != 0u;
+ 	live->txq_addr_sent = h->h2d_txq_addr_sent > 0u;
+ 	live->phase = core->phase;
+ 	live->frames_sent = h->h2d_frames_sent;
+@@ -176,6 +178,62 @@
+ }
+ 
+ /* ------------------------------------------------------------------ */
++/* RC-2 corrected-C2 attestation (fw-h2d-stall task-181)               */
++/* ------------------------------------------------------------------ */
++/* The ordered ladder's missing precondition: the context-create message
++ * (h2d_ctx_create) allocates the firmware module-4 context's ctx+0x190 buffer,
++ * and the key-0xd8 TXQ worker dereferences it.  The 2026-11-27 RC fire wrote
++ * type 3; a type-3 create does NOT initialise the field, and a TXQ frame then
++ * data-aborts at PC 0x81040 (mask 0x10).  The bench-proven calibration ladder
++ * used TYPE 1 and read back ctx4+0x190 != 0 before the TXQ sync.
++ *
++ * This helper performs ONLY read-only firmware-RAM reads through the existing
++ * BAR0 region-5 window (hi5622_fw_ram_read).  It never writes the device.
++ *
++ * Pinned context addresses (bench-verified; see REPORT.md sec 2):
++ *   module-4 context CA 0x11C458 = boot table 0x119758 + 4 * 0xB40
++ *     (../wifi-irq-unmask/REPORT-PD4.md; ../wifi-bench-tooling read pack
++ *      "ctx190" = BAR0 0x7D45E8, "ctx0" = BAR0 0x7D4458)
++ *   ctx+0x190  = the create-allocated buffer pointer (BAR0 0x7D45E8)
++ *   ctx+0x434  = the TYPE-1 second allocation (BAR0 0x7D488C)
++ *   ctx[0] low byte = the created module id (4).
++ */
++#define H2D_CTX4_CPU		0x11C458u
++#define H2D_CTX_MODULE_ID	4u
++#define H2D_CTX190_OFF		0x190u
++#define H2D_CTX434_OFF		0x434u
++
++int hi5622_h2d_ctx_attest(struct hi5622_pci *ctx, struct h2d_attest *out)
++{
++	struct hi5622_hcc_service *h;
++	u32 ctx0, ctx190, ctx434;
++
++	if (!ctx || !out)
++		return -EINVAL;
++	memset(out, 0, sizeof(*out));
++	h = ctx->hcc;
++	if (!h)
++		return -ENODEV;
++	ctx0 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU);
++	ctx190 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU + H2D_CTX190_OFF);
++	ctx434 = hi5622_fw_ram_read(ctx, H2D_CTX4_CPU + H2D_CTX434_OFF);
++	out->ctx4 = H2D_CTX4_CPU;
++	out->ctx0_lo = (u8)(ctx0 & 0xffu);
++	out->ctx190 = ctx190;
++	out->ctx434 = ctx434;
++	/* The proven TYPE-1 signature: the +0x190 buffer exists, the object is
++	 * the created module 4, and the type-1 second allocation exists. */
++	out->ok = ctx190 != 0u && out->ctx0_lo == (u8)H2D_CTX_MODULE_ID &&
++		  ctx434 != 0u;
++	h->h2d_ctx4 = out->ctx4;
++	h->h2d_ctx190 = ctx190;
++	h->h2d_ctx434 = ctx434;
++	h->h2d_ctx_attest_ok = out->ok ? 1u : 0u;
++	h->h2d_ctx_attest_reads++;
++	return out->ok ? 0 : -EAGAIN;
++}
++
++/* ------------------------------------------------------------------ */
+ /* the send path                                                       */
+ /* ------------------------------------------------------------------ */
+ /* txq_devva != 0 selects the data-plane hand-off (g0 id1 key 0x0320); its
+@@ -256,7 +314,21 @@
+ 		goto out;
+ 	}
+ 
+-	/* 2. Gate + SR commit under the service mutex (sysfs ops serialised;
++	/* 2. RC-2 corrected C2: before any TXQ frame, perform the read-only
++	 * ctx4+0x190 attestation (the type-1 create's signature).  The result is
++	 * carried into the portable gate via h2d_live and logged for the Lead;
++	 * this performs no device write. */
++	if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72) {
++		struct h2d_attest att;
++		int arc = hi5622_h2d_ctx_attest(ctx, &att);
++
++		dev_info(dev,
++			 "H2D %s: corrected-C2 attestation ctx4=0x%08x ctx0_lo=%u ctx190=0x%08x ctx434=0x%08x valid=%u (%d)\n",
++			 name, att.ctx4, att.ctx0_lo, att.ctx190, att.ctx434,
++			 att.ok ? 1u : 0u, arc);
++	}
++
++	/* 3. Gate + SR commit under the service mutex (sysfs ops serialised;
+ 	 * the service-thread tick only reads/times the mailbox state). */
+ 	mutex_lock(&h->lock);
+ 	h2d_live_fill(ctx, &live);
+@@ -338,8 +410,15 @@
+ 		h->h2d_txq_addr_sent++;
+ 	else if (msg == H2D_MSG_TXQ_SYNC || msg == H2D_MSG_TXQ_SYNC72)
+ 		h->h2d_txq_sync_sent++;
+-	else if (h2d_msg_is_ctx(msg))
++	else if (h2d_msg_is_ctx(msg)) {
+ 		h->h2d_ctx_create_sent++;
++		h->h2d_ctx_create_type =
++			msg == H2D_MSG_CTX_CREATE_T1 ? 1u :
++			msg == H2D_MSG_CTX_CREATE_T2 ? 2u : 3u;
++		/* A new create invalidates the previous attestation until the
++		 * read-only attestation reads the created context again. */
++		h->h2d_ctx_attest_ok = 0u;
++	}
+ 	h->h2d_last_msg = txq_devva != 0u ? (u32)H2D_MSG_COUNT : (u32)msg;
+ 	h->h2d_last_gate = (u32)H2D_GATE_OK;
+ 	h->h2d_last_total = total;
+@@ -449,6 +528,9 @@
+ 	else
+ 		return -EINVAL;
+ 	ret = h2d_post(ctx, msg, 0u, 0u, NULL, 0u);
++	if (ret == 0 && msg != H2D_MSG_CTX_CREATE_T1)
++		dev_warn(&ctx->pdev->dev,
++			 "H2D: context-create written with a non-type-1 selector; the corrected C2 requires type 1 (T1) - the TXQ gate will refuse this load\n");
+ 	return ret ? ret : (ssize_t)count;
+ }
+ static DEVICE_ATTR_WO(h2d_ctx_create);
+@@ -529,6 +611,11 @@
+ 			 h2d_gate_name(h2d_gate_check_txq_addr(&live)),
+ 			 live.out0, live.mbox_inflight);
+ 	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
++			 "corrected-C2: ctx_create_type=%u ctx190_attest=%u ctx4=0x%08x ctx190=0x%08x ctx434=0x%08x attest_reads=%u\n",
++			 h->h2d_ctx_create_type, h->h2d_ctx_attest_ok,
++			 h->h2d_ctx4, h->h2d_ctx190, h->h2d_ctx434,
++			 h->h2d_ctx_attest_reads);
++	pos += scnprintf(buf + pos, PAGE_SIZE - pos,
+ 			 "counters: ok=%llu timeout=%llu refused=%llu desync=%u txq_addr_sent=%u last_out0=0x%08x max_polls=%u\n",
+ 			 (unsigned long long)h->h2d_send_ok,
+ 			 (unsigned long long)h->h2d_send_timeout,
+@@ -692,10 +779,33 @@
+ }
+ static DEVICE_ATTR_RO(h2d_plan);
+ 
++/* RC-2: the read-only corrected-C2 attestation (the Lead's ladder readback).
++ * Reads the firmware module-4 context through BAR0 region 5 only; no write. */
++static ssize_t h2d_ctx_attest_show(struct device *dev,
++				   struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = h2d_ctx(dev);
++	struct hi5622_hcc_service *h;
++	struct h2d_attest att;
++	int rc;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	h = ctx->hcc;
++	rc = hi5622_h2d_ctx_attest(ctx, &att);
++	return scnprintf(buf, PAGE_SIZE,
++			 "corrected-C2 attestation: valid=%u rc=%d ctx_create_type=%u ctx4=0x%08x ctx0_lo=%u ctx190=0x%08x ctx434=0x%08x reads=%u expected=ctx_create_type 1, ctx190!=0, ctx434!=0\n",
++			 att.ok ? 1u : 0u, rc, h->h2d_ctx_create_type, att.ctx4,
++			 att.ctx0_lo, att.ctx190, att.ctx434,
++			 h->h2d_ctx_attest_reads);
++}
++static DEVICE_ATTR_RO(h2d_ctx_attest);
++
+ static struct attribute *hi5622_h2d_attrs[] = {
+ 	&dev_attr_h2d_txq_sync.attr,
+ 	&dev_attr_h2d_txq_sync72.attr,
+ 	&dev_attr_h2d_ctx_create.attr,
++	&dev_attr_h2d_ctx_attest.attr,
+ 	&dev_attr_h2d_send.attr,
+ 	&dev_attr_h2d_status.attr,
+ 	&dev_attr_h2d_plan.attr,
+diff -ruN a/h2d_send.h b/h2d_send.h
+--- a/h2d_send.h
++++ b/h2d_send.h
+@@ -22,6 +22,22 @@
+  * the other post-ready messages.  Called by hi5622_dp.c only. */
+ int  h2d_post_txq_addr(struct hi5622_pci *ctx, u32 txq_devva);
+ 
++/* RC-2 corrected C2 (fw-h2d-stall task-181): the read-only attestation of the
++ * firmware module-4 context the ordered ladder needs.  ok is true only for the
++ * bench-proven TYPE-1 signature: ctx4+0x190 != 0 (the buffer only a
++ * context-create allocates), ctx4[0] low byte == the created module (4), and
++ * the type-1 second allocation ctx4+0x434 != 0.  Performs firmware-RAM reads
++ * through the existing BAR0 region-5 window only; no device write.  Called by
++ * the TXQ gate (h2d_send.c) and the read-only h2d_ctx_attest attribute. */
++struct h2d_attest {
++	u32	ctx4;		/* the module-4 context CA (CPU address) */
++	u32	ctx190;		/* ctx4+0x190 (the create-allocated buffer) */
++	u32	ctx434;		/* ctx4+0x434 (the type-1 second allocation) */
++	u8	ctx0_lo;	/* ctx4[0] low byte (the created module id) */
++	bool	ok;		/* the proven TYPE-1 signature held */
++};
++int  hi5622_h2d_ctx_attest(struct hi5622_pci *ctx, struct h2d_attest *out);
++
+ int  hi5622_h2d_add_attrs(struct device *dev);
+ void hi5622_h2d_del_attrs(struct device *dev);
+ 
+diff -ruN a/h2d_send_logic.c b/h2d_send_logic.c
+--- a/h2d_send_logic.c
++++ b/h2d_send_logic.c
+@@ -126,6 +126,8 @@
+ 	case H2D_GATE_FRAME_INVALID:	return "frame_invalid";
+ 	case H2D_GATE_NEED_CTX:		return "ctx_create_required";
+ 	case H2D_GATE_DUP_TXQ_ADDR:	return "txq_addr_already_sent";
++	case H2D_GATE_CTX_TYPE:		return "ctx_create_type1_required";
++	case H2D_GATE_NEED_CTX_ATTEST:	return "ctx190_attest_required";
+ 	default:			return "?";
+ 	}
+ }
+@@ -245,6 +247,21 @@
+ 		 * exactly one TXQ frame - the ordered two-message ladder. */
+ 		if (live->txq_submitted)
+ 			return H2D_GATE_DUP_TXQ;
++		/* RC-2 CORRECTED C2 PRECONDITION (fw-h2d-stall task-181): the TXQ
++		 * worker dereferences ctx+0x190, which ONLY a context-create
++		 * allocates - a solo TXQ sync is the bench-proven data abort
++		 * (PC 0x81040, mask 0x10), and the old type-3 create never
++		 * initialised the field.  The fault-free ordered ladder is:
++		 * type-1 create -> ctx4+0x190 attestation -> this frame.  The
++		 * attestation result is read by h2d_send.c (read-only BAR0
++		 * firmware-RAM reads) and passed in via h2d_live; the gate itself
++		 * performs no IO. */
++		if (!live->ctx_created)
++			return H2D_GATE_NEED_CTX;
++		if (live->ctx_create_type != 1u)
++			return H2D_GATE_CTX_TYPE;
++		if (!live->ctx_attested)
++			return H2D_GATE_NEED_CTX_ATTEST;
+ 		/* READY_TXQ_SYNC is the ordinary path; ACTIVE is legal only after
+ 		 * this load's ctx_create (the ordered two-message ladder). */
+ 		if (!(live->phase == HCC_PHASE_READY_TXQ_SYNC ||
+diff -ruN a/h2d_send_logic.h b/h2d_send_logic.h
+--- a/h2d_send_logic.h
++++ b/h2d_send_logic.h
+@@ -111,6 +111,9 @@
+ 	H2D_GATE_FRAME_INVALID,	/* the frame builder/validator refused */
+ 	H2D_GATE_NEED_CTX,	/* data-plane hand-off needs this load's ctx_create */
+ 	H2D_GATE_DUP_TXQ_ADDR,	/* the 0x0320 hand-off was already sent this load */
++	/* RC-2 corrected C2 precondition (fw-h2d-stall task-181) */
++	H2D_GATE_CTX_TYPE,	/* ctx_create was not the proven TYPE 1 */
++	H2D_GATE_NEED_CTX_ATTEST, /* ctx4+0x190 attestation absent/failed */
+ };
+ 
+ /* Live driver-state snapshot the gate needs (filled by h2d_send.c or a test
+@@ -122,6 +125,8 @@
+ 	bool		lane_closed;
+ 	bool		txq_submitted;	/* a REAL txq_sync/txq_sync72 frame was sent */
+ 	bool		ctx_created;	/* a ctx_create frame was sent this load */
++	hcc_u32		ctx_create_type; /* the create's data[0]: 1|2|3 (RC-2) */
++	bool		ctx_attested;	/* ctx4+0x190 attestation held (RC-2) */
+ 	bool		txq_addr_sent;	/* the key-0x320 data-plane hand-off was sent */
+ 	enum hcc_phase	phase;
+ 	hcc_u32		frames_sent;	/* real H2D frames posted this load */
+diff -ruN a/hcc.c b/hcc.c
+--- a/hcc.c
++++ b/hcc.c
+@@ -36,6 +36,7 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_scan.h"
+ #include "hi5622_mgmt.h"
++#include "hi5622_rate_ctl.h"
+ 
+ /* Stability/perf hardening (wifi-stability lane): gate the hot-path hcc-core
+  * event traces.  Default 0 = quiet steady state (the bench console census
+@@ -106,6 +107,10 @@
+ 	/* wifi-ap-mgmt lane: D2H management-frame events (group1 id13) decode
+ 	 * to cfg80211_rx_mgmt behind mgmt_rx=1; default counts only. */
+ 	hi5622_mgmt_deliver(ctx, hdr, payload, payload_avail, wire_len);
++	/* wifi-rc-impl-2 lane: decode the g1 id3 / syn 0x0101 config-sync
++	 * answers into the read-only rate_ctl status/log (the rate-selection
++	 * observable).  Read-only filter; never writes. */
++	hi5622_rate_ctl_rx(ctx, hdr, payload, payload_avail);
+ 	return hcc_core_deliver_hdr(&ctx->hcc->hcc.core, src, hdr, payload,
+ 				    payload_avail, wire_len,
+ 				    hcc_kernel_now_ms());
+diff -ruN a/hi5622_hcc.h b/hi5622_hcc.h
+--- a/hi5622_hcc.h
++++ b/hi5622_hcc.h
+@@ -61,6 +61,12 @@
+ 	u32			h2d_frames_sent;	/* real frames committed */
+ 	u32			h2d_txq_sync_sent;
+ 	u32			h2d_ctx_create_sent;	/* ordered txq precondition */
++	u32			h2d_ctx_create_type;	/* the last create's data[0]: 1|2|3 (RC-2 C2) */
++	u32			h2d_ctx4;		/* attested module-4 context CA (CPU) */
++	u32			h2d_ctx190;		/* attestation read: ctx4+0x190 */
++	u32			h2d_ctx434;		/* attestation read: ctx4+0x434 (type-1 2nd alloc) */
++	u32			h2d_ctx_attest_ok;	/* 1 = the type-1 ctx190 signature held */
++	u32			h2d_ctx_attest_reads;	/* read-only attestation count */
+ 	u32			h2d_txq_addr_sent;	/* g0 id1 key 0x0320 data-plane hand-off */
+ 	u64			h2d_send_ok;		/* announce consumed */
+ 	u64			h2d_send_timeout;	/* announce not consumed */
+diff -ruN a/hi5622_rate_ctl.c b/hi5622_rate_ctl.c
+--- a/hi5622_rate_ctl.c
++++ b/hi5622_rate_ctl.c
+@@ -0,0 +1,763 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rate_ctl.c - fail-closed kernel surface for the vendor alg_cfg /
++ * rate-control commands (Hi5622V100 clean-room driver, wifi-rate-ctl lane).
++ *
++ * Decoded contract: ../REPORT.md and ../TABLES.md.  Every wire value this
++ * file can emit is a decoded vendor command (cfg id, access type, value
++ * layout, blob length); the carrier is the calibration ladder's proven
++ * config event (HCC group 0 / id 2 / key 0x0101), posted through the
++ * wifi-h2d-send lane's exact-frame library and the same SR-node / coalesced
++ * mailbox / budget / one-idea gates.  This file never writes a register
++ * directly and never reads the device.
++ *
++ * RC-2 (wifi-rc-impl-2 lane): the corrected C2 precondition is enforced on
++ * every write - the H2D layer must have recorded a TYPE-1 context-create, a
++ * passing ctx4+0x190 attestation and the ordered txq_sync72 (fw-h2d-stall
++ * task-181; the earlier RC fire wrote ctx_create type 3 and the announce
++ * stalled on the type-3 fault).  This file only reads that recorded state; the
++ * attestation itself is the read-only h2d_ctx_attest attribute.
++ *
++ * Default OFF.  Load with rate_ctl=1 to enable the write attributes; every
++ * attribute then refuses unless its command is in the decoded allowlist, the
++ * per-load frame budget is respected and the recorded policy decision is
++ * allow.  D2H key-0x0101 config-sync answers are decoded into the read-only
++ * status/log attributes (the rate-selection observable).
++ */
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/pci.h>
++#include <linux/string.h>
++#include <linux/types.h>
++
++#include "hi5622_hcc.h"
++#include "hi5622_frame_post.h"
++#include "h2d_send.h"
++#include "hi5622_rate_ctl.h"
++#include "hi5622_rate_ctl_logic.h"
++#include "hi5622_rate_ctl_wire.h"
++
++/* ------------------------------------------------------------------ */
++/* module parameters (fail-closed defaults)                            */
++/* ------------------------------------------------------------------ */
++unsigned int hi5622_rate_ctl;			/* 0 = disabled (default) */
++module_param_named(rate_ctl, hi5622_rate_ctl, uint, 0644);
++MODULE_PARM_DESC(rate_ctl,
++		 "rate-control alg_cfg surface: 0=disabled (default), 1=enabled (decoded commands only)");
++
++unsigned int hi5622_rate_ctl_fb = RC_CFG_FB_DEFAULT;
++module_param_named(rate_ctl_fb, hi5622_rate_ctl_fb, uint, 0644);
++MODULE_PARM_DESC(rate_ctl_fb,
++		 "config-event header field B (module context): 0..0x12, default 4 (the module the type-1 context-create made)");
++
++unsigned int hi5622_rate_ctl_arbitrary;		/* 0 = no raw probe (default) */
++module_param_named(rate_ctl_arbitrary, hi5622_rate_ctl_arbitrary, uint, 0644);
++MODULE_PARM_DESC(rate_ctl_arbitrary,
++		 "allow the rate_ctl_send raw probe attribute for documented ids: 0=off (default), 1=on");
++
++/* The raw frame-post budget is bounded here too (a second fail-closed cap:
++ * the RC surface can never post more than this per load even if the module
++ * parameter were raised). */
++#define RC_RC_BUDGET_MAX	16u
++
++/* ------------------------------------------------------------------ */
++/* state                                                               */
++/* ------------------------------------------------------------------ */
++struct hi5622_rate_ctl_state {
++	struct mutex lock;
++	u32 sent;
++	u32 refused;
++	u32 rsp;
++	u32 last_op;
++	u32 last_decision;
++	u16 last_cfg_id;
++	u8  last_cfg_type;
++	u16 last_blob_len;
++	u8  last_blob[RC_ALG_MAX_BLOB];
++	u16 last_wire_len;
++	u8  last_wire[RC_WIRE_MAX_LEN];
++	u32 last_out0;
++	u16 last_rsp_body_len;
++	u8  last_rsp_body[RC_ALG_MAX_BLOB];
++	struct rc_sync last_sync;	/* valid when have_sync */
++	bool have_sync;
++};
++
++static struct hi5622_rate_ctl_state rc_state;
++static bool rc_inited;
++
++static struct hi5622_pci *rc_ctx(struct device *dev)
++{
++	return pci_get_drvdata(to_pci_dev(dev));
++}
++
++static void rc_policy_fill(struct rc_policy *pol, struct hi5622_pci *ctx)
++{
++	u32 budget;
++
++	memset(pol, 0, sizeof(*pol));
++	pol->enabled = hi5622_rate_ctl != 0u;
++	pol->arbitrary = hi5622_rate_ctl_arbitrary != 0u;
++	/* rate-control frames are provider frames posted through the single
++	 * fail-closed wire path; its per-load budget is the one that bounds
++	 * them (a separate knob from the curated h2d_send ladder budget). */
++	budget = hi5622_allow_frames > RC_RC_BUDGET_MAX ? RC_RC_BUDGET_MAX :
++		 hi5622_allow_frames;
++	pol->budget = budget;
++	pol->sent = rc_state.sent;
++	if (ctx && ctx->hcc) {
++		/* the corrected C2 precondition, recorded by the H2D layer */
++		pol->ctx_type1 = ctx->hcc->h2d_ctx_create_type == 1u;
++		pol->ctx_attested = ctx->hcc->h2d_ctx_attest_ok != 0u;
++		pol->txq_sent = ctx->hcc->h2d_txq_sync_sent > 0u;
++	}
++}
++
++/* ------------------------------------------------------------------ */
++/* sysfs grammar helpers                                               */
++/* ------------------------------------------------------------------ */
++static const char *rc_skip_spaces(const char *p)
++{
++	while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
++		p++;
++	return p;
++}
++
++static int rc_parse_uint(const char **pp, unsigned long *out)
++{
++	const char *p = rc_skip_spaces(*pp);
++	unsigned long v = 0;
++	unsigned base = 10;
++	bool any = false;
++
++	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
++		base = 16;
++		p += 2;
++	}
++	while (*p) {
++		unsigned d;
++
++		if (*p >= '0' && *p <= '9')
++			d = (unsigned)(*p - '0');
++		else if (base == 16 && *p >= 'a' && *p <= 'f')
++			d = (unsigned)(*p - 'a') + 10u;
++		else if (base == 16 && *p >= 'A' && *p <= 'F')
++			d = (unsigned)(*p - 'A') + 10u;
++		else
++			break;
++		if (d >= base)
++			break;
++		if (v > (0xfffffffful - d) / base)
++			return -ERANGE;
++		v = v * base + d;
++		p++;
++		any = true;
++	}
++	if (!any)
++		return -EINVAL;
++	*out = v;
++	*pp = p;
++	return 0;
++}
++
++static bool rc_rest_is_space(const char *p)
++{
++	p = rc_skip_spaces(p);
++	return *p == '\0';
++}
++
++static int rc_parse_token(const char **pp, char *out, size_t cap)
++{
++	const char *p = rc_skip_spaces(*pp);
++	size_t n = 0;
++
++	while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') {
++		if (n + 1u >= cap)
++			return -ERANGE;
++		out[n++] = *p++;
++	}
++	if (!n)
++		return -EINVAL;
++	out[n] = '\0';
++	*pp = p;
++	return 0;
++}
++
++static int rc_parse_hex_pairs(const char **pp, u8 *dst, u16 *out_len,
++			      size_t max)
++{
++	const char *p = rc_skip_spaces(*pp);
++	size_t n = 0;
++
++	while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') {
++		int hi, lo;
++
++		if (p[0] >= '0' && p[0] <= '9')
++			hi = p[0] - '0';
++		else if (p[0] >= 'a' && p[0] <= 'f')
++			hi = p[0] - 'a' + 10;
++		else if (p[0] >= 'A' && p[0] <= 'F')
++			hi = p[0] - 'A' + 10;
++		else
++			return -EINVAL;
++		if (!p[1])
++			return -EINVAL;
++		if (p[1] >= '0' && p[1] <= '9')
++			lo = p[1] - '0';
++		else if (p[1] >= 'a' && p[1] <= 'f')
++			lo = p[1] - 'a' + 10;
++		else if (p[1] >= 'A' && p[1] <= 'F')
++			lo = p[1] - 'A' + 10;
++		else
++			return -EINVAL;
++		if (n >= max)
++			return -ERANGE;
++		dst[n++] = (u8)((hi << 4) | lo);
++		p += 2;
++	}
++	if (!n)
++		return -EINVAL;
++	*out_len = (u16)n;
++	*pp = p;
++	return 0;
++}
++
++/* ------------------------------------------------------------------ */
++/* the send path                                                       */
++/* ------------------------------------------------------------------ */
++static int rc_send(struct hi5622_pci *ctx, unsigned int op,
++		   const struct rc_req *req)
++{
++	struct rc_policy pol;
++	size_t blob_len = 0;
++	int rc;
++
++	if (!ctx || !ctx->hcc)
++		return -ENODEV;
++	rc_policy_fill(&pol, ctx);
++	if (rc_check(&pol, req, (enum rc_op)op) != RC_DEC_ALLOW) {
++		rc_state.refused++;
++		rc_state.last_op = op;
++		rc_state.last_decision = (u32)rc_check(&pol, req, (enum rc_op)op);
++		dev_warn(&ctx->pdev->dev,
++			 "RATE_CTL: op %u cfg %u refused (%s); rate_ctl=%u arbitrary=%u sent=%u/%u precond ctx_type1=%u ctx190_attest=%u txq72=%u - no device write\n",
++			 op, req->cfg_id,
++			 rc_name_decision((enum rc_decision)rc_state.last_decision),
++			 hi5622_rate_ctl, hi5622_rate_ctl_arbitrary,
++			 pol.sent, pol.budget, pol.ctx_type1 ? 1u : 0u,
++			 pol.ctx_attested ? 1u : 0u, pol.txq_sent ? 1u : 0u);
++		return -EPERM;
++	}
++	if (rc_blob_build(req, rc_state.last_blob, sizeof(rc_state.last_blob),
++			  &blob_len) != 0) {
++		rc_state.refused++;
++		rc_state.last_decision = (u32)RC_DEC_BAD_LEN;
++		return -EINVAL;
++	}
++	rc_state.last_op = op;
++	rc_state.last_decision = (u32)RC_DEC_ALLOW;
++	rc_state.last_cfg_id = req->cfg_id;
++	rc_state.last_cfg_type = req->cfg_type;
++	rc_state.last_blob_len = (u16)blob_len;
++	if (hi5622_rate_ctl_fb > RC_CFG_FB_MAX)
++		return -ERANGE;
++	/* RC-2 corrected-C2 evidence: the fresh read-only attestation at send
++	 * time.  The gate above already required the recorded TYPE-1 create +
++	 * ctx190 attestation + ordered TXQ sync (the precondition the firmware
++	 * worker needs); this re-read is logged for the bench record and never
++	 * weakens the gate. */
++	{
++		struct h2d_attest att;
++		int arc = hi5622_h2d_ctx_attest(ctx, &att);
++
++		dev_info(&ctx->pdev->dev,
++			 "RATE_CTL: corrected-C2 attestation at send: valid=%u rc=%d ctx4=0x%08x ctx0_lo=%u ctx190=0x%08x ctx434=0x%08x\n",
++			 att.ok ? 1u : 0u, arc, att.ctx4, att.ctx0_lo,
++			 att.ctx190, att.ctx434);
++	}
++	/* 3. Build the complete wire (the exact g0 id2 / key 0x0101 carrier)
++	 * and post it through the one fail-closed wire path. */
++	{
++		size_t wire_len = 0;
++
++		rc = rc_wire_build(rc_state.last_blob, (u16)blob_len,
++				   (u8)hi5622_rate_ctl_fb, rc_state.last_wire,
++				   sizeof(rc_state.last_wire), &wire_len);
++		rc_state.last_wire_len = (u16)wire_len;
++	}
++	if (rc != 0) {
++		rc_state.refused++;
++		rc_state.last_decision = (u32)RC_DEC_BAD_LEN;
++		dev_warn(&ctx->pdev->dev,
++			 "RATE_CTL: cfg %u type %s wire build refused (%d); no device write\n",
++			 req->cfg_id, req->cfg_type ? "GET" : "SET", rc);
++		return -EINVAL;
++	}
++	rc = hi5622_frame_post(ctx, rc_state.last_wire, rc_state.last_wire_len,
++			       "rate_cfg", &rc_state.last_out0);
++	if (rc == 0) {
++		rc_state.sent++;
++		dev_info(&ctx->pdev->dev,
++			 "RATE_CTL: sent cfg %u type %s (op %u) alg_cfg blob %zu B on the g0/id2 key-0x0101 config event (fb=%u) as the %zu B frame; out[0]=0x%08x consumed - waiting for the g1 id3 sync answer\n",
++			 req->cfg_id, req->cfg_type ? "GET" : "SET", op,
++			 blob_len, hi5622_rate_ctl_fb, rc_state.last_wire_len,
++			 rc_state.last_out0);
++		return 0;
++	}
++	rc_state.refused++;
++	dev_warn(&ctx->pdev->dev,
++		 "RATE_CTL: cfg %u type %s post refused (%d); one idea per load, no retry - see dmesg for the gate\n",
++		 req->cfg_id, req->cfg_type ? "GET" : "SET", rc);
++	return rc;
++}
++
++/* ------------------------------------------------------------------ */
++/* write attributes                                                    */
++/* ------------------------------------------------------------------ */
++static ssize_t rc_rate_mode_store(struct device *dev,
++				  struct device_attribute *attr,
++				  const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	unsigned long v;
++	int rc;
++
++	if (!sysfs_streq(buf, "auto") && !sysfs_streq(buf, "fixed") &&
++	    !sysfs_streq(buf, "0") && !sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (sysfs_streq(buf, "auto") || sysfs_streq(buf, "0"))
++		v = RC_RATE_MODE_AUTO;
++	else
++		v = RC_RATE_MODE_FIXED;
++	if (rc_req_rate_mode(&req, (unsigned)v) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_RATE_MODE_SET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_rate_mode);
++
++static ssize_t rc_rate_mode_get_store(struct device *dev,
++				      struct device_attribute *attr,
++				      const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	int rc;
++
++	if (!sysfs_streq(buf, "1"))
++		return -EINVAL;
++	if (rc_req_rate_mode_get(&req) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_RATE_MODE_GET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_rate_mode_get);
++
++static ssize_t rc_ar_set_store(struct device *dev, struct device_attribute *attr,
++			       const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	char knob[40];
++	const char *p = buf;
++	unsigned long value;
++	int rc;
++
++	rc = rc_parse_token(&p, knob, sizeof(knob));
++	if (rc)
++		return rc;
++	rc = rc_parse_uint(&p, &value);
++	if (rc || !rc_rest_is_space(p))
++		return -EINVAL;
++	if (value > 0xfffffffful)
++		return -ERANGE;
++	if (rc_req_ar_dev_param(&req, knob, value) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_AR_SET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_ar_set);
++
++static ssize_t rc_ar_get_store(struct device *dev, struct device_attribute *attr,
++			       const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	char knob[40];
++	const char *p = buf;
++	int rc;
++
++	rc = rc_parse_token(&p, knob, sizeof(knob));
++	if (rc || !rc_rest_is_space(p))
++		return -EINVAL;
++	if (rc_req_ar_dev_param_get(&req, knob) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_AR_GET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_ar_get);
++
++static ssize_t rc_tpc_pow_store(struct device *dev, struct device_attribute *attr,
++				const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	char mode[16];
++	const char *p = buf;
++	unsigned long level;
++	unsigned m;
++	int rc;
++
++	rc = rc_parse_token(&p, mode, sizeof(mode));
++	if (rc)
++		return rc;
++	rc = rc_parse_uint(&p, &level);
++	if (rc || !rc_rest_is_space(p))
++		return -EINVAL;
++	if (strcmp(mode, "data") == 0)
++		m = RC_TPC_POW_DATA;
++	else if (strcmp(mode, "mag") == 0)
++		m = RC_TPC_POW_MAG;
++	else if (strcmp(mode, "ctrl") == 0)
++		m = RC_TPC_POW_CTRL;
++	else {
++		unsigned long mv;
++
++		if (rc_parse_uint((const char **)&mode, &mv) != 0 || mv > 2ul)
++			return -EINVAL;
++		m = (unsigned)mv;
++	}
++	if (level > 0xfful)
++		return -ERANGE;
++	if (rc_req_tpc_pow_lvl(&req, m, (unsigned)level) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_TPC_POW_LVL_SET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_tpc_pow);
++
++static ssize_t rc_tpc_get_store(struct device *dev, struct device_attribute *attr,
++				const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	const char *p = buf;
++	unsigned long id;
++	int rc;
++
++	rc = rc_parse_uint(&p, &id);
++	if (rc || !rc_rest_is_space(p))
++		return -EINVAL;
++	if (id > 0xfffful)
++		return -ERANGE;
++	if (rc_req_tpc_get(&req, (u16)id) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_TPC_GET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_tpc_get);
++
++static ssize_t rc_ration_get_store(struct device *dev,
++				   struct device_attribute *attr,
++				   const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	unsigned int m[6];
++	int rc;
++
++	if (sscanf(buf, "%2x:%2x:%2x:%2x:%2x:%2x",
++		   &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) != 6)
++		return -EINVAL;
++	{
++		u8 mac[6];
++
++		for (rc = 0; rc < 6; rc++)
++			mac[rc] = (u8)(m[rc] & 0xffu);
++		if (rc_req_ration_get(&req, mac) != 0)
++			return -EINVAL;
++	}
++	rc = rc_send(ctx, RC_OP_RATION_GET, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_ration_get);
++
++static ssize_t rc_send_store(struct device *dev, struct device_attribute *attr,
++			     const char *buf, size_t count)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_req req;
++	u8 value[RC_ALG_MAX_VALUE];
++	u16 value_len = 0;
++	unsigned long cfg_id = 0, pkt = 0;
++	bool have_id = false, have_type = false, have_pkt = false;
++	bool is_get = false;
++	const char *p = buf;
++	int rc;
++
++	while (!rc_rest_is_space(p)) {
++		char tok[48];
++
++		rc = rc_parse_token(&p, tok, sizeof(tok));
++		if (rc)
++			return rc;
++		if (strncmp(tok, "id=", 3) == 0) {
++			const char *q = tok + 3;
++
++			if (rc_parse_uint(&q, &cfg_id) || *q)
++				return -EINVAL;
++			have_id = true;
++		} else if (strncmp(tok, "type=", 5) == 0) {
++			if (strcmp(tok + 5, "set") == 0)
++				is_get = false;
++			else if (strcmp(tok + 5, "get") == 0)
++				is_get = true;
++			else
++				return -EINVAL;
++			have_type = true;
++		} else if (strncmp(tok, "pkt=", 4) == 0) {
++			const char *q = tok + 4;
++
++			if (rc_parse_uint(&q, &pkt) || *q)
++				return -EINVAL;
++			have_pkt = true;
++		} else if (strncmp(tok, "value=", 6) == 0) {
++			const char *q = tok + 6;
++
++			rc = rc_parse_hex_pairs(&q, value, &value_len,
++						sizeof(value));
++			if (rc)
++				return rc;
++		} else {
++			return -EINVAL;
++		}
++	}
++	if (!have_id || !have_type || cfg_id > 0xfffful)
++		return -EINVAL;
++	if (!have_pkt)
++		pkt = RC_PKT_NONE;
++	if (pkt > RC_PKT_NONE)
++		return -EINVAL;
++	if (rc_req_raw(&req, (u16)cfg_id, is_get ? RC_CFG_GET : RC_CFG_SET,
++		       (u8)pkt, value_len ? value : NULL, value_len) != 0)
++		return -EINVAL;
++	rc = rc_send(ctx, RC_OP_ARBITRARY, &req);
++	return rc ? rc : (ssize_t)count;
++}
++static DEVICE_ATTR_WO(rc_send);
++
++/* ------------------------------------------------------------------ */
++/* read-only status / log                                             */
++/* ------------------------------------------------------------------ */
++static int rc_hex(char *out, size_t cap, const u8 *p, u16 len)
++{
++	static const char digits[] = "0123456789abcdef";
++	size_t i, pos = 0;
++
++	if (!cap)
++		return 0;
++	for (i = 0; i < len; i++) {
++		if (pos + 3u > cap)
++			break;
++		out[pos++] = digits[p[i] >> 4];
++		out[pos++] = digits[p[i] & 0x0fu];
++		if (i + 1u < len)
++			out[pos++] = ' ';
++	}
++	out[pos] = '\0';
++	return (int)pos;
++}
++
++static ssize_t rc_status_show(struct device *dev,
++			      struct device_attribute *attr, char *buf)
++{
++	struct hi5622_pci *ctx = rc_ctx(dev);
++	struct rc_policy pol;
++	char blob[3 * 64];
++	char rsp[3 * 64];
++	int n = 0;
++
++	rc_policy_fill(&pol, ctx);
++	mutex_lock(&rc_state.lock);
++	rc_hex(blob, sizeof(blob), rc_state.last_blob,
++	       rc_state.last_blob_len > 64u ? 64u : rc_state.last_blob_len);
++	rc_hex(rsp, sizeof(rsp), rc_state.last_rsp_body,
++	       rc_state.last_rsp_body_len > 64u ? 64u : rc_state.last_rsp_body_len);
++	n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++		       "rate_ctl=%u rate_ctl_fb=%u rate_ctl_arbitrary=%u enabled=%u arbitrary=%u budget=%u committed=%u/%u refused=%u rsp=%u\n",
++		       hi5622_rate_ctl, hi5622_rate_ctl_fb,
++		       hi5622_rate_ctl_arbitrary, pol.enabled ? 1u : 0u,
++		       pol.arbitrary ? 1u : 0u, pol.budget,
++		       rc_state.sent, pol.budget,
++		       rc_state.refused, rc_state.rsp);
++	n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++		       "precond ctx_type1=%u ctx190_attest=%u txq72=%u ctx_create_type=%u ctx4=0x%08x ctx190=0x%08x ctx434=0x%08x\n",
++		       pol.ctx_type1 ? 1u : 0u, pol.ctx_attested ? 1u : 0u,
++		       pol.txq_sent ? 1u : 0u,
++		       ctx && ctx->hcc ? ctx->hcc->h2d_ctx_create_type : 0u,
++		       ctx && ctx->hcc ? ctx->hcc->h2d_ctx4 : 0u,
++		       ctx && ctx->hcc ? ctx->hcc->h2d_ctx190 : 0u,
++		       ctx && ctx->hcc ? ctx->hcc->h2d_ctx434 : 0u);
++	n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++		       "last_op=%u last_decision=%s last_cfg=%u last_type=%s last_blob_len=%u\n",
++		       rc_state.last_op,
++		       rc_name_decision((enum rc_decision)rc_state.last_decision),
++		       rc_state.last_cfg_id,
++		       rc_state.last_cfg_type ? "GET" : "SET",
++		       rc_state.last_blob_len);
++	if (rc_state.last_blob_len)
++		n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++			       "last_blob=%s%s\n", blob,
++			       rc_state.last_blob_len > 64u ? " ..." : "");
++	if (rc_state.last_wire_len) {
++		char wire[3 * 40];
++		u16 wl = rc_state.last_wire_len > 39u ? 39u :
++			 rc_state.last_wire_len;
++
++		rc_hex(wire, sizeof(wire), rc_state.last_wire, wl);
++		n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++			       "last_wire_len=%u last_wire=%s%s out0_after=0x%08x\n",
++			       rc_state.last_wire_len, wire,
++			       rc_state.last_wire_len > 39u ? " ..." : "",
++			       rc_state.last_out0);
++	}
++	if (rc_state.have_sync) {
++		char val[3 * 16];
++		const struct rc_sync *s = &rc_state.last_sync;
++
++		rc_hex(val, sizeof(val), s->value,
++		       s->value_len > 16u ? 16u : s->value_len);
++		n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++			       "last_rsp syn=0x0101 cfg=%u type=%s pkt=%u dev_ret=%u need_w4=%u body_len=%u value_len=%u value=%s\n",
++			       s->cfg_id, s->cfg_type ? "GET" : "SET",
++			       s->pkt_type, s->dev_ret, s->need_w4,
++			       s->body_len, s->value_len, val);
++	}
++	if (rc_state.last_rsp_body_len)
++		n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++			       "last_rsp_body=%s%s\n", rsp,
++			       rc_state.last_rsp_body_len > 64u ? " ..." : "");
++	mutex_unlock(&rc_state.lock);
++	return n;
++}
++static DEVICE_ATTR_RO(rc_status);
++
++static ssize_t rc_log_show(struct device *dev, struct device_attribute *attr,
++			   char *buf)
++{
++	char blob[3 * 97];
++	char body[3 * 97];
++	int n = 0;
++
++	mutex_lock(&rc_state.lock);
++	rc_hex(blob, sizeof(blob), rc_state.last_blob,
++	       rc_state.last_blob_len > 96u ? 96u : rc_state.last_blob_len);
++	rc_hex(body, sizeof(body), rc_state.last_rsp_body,
++	       rc_state.last_rsp_body_len > 96u ? 96u :
++	       rc_state.last_rsp_body_len);
++	{
++		char wire[3 * 97];
++
++		rc_hex(wire, sizeof(wire), rc_state.last_wire,
++		       rc_state.last_wire_len > 96u ? 96u :
++		       rc_state.last_wire_len);
++		n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++			       "request_wire[%u]=%s\n",
++			       rc_state.last_wire_len, wire);
++	}
++	n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++		       "request_blob[%u]=%s\n", rc_state.last_blob_len, blob);
++	n += scnprintf(buf + n, PAGE_SIZE - (size_t)n,
++		       "response_body[%u]=%s\n", rc_state.last_rsp_body_len, body);
++	mutex_unlock(&rc_state.lock);
++	return n;
++}
++static DEVICE_ATTR_RO(rc_log);
++
++static struct attribute *hi5622_rate_ctl_attrs[] = {
++	&dev_attr_rc_rate_mode.attr,
++	&dev_attr_rc_rate_mode_get.attr,
++	&dev_attr_rc_ar_set.attr,
++	&dev_attr_rc_ar_get.attr,
++	&dev_attr_rc_tpc_pow.attr,
++	&dev_attr_rc_tpc_get.attr,
++	&dev_attr_rc_ration_get.attr,
++	&dev_attr_rc_send.attr,
++	&dev_attr_rc_status.attr,
++	&dev_attr_rc_log.attr,
++	NULL,
++};
++
++static const struct attribute_group hi5622_rate_ctl_group = {
++	.attrs = hi5622_rate_ctl_attrs,
++};
++
++/* ------------------------------------------------------------------ */
++/* D2H config-sync capture (the rate-selection observable)             */
++/* ------------------------------------------------------------------ */
++void hi5622_rate_ctl_rx(struct hi5622_pci *ctx, const u8 *hdr,
++			const u8 *payload, u32 payload_len)
++{
++	struct rc_sync sync;
++	u8 group, id;
++
++	if (!ctx || !hdr || !payload)
++		return;
++	if (payload_len > RC_ALG_MAX_BLOB + 32u)
++		payload_len = RC_ALG_MAX_BLOB + 32u;
++	group = (u8)(hdr[0] & 0x0fu);
++	id = (u8)(hdr[6] | (hdr[7] << 8));
++	if (group != 1u || id != 3u)
++		return;
++	if (rc_parse_cfg_sync(group, id, payload, payload_len, &sync) != 0)
++		return;
++	mutex_lock(&rc_state.lock);
++	rc_state.rsp++;
++	rc_state.last_sync = sync;
++	rc_state.have_sync = true;
++	{
++		/* the response body starts after the 12-byte cfg-sync wrapper */
++		u16 body_len = (u16)(payload[10] | ((u16)payload[11] << 8));
++
++		if (body_len <= RC_ALG_MAX_BLOB) {
++			memcpy(rc_state.last_rsp_body, payload + 12, body_len);
++			rc_state.last_rsp_body_len = body_len;
++		}
++	}
++	mutex_unlock(&rc_state.lock);
++	dev_info(&ctx->pdev->dev,
++		 "RATE_CTL rsp: g1 id3 syn 0x0101 cfg %u type %s dev_ret %u value_len %u\n",
++		 sync.cfg_id, sync.cfg_type ? "GET" : "SET", sync.dev_ret,
++		 sync.value_len);
++}
++
++/* ------------------------------------------------------------------ */
++/* registration                                                        */
++/* ------------------------------------------------------------------ */
++int hi5622_rate_ctl_add_attrs(struct device *dev)
++{
++	int rc;
++
++	if (!rc_inited) {
++		memset(&rc_state, 0, sizeof(rc_state));
++		mutex_init(&rc_state.lock);
++		rc_inited = true;
++	}
++	rc = sysfs_create_group(&dev->kobj, &hi5622_rate_ctl_group);
++	if (rc)
++		dev_warn(dev, "RATE_CTL: sysfs group not created (%d)\n", rc);
++	else if (hi5622_rate_ctl)
++		dev_info(dev,
++			 "RATE_CTL: enabled (fb=%u arbitrary=%u); rate_mode/rate_mode_get/ar_set/ar_get/tpc_pow/tpc_get/ration_get/rc_send are the decoded alg_cfg commands\n",
++			 hi5622_rate_ctl_fb, hi5622_rate_ctl_arbitrary);
++	return rc;
++}
++
++void hi5622_rate_ctl_del_attrs(struct device *dev)
++{
++	sysfs_remove_group(&dev->kobj, &hi5622_rate_ctl_group);
++}
+\ No newline at end of file
+diff -ruN a/hi5622_rate_ctl.h b/hi5622_rate_ctl.h
+--- a/hi5622_rate_ctl.h
++++ b/hi5622_rate_ctl.h
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rate_ctl.h - kernel surface of the fail-closed rate-control /
++ * alg_cfg command path (Hi5622V100 clean-room driver, wifi-rate-ctl lane).
++ *
++ * RC-2 (wifi-rc-impl-2 lane): every write additionally requires the CORRECTED
++ * C2 PRECONDITION recorded by the H2D layer this load - ctx_create was TYPE 1,
++ * its ctx4+0x190 attestation held, and the ordered txq_sync72 was committed
++ * (fw-h2d-stall task-181 + the proven calibration ladder).  Without it the
++ * write refuses before any device write (fail-closed; see rc_precond_check).
++ *
++ * Default OFF: every write attribute refuses until the module is loaded with
++ * rate_ctl=1.  The send path reuses the proven post-ready config-event carrier
++ * (HCC group 0 / id 2 / key 0x0101, the calibration ladder's carrier) and the
++ * same SR-node/mailbox gates, budget and one-frame-per-idea rules as the
++ * wifi-h2d-send lane.  No register is written by this surface; the only device
++ * effect is the firmware alg_cfg config event the Lead asks for.
++ */
++#ifndef HI5622_RATE_CTL_H
++#define HI5622_RATE_CTL_H
++
++#include <linux/device.h>
++#include <linux/types.h>
++
++struct hi5622_pci;
++
++/* Module parameters (defined in hi5622_rate_ctl.c). */
++extern unsigned int hi5622_rate_ctl;
++extern unsigned int hi5622_rate_ctl_fb;
++extern unsigned int hi5622_rate_ctl_arbitrary;
++
++int  hi5622_rate_ctl_add_attrs(struct device *dev);
++void hi5622_rate_ctl_del_attrs(struct device *dev);
++
++/* Called from hi5622_hcc_deliver() for every received frame (D2H).  Decodes
++ * the key-0x0101 config-sync answers (g1 id3) into the read-only status/log
++ * attributes; a non-matching frame is ignored.  Never writes the device. */
++void hi5622_rate_ctl_rx(struct hi5622_pci *ctx, const u8 *hdr,
++			const u8 *payload, u32 payload_len);
++
++#endif /* HI5622_RATE_CTL_H */
+diff -ruN a/hi5622_rate_ctl_logic.c b/hi5622_rate_ctl_logic.c
+--- a/hi5622_rate_ctl_logic.c
++++ b/hi5622_rate_ctl_logic.c
+@@ -0,0 +1,513 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_rate_ctl_logic.c - portable pure logic for the vendor alg_cfg /
++ * rate-control command surface (clean-room).  See hi5622_rate_ctl_logic.h
++ * and ../REPORT.md for the decoded facts this file encodes.
++ */
++#ifdef __KERNEL__
++#include <linux/string.h>
++#else
++#include <string.h>
++#endif
++
++#include "hi5622_rate_ctl_logic.h"
++
++/* ---- the 26 autorate knobs: vendor g_ast_alg_cfg_ar_dev_param_tbl [V] ---- */
++static const char *const rc_ar_knob_names[RC_AR_KNOB_COUNT] = {
++	"sudden_good_delta_gdpt_ratio",		/* 0 */
++	"sudden_bad_delta_gdpt_ratio",		/* 1 */
++	"descend_protocol_pre_thrd",		/* 2 */
++	"11b_ascend_protocol_per_thrd",		/* 3 */
++	"11a_ascend_protocol_per_thrd",		/* 4 */
++	"ascend_bw_rate_keep_cnt_thrd",		/* 5 */
++	"descend_bw_min_pktcnt_thrd",		/* 6 */
++	"ascend_bw_probe_pktcnt_min_thrd",	/* 7 */
++	"descend_bw_probe_pktcnt_min_thrd",	/* 8 */
++	"probe_gi_start_intvl_pktnum",		/* 9 */
++	"probe_reduction_strategy",		/* 10 */
++	"probe_per_init_strategy",		/* 11 */
++	"tx_rate_aging_time",			/* 12 */
++	"rx_rate_aging_time",			/* 13 */
++	"descend_bw_event_trig_per_thrd",	/* 14 */
++	"probe_update_best_opt_en",		/* 15 */
++	"probe_update_best_same_nss_th",	/* 16 */
++	"probe_update_best_diff_nss_th",	/* 17 */
++	"vht_priv_rate_probe_switch",		/* 18 */
++	"ht_priv_2_vht_probe_switch",		/* 19 */
++	"suspect_collision_ppdu_cnt_th",	/* 20 */
++	"cfg_vi_spec_per",			/* 21 */
++	"cfg_vo_spec_per",			/* 22 */
++	"gi1_with_2xltf_en",			/* 23 */
++	"descend_bw_gdpt_better_thrd",		/* 24 */
++	"ascend_bw_gdpt_better_thrd",		/* 25 */
++};
++
++/* Decoded per-command value length (value bytes after the 10-byte header).
++ * 0xffff marks a command the portable logic does not build (dedicated parser /
++ * layout [U]); the caller must refuse it. */
++static uint16_t rc_known_value_len(uint16_t cfg_id, uint8_t cfg_type)
++{
++	(void)cfg_type;
++	switch (cfg_id) {
++	case RC_CFG_RATE_MODE:
++	case RC_CFG_FEC_CODING:
++	case RC_CFG_HE_SIGB_RATE:
++	case RC_CFG_DEBUG_LOG_SWITCH:
++	case RC_CFG_AR_PROBE:
++	case RC_CFG_GI_TYPE:
++	case RC_CFG_MU_RTS_MODE:
++	case RC_CFG_SIGB_DCM:
++	case RC_CFG_PREAMBLE_TYPE:
++	case RC_CFG_TPC_MODE:
++	case RC_CFG_POW_MODE:
++	case RC_CFG_RESP_CHAIN_SEL:
++	case RC_CFG_WATERFILLING:
++		return 1u;
++	case RC_CFG_AR_DEV_PARAM:
++		return 5u;	/* uint8_t knob + uint32_t value */
++	case RC_CFG_MU_FEC_CODING:
++	case RC_CFG_HE_LTF_TYPE:
++	case RC_CFG_DCM_ENABLE:
++	case RC_CFG_TPC_POW_LVL:
++		return 2u;
++	case RC_CFG_TX_CNT:
++		return 4u;
++	case RC_CFG_PROTECT_MODE:
++		return 4u;
++	case RC_CFG_CURRENT_RATION:
++		return 20u;	/* GET: 6-byte MAC in, 20-byte report out */
++	default:
++		return 0xffffu;	/* not a documented portable layout */
++	}
++}
++
++static int rc_req_set_header(struct rc_req *req, uint16_t cfg_id, uint8_t type)
++{
++	if (!req)
++		return -1;
++	memset(req, 0, sizeof(*req));
++	req->cfg_id = cfg_id;
++	req->cfg_type = type;
++	req->pkt_type = RC_PKT_NONE;
++	return 0;
++}
++
++int rc_req_rate_mode(struct rc_req *req, unsigned mode)
++{
++	if (!req || mode > RC_RATE_MODE_FIXED)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_RATE_MODE, RC_CFG_SET))
++		return -1;
++	req->value[0] = (uint8_t)mode;
++	req->value_len = RC_LEN_RATE_MODE - RC_ALG_HDR_LEN;
++	req->blob_len = RC_LEN_RATE_MODE;
++	return 0;
++}
++
++int rc_req_rate_mode_get(struct rc_req *req)
++{
++	if (!req)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_RATE_MODE, RC_CFG_GET))
++		return -1;
++	req->value_len = RC_LEN_RATE_MODE - RC_ALG_HDR_LEN;
++	req->blob_len = RC_LEN_RATE_MODE;
++	return 0;
++}
++
++int rc_req_ar_dev_param(struct rc_req *req, const char *knob, unsigned long value)
++{
++	int id;
++
++	if (!req || !knob)
++		return -1;
++	id = rc_ar_knob_by_name(knob);
++	if (id < 0)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_AR_DEV_PARAM, RC_CFG_SET))
++		return -1;
++	req->value[0] = (uint8_t)id;
++	req->value[1] = (uint8_t)(value & 0xffu);
++	req->value[2] = (uint8_t)((value >> 8) & 0xffu);
++	req->value[3] = (uint8_t)((value >> 16) & 0xffu);
++	req->value[4] = (uint8_t)((value >> 24) & 0xffu);
++	req->value_len = 5u;
++	req->blob_len = RC_LEN_AR_DEV_PARAM;
++	return 0;
++}
++
++int rc_req_ar_dev_param_get(struct rc_req *req, const char *knob)
++{
++	int id;
++
++	if (!req || !knob)
++		return -1;
++	id = rc_ar_knob_by_name(knob);
++	if (id < 0)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_AR_DEV_PARAM, RC_CFG_GET))
++		return -1;
++	req->value[0] = (uint8_t)id;
++	req->value_len = 5u;
++	req->blob_len = RC_LEN_AR_DEV_PARAM;
++	return 0;
++}
++
++int rc_req_tpc_pow_lvl(struct rc_req *req, unsigned mode, unsigned level)
++{
++	if (!req || mode > RC_TPC_POW_CTRL || level > 0xffu)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_TPC_POW_LVL, RC_CFG_SET))
++		return -1;
++	req->value[0] = (uint8_t)mode;
++	req->value[1] = (uint8_t)level;
++	req->value_len = 2u;
++	req->blob_len = RC_LEN_TPC_POW_LVL;
++	return 0;
++}
++
++int rc_req_tpc_get(struct rc_req *req, uint16_t cfg_id)
++{
++	uint16_t vlen = rc_known_value_len(cfg_id, RC_CFG_GET);
++
++	if (!req)
++		return -1;
++	if (cfg_id != RC_CFG_TPC_MODE && cfg_id != RC_CFG_TPC_POW_LVL &&
++	    cfg_id != RC_CFG_POW_MODE && cfg_id != RC_CFG_RESP_CHAIN_SEL &&
++	    cfg_id != RC_CFG_WATERFILLING)
++		return -1;
++	if (rc_req_set_header(req, cfg_id, RC_CFG_GET))
++		return -1;
++	req->value_len = vlen;
++	req->blob_len = (uint16_t)(RC_ALG_HDR_LEN + vlen);
++	return 0;
++}
++
++int rc_req_ration_get(struct rc_req *req, const uint8_t mac[6])
++{
++	if (!req || !mac)
++		return -1;
++	if (rc_req_set_header(req, RC_CFG_CURRENT_RATION, RC_CFG_GET))
++		return -1;
++	memcpy(req->value, mac, 6u);
++	req->value_len = RC_LEN_CURRENT_RATION - RC_ALG_HDR_LEN;
++	req->blob_len = RC_LEN_CURRENT_RATION;
++	return 0;
++}
++
++int rc_req_raw(struct rc_req *req, uint16_t cfg_id, uint8_t cfg_type,
++	       uint8_t pkt_type, const uint8_t *value, uint16_t value_len)
++{
++	if (!req || cfg_type > RC_CFG_GET || pkt_type > RC_PKT_NONE)
++		return -1;
++	if (value_len && !value)
++		return -1;
++	if (value_len > RC_ALG_MAX_VALUE)
++		return -1;
++	if (rc_req_set_header(req, cfg_id, cfg_type))
++		return -1;
++	if (value_len)
++		memcpy(req->value, value, value_len);
++	req->value_len = value_len;
++	req->blob_len = (uint16_t)(RC_ALG_HDR_LEN + value_len);
++	req->pkt_type = pkt_type;
++	return 0;
++}
++
++int rc_blob_build(const struct rc_req *req, uint8_t *blob, size_t cap,
++		  size_t *len)
++{
++	uint16_t known;
++
++	if (!req || !blob || !len)
++		return -1;
++	known = rc_known_value_len(req->cfg_id, req->cfg_type);
++	if (known == 0xffffu)
++		return -1;
++	if (req->cfg_type > RC_CFG_GET || req->pkt_type > RC_PKT_NONE)
++		return -1;
++	if (req->value_len != known)
++		return -1;
++	if (req->blob_len != RC_ALG_HDR_LEN + known)
++		return -1;
++	if (cap < req->blob_len)
++		return -1;
++	memset(blob, 0, req->blob_len);
++	blob[RC_ALG_OFF_CFG_ID] = (uint8_t)(req->cfg_id & 0xffu);
++	blob[RC_ALG_OFF_CFG_ID + 1u] = (uint8_t)((req->cfg_id >> 8) & 0xffu);
++	blob[RC_ALG_OFF_TYPE] = req->cfg_type;
++	blob[RC_ALG_OFF_PKT_TYPE] = req->pkt_type;
++	/* dev_ret stays 0 (the device overwrites it) */
++	blob[RC_ALG_OFF_NEED_W4] = 1u;	/* the device answers every SET/GET */
++	memcpy(blob + RC_ALG_VALUE_OFF, req->value, req->value_len);
++	*len = req->blob_len;
++	return 0;
++}
++
++/* The config-sync answer: g1 id3, payload = cookie0|cookie1|syn_id|body_len|
++ * body|pad; body = the alg_cfg blob (10-byte header + value). */
++int rc_parse_cfg_sync(uint8_t group, uint16_t id, const uint8_t *payload,
++		      size_t payload_len, struct rc_sync *out)
++{
++	const uint8_t *body;
++	uint16_t syn_id, body_len, need_w4;
++	uint32_t dev_ret;
++
++	if (!payload || !out)
++		return -1;
++	if (group != 1u || id != 3u)
++		return -1;
++	if (payload_len < 16u)
++		return -1;
++	syn_id = (uint16_t)(payload[8] | ((uint16_t)payload[9] << 8));
++	if (syn_id != RC_CFG_KEY)
++		return -1;
++	body_len = (uint16_t)(payload[10] | ((uint16_t)payload[11] << 8));
++	if (body_len < RC_ALG_HDR_LEN || body_len > RC_ALG_MAX_BLOB)
++		return -1;
++	if ((size_t)body_len + 12u > payload_len)
++		return -1;
++	body = payload + 12;
++	memset(out, 0, sizeof(*out));
++	out->cfg_id = (uint16_t)(body[0] | ((uint16_t)body[1] << 8));
++	out->cfg_type = body[2];
++	out->pkt_type = body[3];
++	dev_ret = (uint32_t)body[4] | ((uint32_t)body[5] << 8) |
++		  ((uint32_t)body[6] << 16) | ((uint32_t)body[7] << 24);
++	out->dev_ret = dev_ret;
++	need_w4 = body[8];
++	out->need_w4 = (uint8_t)need_w4;
++	out->body_len = body_len;
++	out->value_len = (uint16_t)(body_len - RC_ALG_HDR_LEN);
++	if (out->value_len > RC_ALG_MAX_VALUE)
++		return -1;
++	memcpy(out->value, body + RC_ALG_VALUE_OFF, out->value_len);
++	return 0;
++}
++
++enum rc_decision rc_precond_check(const struct rc_policy *pol)
++{
++	if (!pol)
++		return RC_DEC_OP_UNKNOWN;
++	/* The corrected C2 (fw-h2d-stall task-181): the type-3 create never
++	 * initialised ctx+0x190, so the bench-proven fault-free ladder is
++	 * TYPE 1 -> ctx4+0x190 != 0 -> ordered TXQ sync -> config events. */
++	if (!pol->ctx_type1)
++		return RC_DEC_NO_CTX_TYPE1;
++	if (!pol->ctx_attested)
++		return RC_DEC_NO_CTX_ATTEST;
++	if (!pol->txq_sent)
++		return RC_DEC_NO_TXQ_SYNC;
++	return RC_DEC_ALLOW;
++}
++
++enum rc_decision rc_check(const struct rc_policy *pol, const struct rc_req *req,
++			  enum rc_op op)
++{
++	enum rc_decision pre;
++
++	if (!pol || !req)
++		return RC_DEC_OP_UNKNOWN;
++	if (!pol->enabled)
++		return RC_DEC_DISABLED;
++	pre = rc_precond_check(pol);
++	if (pre != RC_DEC_ALLOW)
++		return pre;
++	if (pol->sent >= pol->budget)
++		return RC_DEC_BUDGET;
++	if (req->cfg_type > RC_CFG_GET || req->pkt_type > RC_PKT_NONE)
++		return RC_DEC_BAD_TYPE;
++	if (req->blob_len != RC_ALG_HDR_LEN + req->value_len ||
++	    req->blob_len > RC_ALG_MAX_BLOB)
++		return RC_DEC_BAD_LEN;
++	switch (op) {
++	case RC_OP_RATE_MODE_SET:
++		if (req->cfg_id != RC_CFG_RATE_MODE || req->cfg_type != RC_CFG_SET ||
++		    req->blob_len != RC_LEN_RATE_MODE)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->value[0] > RC_RATE_MODE_FIXED)
++			return RC_DEC_BAD_VALUE;
++		return RC_DEC_ALLOW;
++	case RC_OP_RATE_MODE_GET:
++		if (req->cfg_id != RC_CFG_RATE_MODE || req->cfg_type != RC_CFG_GET ||
++		    req->blob_len != RC_LEN_RATE_MODE)
++			return RC_DEC_ID_NOT_ALLOWED;
++		return RC_DEC_ALLOW;
++	case RC_OP_AR_SET:
++		if (req->cfg_id != RC_CFG_AR_DEV_PARAM || req->cfg_type != RC_CFG_SET ||
++		    req->blob_len != RC_LEN_AR_DEV_PARAM)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->value[0] >= RC_AR_KNOB_COUNT)
++			return RC_DEC_BAD_VALUE;
++		return RC_DEC_ALLOW;
++	case RC_OP_AR_GET:
++		if (req->cfg_id != RC_CFG_AR_DEV_PARAM || req->cfg_type != RC_CFG_GET ||
++		    req->blob_len != RC_LEN_AR_DEV_PARAM)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->value[0] >= RC_AR_KNOB_COUNT)
++			return RC_DEC_BAD_VALUE;
++		return RC_DEC_ALLOW;
++	case RC_OP_TPC_POW_LVL_SET:
++		if (req->cfg_id != RC_CFG_TPC_POW_LVL || req->cfg_type != RC_CFG_SET ||
++		    req->blob_len != RC_LEN_TPC_POW_LVL)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->value[0] > RC_TPC_POW_CTRL)
++			return RC_DEC_BAD_VALUE;
++		return RC_DEC_ALLOW;
++	case RC_OP_TPC_GET:
++		if (req->cfg_type != RC_CFG_GET)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->cfg_id != RC_CFG_TPC_MODE && req->cfg_id != RC_CFG_TPC_POW_LVL &&
++		    req->cfg_id != RC_CFG_POW_MODE &&
++		    req->cfg_id != RC_CFG_RESP_CHAIN_SEL &&
++		    req->cfg_id != RC_CFG_WATERFILLING)
++			return RC_DEC_ID_NOT_ALLOWED;
++		if (req->blob_len != RC_ALG_HDR_LEN + req->value_len ||
++		    req->blob_len > RC_ALG_MAX_BLOB)
++			return RC_DEC_BAD_LEN;
++		return RC_DEC_ALLOW;
++	case RC_OP_RATION_GET:
++		if (req->cfg_id != RC_CFG_CURRENT_RATION || req->cfg_type != RC_CFG_GET ||
++		    req->blob_len != RC_LEN_CURRENT_RATION)
++			return RC_DEC_ID_NOT_ALLOWED;
++		return RC_DEC_ALLOW;
++	case RC_OP_ARBITRARY:
++		if (!pol->arbitrary)
++			return RC_DEC_ARBITRARY_OFF;
++		/* the arbitrary probe still refuses the dedicated-parser ids whose
++		 * wire layout is not decoded (they need an explicit probe) */
++		if (rc_known_value_len(req->cfg_id, req->cfg_type) == 0xffffu)
++			return RC_DEC_ID_NOT_ALLOWED;
++		return RC_DEC_ALLOW;
++	default:
++		return RC_DEC_OP_UNKNOWN;
++	}
++}
++
++/* ---- names ---- */
++static const char *const rc_rate_mode_names[] = { "auto", "fixed" };
++static const char *const rc_tpc_pow_names[] = { "init", "sleep", "third" };
++static const char *const rc_tpc_fix_names[] = { "data", "mag", "ctrl" };
++static const char *const rc_gi_type_names[] = { "normal", "fixed" };
++static const char *const rc_ar_probe_names[] = { "normal", "slow" };
++static const char *const rc_ar_scen_names[] = { "normal", "move" };
++
++const char *rc_name_rate_mode(unsigned value)
++{
++	return value < 2u ? rc_rate_mode_names[value] : NULL;
++}
++
++const char *rc_name_tpc_pow_mode(unsigned value)
++{
++	return value < 3u ? rc_tpc_pow_names[value] : NULL;
++}
++
++const char *rc_name_tpc_fix_pow_mode(unsigned value)
++{
++	return value < 3u ? rc_tpc_fix_names[value] : NULL;
++}
++
++const char *rc_name_tpc_mode(unsigned value)
++{
++	return value < 3u ? rc_tpc_fix_names[value] : NULL;
++}
++
++const char *rc_name_gi_type(unsigned value)
++{
++	return value < 2u ? rc_gi_type_names[value] : NULL;
++}
++
++const char *rc_name_ar_probe(unsigned value)
++{
++	return value < 2u ? rc_ar_probe_names[value] : NULL;
++}
++
++const char *rc_name_ar_scen_mode(unsigned value)
++{
++	return value < 2u ? rc_ar_scen_names[value] : NULL;
++}
++
++const char *rc_name_legacy_rate(unsigned value)
++{
++	switch (value) {
++	case 0: return "1M";
++	case 1: return "2M";
++	case 2: return "5.5M";
++	case 3: return "11M";
++	case 11: return "6M";
++	case 15: return "9M";
++	case 10: return "12M";
++	case 14: return "18M";
++	case 9: return "24M";
++	case 13: return "36M";
++	case 8: return "48M";
++	case 12: return "54M";
++	default: return NULL;
++	}
++}
++
++const char *rc_name_protocol(unsigned value)
++{
++	switch (value) {
++	case 0: return "11b";
++	case 1: return "11ag";
++	case 2: return "11n";
++	case 3: return "11n_green";
++	case 4: return "11ac";
++	case 8: return "11ax_su";
++	case 9: return "11ax_mu";
++	case 10: return "11ax_er_su";
++	default: return NULL;
++	}
++}
++
++const char *rc_name_decision(enum rc_decision dec)
++{
++	switch (dec) {
++	case RC_DEC_ALLOW: return "allow";
++	case RC_DEC_DISABLED: return "disabled";
++	case RC_DEC_OP_UNKNOWN: return "op_unknown";
++	case RC_DEC_ID_NOT_ALLOWED: return "id_not_allowed";
++	case RC_DEC_BAD_VALUE: return "bad_value";
++	case RC_DEC_ARBITRARY_OFF: return "arbitrary_off";
++	case RC_DEC_BAD_LEN: return "bad_len";
++	case RC_DEC_BAD_TYPE: return "bad_type";
++	case RC_DEC_BUDGET: return "budget";
++	case RC_DEC_NO_CTX_TYPE1: return "ctx_type1_required";
++	case RC_DEC_NO_CTX_ATTEST: return "ctx190_attest_required";
++	case RC_DEC_NO_TXQ_SYNC: return "txq_sync72_required";
++	default: return "?";
++	}
++}
++
++int rc_ar_knob_by_name(const char *name)
++{
++	unsigned i;
++
++	if (!name)
++		return -1;
++	for (i = 0; i < RC_AR_KNOB_COUNT; i++) {
++		if (strcmp(name, rc_ar_knob_names[i]) == 0)
++			return (int)i;
++	}
++	/* decimal id accepted for scripting */
++	if (name[0] >= '0' && name[0] <= '9') {
++		unsigned long v = 0;
++		unsigned i2;
++
++		for (i2 = 0; name[i2]; i2++) {
++			if (name[i2] < '0' || name[i2] > '9')
++				return -1;
++			v = v * 10u + (unsigned)(name[i2] - '0');
++			if (v >= RC_AR_KNOB_COUNT)
++				return -1;
++		}
++		return (int)v;
++	}
++	return -1;
++}
++
++const char *rc_ar_knob_name(unsigned id)
++{
++	return id < RC_AR_KNOB_COUNT ? rc_ar_knob_names[id] : NULL;
++}
+\ No newline at end of file
+diff -ruN a/hi5622_rate_ctl_logic.h b/hi5622_rate_ctl_logic.h
+--- a/hi5622_rate_ctl_logic.h
++++ b/hi5622_rate_ctl_logic.h
+@@ -0,0 +1,250 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rate_ctl_logic.h - portable pure logic of the Hi5622V100
++ * rate-control / alg_cfg command surface (clean-room).
++ *
++ * Original code for the project's clean-room driver.  Every constant and
++ * wire layout below is a decoded fact about the vendor firmware command
++ * contract, documented in ../REPORT.md and ../TABLES.md (the vendor module
++ * stays local and is never committed).  This translation unit has no kernel
++ * dependency so the host selftest can compile it directly.
++ *
++ * RC-2 (wifi-rc-impl-2 lane) adds the CORRECTED C2 PRECONDITION (fw-h2d-stall
++ * lane, task-181): the rate-control config event may only be posted after the
++ * ordered H2D ladder proved (a) the context-create was the bench-proven TYPE 1
++ * and (b) its ctx4+0x190 attestation held, and (c) the ordered TXQ sync was
++ * committed.  Those three facts are carried in struct rc_policy and checked
++ * first in rc_check()/rc_precond_check(); the kernel glue fills them from the
++ * H2D layer's recorded state, never from user input.
++ *
++ * The request object is the protocol-level "alg cfg" command:
++ *   alg_cfg blob = 10-byte header + value[], carried by the proven HCC
++ *   group-0 / id-2 config event with key 0x0101 (the calibration ladder's
++ *   carrier).  The firmware answers with a g1 id3 config-sync frame whose
++ *   body is the request blob with dev_ret updated (SET) / value filled (GET).
++ *
++ * Safety model: construction only.  Nothing here writes a register, sends a
++ * frame or reads the device; the caller passes the request through the
++ * kernel-side gate (the hi5622_rate_ctl.c fail-closed glue).
++ */
++#ifndef HI5622_RATE_CTL_LOGIC_H
++#define HI5622_RATE_CTL_LOGIC_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#include <linux/stddef.h>
++/* the kernel has no stdint.h: expose the fixed-width names this unit uses */
++typedef uint8_t uint8_t;
++typedef uint16_t uint16_t;
++typedef uint32_t uint32_t;
++#else
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#endif
++
++/* ---- the alg_cfg blob (vendor decode; REPORT section 4) [V] ---- */
++#define RC_ALG_HDR_LEN		10u
++#define RC_ALG_OFF_CFG_ID	0u
++#define RC_ALG_OFF_TYPE		2u
++#define RC_ALG_OFF_PKT_TYPE	3u
++#define RC_ALG_OFF_DEV_RET	4u
++#define RC_ALG_OFF_NEED_W4	8u
++#define RC_ALG_VALUE_OFF	10u
++#define RC_ALG_MAX_VALUE	260u
++#define RC_ALG_MAX_BLOB		(RC_ALG_HDR_LEN + RC_ALG_MAX_VALUE)
++
++/* ---- the proven config-event carrier [V] ---- */
++#define RC_CFG_KEY		0x0101u		/* HCC g0 id2 config key */
++#define RC_CFG_CARRIER_OVERHEAD	0x1cu		/* 12 hdr + 16 cfg wrapper */
++#define RC_CFG_MAX_FRAME	(RC_CFG_CARRIER_OVERHEAD + RC_ALG_MAX_BLOB)
++#define RC_CFG_FB_DEFAULT	4u		/* module context that answered */
++#define RC_CFG_FB_MAX		0x12u
++
++/* ---- cfg access type [V] ---- */
++#define RC_CFG_SET		0u
++#define RC_CFG_GET		1u
++
++/* ---- packet-type field values (vendor g_ast_alg_cfg_pkt_type_info_table) ---- */
++#define RC_PKT_UCAST_DATA	0u
++#define RC_PKT_MCAST_DATA	1u
++#define RC_PKT_BCAST_DATA	2u
++#define RC_PKT_MUMIMO_DATA	3u
++#define RC_PKT_OFDMA_DATA	4u
++#define RC_PKT_UCAST_MGMT	5u
++#define RC_PKT_MCAST_MGMT	6u
++#define RC_PKT_BCAST_MGMT	7u
++#define RC_PKT_PROT_CTRL	8u
++#define RC_PKT_NDP		9u
++#define RC_PKT_NDPA		10u
++#define RC_PKT_RESP_CTRL	11u
++#define RC_PKT_OTHER_CTRL	12u
++#define RC_PKT_NONE		13u
++#define RC_PKT_ANY		0xffu
++
++/* ---- rate-control cfg ids (vendor process table) [V] ---- */
++#define RC_CFG_RATE_MODE	401
++#define RC_CFG_FEC_CODING	402
++#define RC_CFG_MU_FEC_CODING	403
++#define RC_CFG_PROTECT_MODE	404
++#define RC_CFG_HE_LTF_TYPE	405
++#define RC_CFG_DCM_ENABLE	406
++#define RC_CFG_FREQ_BW_MODE	407
++#define RC_CFG_DEBUG_LOG_SWITCH	408
++#define RC_CFG_AR_DEV_PARAM	409
++#define RC_CFG_TX_CNT		410
++#define RC_CFG_HI_RATE		411
++#define RC_CFG_HE_SIGB_RATE	412
++#define RC_CFG_MU_TX_CNT	413
++#define RC_CFG_MU_RATE		414
++#define RC_CFG_MU_RTS_MODE	415
++#define RC_CFG_LEGACY_RATE	416
++#define RC_CFG_PREAMBLE_TYPE	417
++#define RC_CFG_GI_TYPE		418
++#define RC_CFG_AR_PROBE		419
++#define RC_CFG_SIGB_DCM		420
++#define RC_CFG_CURRENT_RATION	421
++#define RC_CFG_AR_SCEN_MODE	422
++#define RC_CFG_TPC_MODE		1801
++#define RC_CFG_TPC_POW_LVL	1802
++#define RC_CFG_TPC_CODE		1803
++#define RC_CFG_POW_MODE		1804
++#define RC_CFG_RESP_CHAIN_SEL	1805
++#define RC_CFG_SET_STA_ID	1806
++#define RC_CFG_FAR_DIST_SWITCH	1807
++#define RC_CFG_NEAR_DIST_SWITCH	1808
++#define RC_CFG_WATERFILLING	1809
++
++/* ---- rate_mode enum (g_ast_alg_cfg_rate_mode_tbl) [V] ---- */
++#define RC_RATE_MODE_AUTO	0u
++#define RC_RATE_MODE_FIXED	1u
++
++/* ---- tpc_pow_lvl mode enum (g_ast_alg_cfg_tpc_fix_pow_mode_tbl) [V] ---- */
++#define RC_TPC_POW_DATA		0u
++#define RC_TPC_POW_MAG		1u
++#define RC_TPC_POW_CTRL		2u
++
++/* ---- pow_mode enum (g_ast_alg_cfg_tpc_pow_mode_tbl) [V] ---- */
++#define RC_TPC_MODE_INIT	0u
++#define RC_TPC_MODE_SLEEP	1u
++#define RC_TPC_MODE_THIRD	2u
++
++/* ---- the decoded per-command blob lengths (vendor LUT+14) [V] ---- */
++#define RC_LEN_RATE_MODE	11u
++#define RC_LEN_AR_DEV_PARAM	15u
++#define RC_LEN_TPC_POW_LVL	12u
++#define RC_LEN_TPC_MODE		11u
++#define RC_LEN_POW_MODE		11u
++#define RC_LEN_RESP_CHAIN_SEL	11u
++#define RC_LEN_WATERFILLING	11u
++#define RC_LEN_CURRENT_RATION	30u
++
++/* ---- the 26 ar_dev_param knobs (vendor g_ast_alg_cfg_ar_dev_param_tbl) ---- */
++#define RC_AR_KNOB_COUNT	26u
++
++/* A protocol-level alg config request (what the carrier carries). */
++struct rc_req {
++	uint16_t cfg_id;
++	uint8_t  cfg_type;		/* RC_CFG_SET / RC_CFG_GET */
++	uint8_t  pkt_type;		/* RC_PKT_* */
++	uint16_t value_len;
++	uint16_t blob_len;		/* 10 + value_len for the known commands */
++	uint8_t  value[RC_ALG_MAX_VALUE];
++};
++
++/* The firmware's config-sync answer (g1 id3, syn 0x0101), decoded. */
++struct rc_sync {
++	uint16_t cfg_id;
++	uint8_t  cfg_type;
++	uint8_t  pkt_type;
++	uint32_t dev_ret;
++	uint8_t  need_w4;
++	uint16_t body_len;
++	uint16_t value_len;
++	uint8_t  value[RC_ALG_MAX_VALUE];
++};
++
++/* A fail-closed policy snapshot (filled by the kernel glue from its params
++ * and from the H2D layer's recorded corrected-C2 ladder state). */
++struct rc_policy {
++	bool     enabled;		/* rate_ctl != 0 */
++	bool     arbitrary;		/* rate_ctl_arbitrary != 0 */
++	uint32_t budget;		/* per-load frame budget */
++	uint32_t sent;			/* frames already committed this load */
++	/* the corrected C2 precondition (see rc_precond_check) */
++	bool     ctx_type1;		/* this load's ctx_create was TYPE 1 */
++	bool     ctx_attested;		/* ctx4+0x190 attestation held after it */
++	bool     txq_sent;		/* the ordered TXQ sync was committed */
++};
++
++enum rc_op {
++	RC_OP_RATE_MODE_SET = 0,
++	RC_OP_RATE_MODE_GET,
++	RC_OP_AR_SET,
++	RC_OP_AR_GET,
++	RC_OP_TPC_POW_LVL_SET,
++	RC_OP_TPC_GET,
++	RC_OP_RATION_GET,
++	RC_OP_ARBITRARY,
++};
++
++enum rc_decision {
++	RC_DEC_ALLOW = 0,
++	RC_DEC_DISABLED,
++	RC_DEC_OP_UNKNOWN,
++	RC_DEC_ID_NOT_ALLOWED,
++	RC_DEC_BAD_VALUE,
++	RC_DEC_ARBITRARY_OFF,
++	RC_DEC_BAD_LEN,
++	RC_DEC_BAD_TYPE,
++	RC_DEC_BUDGET,
++	/* the corrected C2 precondition (RC-2) */
++	RC_DEC_NO_CTX_TYPE1,	/* no TYPE-1 context-create this load */
++	RC_DEC_NO_CTX_ATTEST,	/* ctx4+0x190 attestation absent/failed */
++	RC_DEC_NO_TXQ_SYNC,	/* the ordered TXQ sync has not been committed */
++};
++
++/* ---- builders (return 0 on success, negative errno-style on refusal) ---- */
++int rc_req_rate_mode(struct rc_req *req, unsigned mode);
++int rc_req_rate_mode_get(struct rc_req *req);
++int rc_req_ar_dev_param(struct rc_req *req, const char *knob, unsigned long value);
++int rc_req_ar_dev_param_get(struct rc_req *req, const char *knob);
++int rc_req_tpc_pow_lvl(struct rc_req *req, unsigned mode, unsigned level);
++int rc_req_tpc_get(struct rc_req *req, uint16_t cfg_id);
++int rc_req_ration_get(struct rc_req *req, const uint8_t mac[6]);
++int rc_req_raw(struct rc_req *req, uint16_t cfg_id, uint8_t cfg_type,
++	       uint8_t pkt_type, const uint8_t *value, uint16_t value_len);
++
++/* Build the alg_cfg blob bytes for a request; validates id/len/type. */
++int rc_blob_build(const struct rc_req *req, uint8_t *blob, size_t cap,
++		  size_t *len);
++
++/* Decode a g1 id3 config-sync payload; returns 0 when it is a well-formed
++ * key-0x0101 alg answer, negative otherwise (never touches the device). */
++int rc_parse_cfg_sync(uint8_t group, uint16_t id, const uint8_t *payload,
++		      size_t payload_len, struct rc_sync *out);
++
++/* The fail-closed decision matrix (pure). */
++enum rc_decision rc_check(const struct rc_policy *pol, const struct rc_req *req,
++			  enum rc_op op);
++
++/* The corrected-C2 precondition, evaluated first (pure): returns RC_DEC_ALLOW
++ * when the ordered ladder was proven this load, else the specific refusal.
++ * rc_check() calls this before any wire-shape/allowlist test. */
++enum rc_decision rc_precond_check(const struct rc_policy *pol);
++
++/* ---- decoded enum/name lookups (NULL / -1 when unknown) ---- */
++const char *rc_name_rate_mode(unsigned value);
++const char *rc_name_tpc_pow_mode(unsigned value);
++const char *rc_name_tpc_mode(unsigned value);
++const char *rc_name_tpc_fix_pow_mode(unsigned value);
++const char *rc_name_gi_type(unsigned value);
++const char *rc_name_ar_probe(unsigned value);
++const char *rc_name_ar_scen_mode(unsigned value);
++const char *rc_name_legacy_rate(unsigned value);
++const char *rc_name_protocol(unsigned value);
++const char *rc_name_decision(enum rc_decision dec);
++int rc_ar_knob_by_name(const char *name);
++const char *rc_ar_knob_name(unsigned id);
++
++#endif /* HI5622_RATE_CTL_LOGIC_H */
+\ No newline at end of file
+diff -ruN a/hi5622_rate_ctl_wire.c b/hi5622_rate_ctl_wire.c
+--- a/hi5622_rate_ctl_wire.c
++++ b/hi5622_rate_ctl_wire.c
+@@ -0,0 +1,100 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rate_ctl_wire.c - the rate-control alg_cfg config-event wire builder
++ * (Hi5622V100 clean-room driver, wifi-rc-impl-2 lane, RC-2).
++ *
++ * ORIGINAL clean-room code: the carrier shape is the committed calibration
++ * contract (../wifi-rate-ctl/REPORT.md sec 4; ../wifi-proto-seq/recipes/
++ * cal-alg-ladder.json P3) and h2d_frames' exact-frame library re-validates
++ * every byte (transport + firmware table + handler) before the wire is
++ * returned.  No vendor source/object/firmware byte is reproduced.
++ */
++#include "hi5622_rate_ctl_wire.h"
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/slab.h>
++#else
++#include <errno.h>
++#include <stdlib.h>
++#endif
++
++static const uint8_t rc_wire_token[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
++static const uint8_t rc_wire_tail[4] = { 0, 0, 0, 0 };
++
++/* struct h2d_frame embeds the maximum payload (0x674 B), so it must not live
++ * on the kernel stack (the module builds with -Werror=frame-larger-than=1024).
++ * Heap-allocate it in both worlds; the builder is otherwise pure. */
++static struct h2d_frame *rc_wire_frame_alloc(void)
++{
++#ifdef __KERNEL__
++	return kmalloc(sizeof(struct h2d_frame), GFP_KERNEL);
++#else
++	return malloc(sizeof(struct h2d_frame));
++#endif
++}
++
++static void rc_wire_frame_free(struct h2d_frame *f)
++{
++#ifdef __KERNEL__
++	kfree(f);
++#else
++	free(f);
++#endif
++}
++
++int rc_wire_build(const uint8_t *blob, uint16_t blob_len, uint8_t fb,
++		  uint8_t *wire, size_t cap, size_t *out_len)
++{
++	struct h2d_frame *f;
++	enum h2d_err err = H2D_OK;
++	size_t wire_len = 0;
++	int rc;
++
++	if (!blob || !wire || !out_len)
++		return -EINVAL;
++	/* The blob must be a complete alg_cfg header + value, and the carrier
++	 * bound must hold (fail closed, never guess a length). */
++	if (blob_len < RC_ALG_HDR_LEN || blob_len > RC_ALG_MAX_BLOB)
++		return -EINVAL;
++	if (fb > RC_CFG_FB_MAX)
++		return -EINVAL;
++	if (cap < (size_t)RC_WIRE_CARRIER_OVERHEAD + blob_len)
++		return -ENOSPC;
++	f = rc_wire_frame_alloc();
++	if (!f)
++		return -ENOMEM;
++	/* Chunk 0: the shared config-event builder (group 0 / id 2 / key
++	 * 0x0101 / 8-byte zero token / u16 len / blob / 4-byte zero tail), the
++	 * exact shape the bench proved on the calibration ladder. */
++	rc = h2d_build_g0_cfg_event(f, 2u, 0u, 0u, fb, 0u, rc_wire_token,
++				    (u16)RC_CFG_KEY, blob, blob_len,
++				    rc_wire_tail, &err);
++	if (rc != 0) {
++		rc_wire_frame_free(f);
++		return -EPERM;
++	}
++	/* Chunk 1: wire encode re-runs the transport/firmware/handler/policy
++	 * validation on the frame struct before a byte can reach the ring. */
++	rc = h2d_frame_encode(f, wire, cap, &wire_len, &err);
++	rc_wire_frame_free(f);
++	if (rc != 0)
++		return -EPERM;
++	if (wire_len != (size_t)RC_WIRE_CARRIER_OVERHEAD + blob_len)
++		return -EPERM;
++	*out_len = wire_len;
++	return 0;
++}
++
++int rc_wire_build_req(const struct rc_req *req, uint8_t fb,
++		      uint8_t *wire, size_t cap, size_t *out_len)
++{
++	uint8_t blob[RC_ALG_MAX_BLOB];
++	size_t blob_len = 0;
++
++	if (!req)
++		return -EINVAL;
++	if (rc_blob_build(req, blob, sizeof(blob), &blob_len) != 0)
++		return -EINVAL;
++	return rc_wire_build(blob, (uint16_t)blob_len, fb, wire, cap, out_len);
++}
+diff -ruN a/hi5622_rate_ctl_wire.h b/hi5622_rate_ctl_wire.h
+--- a/hi5622_rate_ctl_wire.h
++++ b/hi5622_rate_ctl_wire.h
+@@ -0,0 +1,46 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_rate_ctl_wire.h - the wire builder for the rate-control alg_cfg
++ * config events (Hi5622V100 clean-room driver, wifi-rc-impl-2 lane, RC-2).
++ *
++ * The rate-control command carrier is the calibration ladder's bench-proven
++ * HCC group 0 / id 2 / key 0x0101 config event: the 12-byte HCC header, the
++ * 8-byte token, the u16 key, the u16 blob length, the alg_cfg blob and the
++ * inherited 4-byte zero tail (28 bytes of carrier + the blob).  The 39-byte
++ * SET rate_mode auto wire is derived in ../REPORT.md sec 3 and pinned byte
++ * for byte by ../tools/rc2_frame_selftest.c.
++ *
++ * This unit is pure C (h2d_frames.h is the project's portable exact-frame
++ * library) so the host selftest compiles it unchanged.  It constructs bytes
++ * only: no device access, no register write, no libc beyond string.h.
++ */
++#ifndef HI5622_RATE_CTL_WIRE_H
++#define HI5622_RATE_CTL_WIRE_H
++
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stddef.h>
++#endif
++#include "h2d_frames.h"
++#include "hi5622_rate_ctl_logic.h"
++
++/* 12-byte HCC header + 8 token + 2 key + 2 len + 4 tail. */
++#define RC_WIRE_CARRIER_OVERHEAD	28u
++/* The maximum wire this surface can build (10-byte alg header + 260 value). */
++#define RC_WIRE_MAX_LEN	(RC_WIRE_CARRIER_OVERHEAD + RC_ALG_MAX_BLOB)
++
++/* Build one complete alg_cfg config-event wire frame from an already-built
++ * alg_cfg blob.  dst is the vendor's 0; fb is the module-context selector
++ * (header field B; the proven calibration frames and the C2 type-1 create use
++ * module 4).  Returns 0 on success, -EINVAL/-ENOSPC/-EPERM (fail closed) on a
++ * malformed request; *out_len is the wire length (28 + blob_len). */
++int rc_wire_build(const uint8_t *blob, uint16_t blob_len, uint8_t fb,
++		  uint8_t *wire, size_t cap, size_t *out_len);
++
++/* Convenience: build the blob from a protocol-level request (rc_blob_build's
++ * strict validation included) and then the wire. */
++int rc_wire_build_req(const struct rc_req *req, uint8_t fb,
++		      uint8_t *wire, size_t cap, size_t *out_len);
++
++#endif /* HI5622_RATE_CTL_WIRE_H */
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild
++++ b/Kbuild
+@@ -40,6 +40,7 @@
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \
+ 		 hi5622_data_tx_logic.o hi5622_data_tx.o \
++		 hi5622_rate_ctl_logic.o hi5622_rate_ctl_wire.o hi5622_rate_ctl.o \
+ 		 hi5622_ba.o
+ 
+ ccflags-y += -I$(src)
+diff -ruN a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -23,6 +23,7 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_cfg80211.h"
+ #include "hi5622_dp.h"
++#include "hi5622_rate_ctl.h"
+ #include "h2d_send.h"
+ 
+ /* ---------------------------------------------------------------------
+@@ -76,6 +77,7 @@
+ 	{ "d2h", hi5622_d2h_add_attrs, hi5622_d2h_del_attrs },
+ 	{ "dp", hi5622_dp_add_attrs, hi5622_dp_del_attrs },
+ 	{ "cfg80211", hi5622_cfg80211_add_attrs, hi5622_cfg80211_del_attrs },
++	{ "rate_ctl", hi5622_rate_ctl_add_attrs, hi5622_rate_ctl_del_attrs },
+ };
+ 
+ static int hi5622_add_all_attrs(struct device *dev)
