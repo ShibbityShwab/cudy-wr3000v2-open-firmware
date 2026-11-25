@@ -1,0 +1,48 @@
+# lane wifi-r1-band-diff (task-183) - keep the band byte in the VAP-start body
+#
+# Base tree: the wifi-5ghz-beacon lane's build tree (/tmp/beacon5g-build, built
+#   by ../wifi-5ghz-beacon/tools/build-beacon5g-ready.sh; base artifact
+#   hi5622_wifi.ko 356,600 B sha256
+#   bc1cc0ead2c5b98a35eea875c353dc7e5bcf2e39b61ba9427408b714ea9a1bbb, 59 params;
+#   this is the module the CW-0 and R1 fires ran).
+# Base file pin (sha256; tools/build-r1-band.sh refuses on drift):
+#   hi5622_vapscan_provider.c
+#     bc7e3ede24eaa21bc9ecf01dfb82687898a4e5fc378e77926f77619e200ce828
+#
+# What changed: ONE body field in vapscan_vap_start()'s g0-id1 branch
+#   (hi5622_vap_start_mode == 1, the fired/default carrier):
+#     gp.cfg_a = p->band;   -> vsf_build_vap_start() data[2]
+#                           -> g0 id1 key 0x0065 body[2]
+#                           -> firmware VAP-start worker CA 0x46394 stores it
+#                              to module ctx+0x11 (the band byte)
+#     gp.cfg_b = 0;         -> data[3]/body[3] -> ctx+0x12 (vendor chip/field)
+#   The vendor fills these two bytes from its VAP object (data[2] = vap+0x11 =
+#   band, data[3] = vap+0x12 = chip id); leaving both 0 cleared the channel
+#   worker's band byte after every completed band-1 AP start
+#   (0x01000128 -> 0x01000028) and cleared the firmware's band-1 VAP flag.
+#
+# No wire layout changes, no register writes, no new module parameter; the
+# 2.4 GHz path is byte-identical (band 0), the VAP-start frame size is
+# unchanged (12-byte body).  The WAL carrier branch is untouched.
+#
+# Apply: patch -p1 < 0001-vap-start-band.patch   (in the staged tree)
+# Build: tools/build-r1-band.sh (host-only; the .ko is local evidence only)
+# Evidence: ../REPORT.md sections 2 and 4.
+
+--- a/hi5622_vapscan_provider.c
++++ b/hi5622_vapscan_provider.c
+@@ -276,6 +276,14 @@
+ 		 * body[0] is the channel argument [V]; 0 keeps the legacy
+ 		 * bench-proven frame byte-identical. */
+ 		gp.channel = p->channel;
++		/* wifi-r1-band-diff (task-183): the vendor VAP-start body carries the
++		 * VAP object band byte at data[2] (vap+0x11) and the chip field at
++		 * data[3] (vap+0x12); firmware worker CA 0x46394 stores them into
++		 * module ctx+0x11/+0x12.  Leaving cfg_a = 0 cleared the channel
++		 * worker's band byte (0x01000128 -> 0x01000028) after every
++		 * completed band-1 AP start, so a restart wait read band 0. */
++		gp.cfg_a = p->band;
++		gp.cfg_b = 0u;		/* vap+0x12 = vendor chip/field id, 0 */
+ 		rc = vsf_build_vap_start(f, &gp);
+ 	} else {
+ 		struct vsf_wal_vap_start sp;

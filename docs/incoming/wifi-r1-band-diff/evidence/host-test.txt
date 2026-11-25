@@ -1,0 +1,43 @@
+PASS  ap_chan frame total = 28 + 4 = 32 B
+PASS  ap_chan key at wire+0x14 = 0x0124
+PASS  ap_chan body length at wire+0x16 = 4
+PASS  ap_chan body at wire+0x18 = {1, 0, 40, 0}
+PASS  ap_chan inherited pad = ff ff ff ff
+PASS  vap_start frame total = 28 + 12 = 40 B
+PASS  vap_start key at wire+0x14 = 0x0065
+PASS  vap_start body length at wire+0x16 = 12
+PASS  vap_start body[0..3] = {channel, state, cfg_a, cfg_b}
+PASS  0x01000128 is little-endian bytes 28 01 00 01
+PASS  0x01000028 is little-endian bytes 28 00 00 01 (NOT 28 00 01 00)
+PASS  the two words differ in exactly the +0x11 byte (XOR 0x100)
+PASS  +0x13 stays 1 = ch40's band-1 table index (ch40 -> index 1)
+PASS  0x0124 ch40 band1 store = 0x01000128
+PASS  0x0124 band0 ch40 is REFUSED (0x3E8, no store)
+PASS  0x0124 band0 ch6 store = 0x05000006
+PASS  0x0124 band1 ch36 store = 0x00000124
+PASS  VAP start with cfg_a=0/cfg_b=0 clobbers 0x01000128 -> 0x01000028
+PASS  VAP start with cfg_a=band/cfg_b=0 keeps 0x01000128
+PASS  VAP start clobbers ch36 0x00000124 -> 0x00000024 (invisible: gate aborts before it)
+PASS  VAP start leaves a band-0 word unchanged (0x05000006)
+PASS  fired old gate PASSES 0x01000128 (band1 ch40 idx1)
+PASS  fired old gate REFUSES 0x01000028 (the R1 line)
+PASS  decoded gate REFUSES 0x01000028 as well
+PASS  decoded gate PASSES 0x01000128
+PASS  decoded gate PASSES ch36 0x00000124 (index 0)
+PASS  fired old gate REFUSES ch36 0x00000124 (the G6b false negative - why the clobber never ran on ch36)
+PASS  pre-fix first start ends at 0x01000028 (the CW-2 live word)
+PASS  pre-fix restart wait on the stale word REFUSES
+PASS  post-fix first start ends at 0x01000128 (band byte survives)
+PASS  post-fix restart wait on the persisted word PASSES
+PASS  post-fix restart with no fresh 0x0124 store still reads band 1
+PASS  pre-fix restart with no fresh store reads 0x01000028 (the R1 case)
+PASS  second start ap_chan frame is byte-identical to the first start's
+PASS  patched source: vapscan_vap_start() found
+PASS  patched source: cfg_a derives from p->band
+PASS  patched source: cfg_b derives 0
+PASS  source-driven model ends at 0x01000128
+PASS  base source: cfg_a is unset/zero (the bug)
+
+R1-BAND-MODEL: 39/39 PASS
+source:      /tmp/r1-band-hosttest/hi5622_vapscan_provider.c
+base source: /tmp/beacon5g-build/hi5622_vapscan_provider.c
