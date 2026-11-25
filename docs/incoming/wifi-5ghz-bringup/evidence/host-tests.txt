@@ -1,0 +1,6 @@
+== 1. portable band5g selftest (gcc)
+114 checks, 0 failure(s)
+PASS 114 checks
+== 2. patch static checks
+20 static+selftest checks, 0 failure(s)
+== host tests PASS (no device contacted)

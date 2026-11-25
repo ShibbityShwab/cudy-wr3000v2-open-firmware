@@ -1,0 +1,718 @@
+diff -ruN a/hi5622_band5g.c b/hi5622_band5g.c
+--- a/hi5622_band5g.c	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_band5g.c	2026-11-25 12:39:05.509522537 +0700
+@@ -0,0 +1,261 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_band5g.c - 5 GHz band-enable / band-config helpers (clean-room).
++ *
++ * See hi5622_band5g.h for the design and ../REPORT.md for the evidence.
++ * The tables are the vendor's static band tables, decoded from:
++ *   host module  g_ast_channel_list_2G / g_ast_channel_list_5G
++ *                (.data+0x3b8 / .data+0x3f0, 4-byte entries {u8 chan; u8 0xff})
++ *                g_ast_freq_map_2g / g_ast_freq_map_5g
++ *                (.rodata+0x918 / .rodata+0x8a4, 4-byte {u16 freq; u8 chan})
++ *   firmware     CA 0x117B48 / CA 0x117AD4 (same 14/29 channel numbers),
++ *                validator CA 0x10172C, H1 handler CA 0x5FF64.
++ */
++#include "hi5622_band5g.h"
++
++#ifdef __KERNEL__
++#include <linux/string.h>
++#else
++#include <string.h>
++#endif
++
++/* 2.4 GHz: 14 channels, 2412..2472 + 2484 (ch14).  Flags 0: the kernel
++ * regulatory core owns the restrictions on this band (same policy as the
++ * bench-validated driver). */
++static const struct hi5622_band5g_chan hi5622_band5g_2g[] = {
++	{ 2412,  1,  0 }, { 2417,  2,  0 }, { 2422,  3,  0 },
++	{ 2427,  4,  0 }, { 2432,  5,  0 }, { 2437,  6,  0 },
++	{ 2442,  7,  0 }, { 2447,  8,  0 }, { 2452,  9,  0 },
++	{ 2457, 10,  0 }, { 2462, 11,  0 }, { 2467, 12,  0 },
++	{ 2472, 13,  0 }, { 2484, 14,  0 },
++};
++
++/* 5 GHz: 29 channels in the vendor table order (index 0..28):
++ * 36 40 44 48 | 52 56 60 64 | 100..140 | 144 | 149 153 157 161 165 |
++ * 184 188 192 196.  DFS channels carry RADAR|NO_IR (the kernel regdb still
++ * decides); the 4.9 GHz block is passive-only. */
++static const struct hi5622_band5g_chan hi5622_band5g_5g[] = {
++	{ 5180,  36, 0 },
++	{ 5200,  40, 0 },
++	{ 5220,  44, 0 },
++	{ 5240,  48, 0 },
++	{ 5260,  52, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5280,  56, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5300,  60, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5320,  64, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5500, 100, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5520, 104, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5540, 108, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5560, 112, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5580, 116, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5600, 120, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5620, 124, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5640, 128, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5660, 132, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5680, 136, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5700, 140, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5720, 144, HI5622_BAND5G_CHAN_RADAR | HI5622_BAND5G_CHAN_NO_IR },
++	{ 5745, 149, 0 },
++	{ 5765, 153, 0 },
++	{ 5785, 157, 0 },
++	{ 5805, 161, 0 },
++	{ 5825, 165, 0 },
++	{ 4920, 184, HI5622_BAND5G_CHAN_NO_IR },
++	{ 4940, 188, HI5622_BAND5G_CHAN_NO_IR },
++	{ 4960, 192, HI5622_BAND5G_CHAN_NO_IR },
++	{ 4980, 196, HI5622_BAND5G_CHAN_NO_IR },
++};
++
++const struct hi5622_band5g_chan *hi5622_band5g_channels(u8 band, u16 *count)
++{
++	if (band == HI5622_BAND5G_2GHZ) {
++		if (count)
++			*count = (u16)(sizeof(hi5622_band5g_2g) /
++				       sizeof(hi5622_band5g_2g[0]));
++		return hi5622_band5g_2g;
++	}
++	if (band == HI5622_BAND5G_5GHZ) {
++		if (count)
++			*count = (u16)(sizeof(hi5622_band5g_5g) /
++				       sizeof(hi5622_band5g_5g[0]));
++		return hi5622_band5g_5g;
++	}
++	if (count)
++		*count = 0;
++	return NULL;
++}
++
++int hi5622_band5g_chan_count(u8 band)
++{
++	u16 n = 0;
++
++	hi5622_band5g_channels(band, &n);
++	return (int)n;
++}
++
++int hi5622_band5g_freq_to_chan(u8 band, u16 freq, u8 *out_chan)
++{
++	const struct hi5622_band5g_chan *tbl;
++	u16 n = 0, i;
++
++	if (!out_chan)
++		return -EINVAL;
++	tbl = hi5622_band5g_channels(band, &n);
++	if (!tbl || !n)
++		return -EINVAL;
++	if (!freq)
++		return -ENOENT;
++	for (i = 0; i < n; i++) {
++		if (tbl[i].freq == freq) {
++			*out_chan = tbl[i].num;
++			return 0;
++		}
++	}
++	return -ENOENT;
++}
++
++int hi5622_band5g_chan_to_freq(u8 band, u8 chan, u16 *out_freq)
++{
++	const struct hi5622_band5g_chan *tbl;
++	u16 n = 0, i;
++
++	if (!out_freq)
++		return -EINVAL;
++	tbl = hi5622_band5g_channels(band, &n);
++	if (!tbl || !n)
++		return -EINVAL;
++	for (i = 0; i < n; i++) {
++		if (tbl[i].num == chan) {
++			*out_freq = tbl[i].freq;
++			return 0;
++		}
++	}
++	return -ENOENT;
++}
++
++int hi5622_band5g_chan_index(u8 band, u8 chan, u8 *out_idx)
++{
++	const struct hi5622_band5g_chan *tbl;
++	u16 n = 0, i;
++
++	if (!out_idx)
++		return -EINVAL;
++	tbl = hi5622_band5g_channels(band, &n);
++	if (!tbl || !n)
++		return -EINVAL;
++	for (i = 0; i < n; i++) {
++		if (tbl[i].num == chan) {
++			if (i > 0xffu)
++				return -EINVAL;
++			*out_idx = (u8)i;
++			return 0;
++		}
++	}
++	return -ENOENT;
++}
++
++int hi5622_band5g_chan_valid(u8 band, u8 chan)
++{
++	const struct hi5622_band5g_chan *tbl;
++	u16 n = 0, i;
++
++	tbl = hi5622_band5g_channels(band, &n);
++	if (!tbl || !n)
++		return 0;
++	for (i = 0; i < n; i++) {
++		if (tbl[i].num == chan)
++			return 1;
++	}
++	return 0;
++}
++
++int hi5622_band5g_ap_chan_prepare(u32 band5g_enable, u8 band, u16 center_freq,
++				  u8 channel,
++				  struct hi5622_band5g_ap_chan *out)
++{
++	u8 chan = channel;
++	int rc;
++
++	if (!out)
++		return -EINVAL;
++	if (band > HI5622_BAND5G_5GHZ)
++		return -EINVAL;
++
++	/* Fail closed: the 5 GHz AP path is only reachable with band5g=1. */
++	if (band == HI5622_BAND5G_5GHZ && !band5g_enable)
++		return -EOPNOTSUPP;
++
++	if (!chan) {
++		if (!center_freq)
++			return -EINVAL;
++		rc = hi5622_band5g_freq_to_chan(band, center_freq, &chan);
++		if (rc)
++			return rc;
++	} else if (center_freq) {
++		u8 derived = 0;
++
++		rc = hi5622_band5g_freq_to_chan(band, center_freq, &derived);
++		if (rc)
++			return rc;
++		if (derived != chan)
++			return -EINVAL;
++	}
++
++	if (!hi5622_band5g_chan_valid(band, chan))
++		return -EINVAL;
++	out->band = band;
++	out->channel = chan;
++	return 0;
++}
++
++int hi5622_band5g_band_cfg_chan(u32 band5g_enable, u8 band, u16 freq,
++				u16 *out_chan)
++{
++	u8 chan = 0;
++	int rc;
++
++	if (!out_chan)
++		return -EINVAL;
++	if (band > HI5622_BAND5G_5GHZ)
++		return -EINVAL;
++	if (band == HI5622_BAND5G_5GHZ && !band5g_enable)
++		return -EOPNOTSUPP;
++	rc = hi5622_band5g_freq_to_chan(band, freq, &chan);
++	if (rc)
++		return rc;
++	*out_chan = chan;
++	return 0;
++}
++
++u16 hi5622_band5g_ht_cap_word(u8 band)
++{
++	/* 2.4 GHz: the bench-validated baseline word (SGI20 | MAX_AMSDU);
++	 * 5 GHz: vendor 0x0062 = SUP_WIDTH_20_40 | SGI_20 | SGI_40. */
++	return band == HI5622_BAND5G_5GHZ ? 0x0062u : 0x0820u;
++}
++
++u32 hi5622_band5g_vht_cap_word(u8 band)
++{
++	if (band == HI5622_BAND5G_2GHZ)
++		return 0x00400000u;	/* HTC_VHT only */
++	if (band == HI5622_BAND5G_5GHZ)
++		return 0x00400064u;	/* HTC_VHT|160 MHz|SGI80|SGI160 */
++	return 0xffffffffu;
++}
++
++u16 hi5622_band5g_vht_mcs_map(u8 band)
++{
++	if (band > HI5622_BAND5G_5GHZ)
++		return 0xffffu;
++	return 0xfffau;		/* 2 SS, MCS 0..9, rx and tx */
++}
++
++u8 hi5622_band5g_max_power(u8 band)
++{
++	return band == HI5622_BAND5G_5GHZ ? 23u : 30u;
++}
++
++const char *hi5622_band5g_name(u8 band)
++{
++	return band == HI5622_BAND5G_5GHZ ? "5GHz" : "2.4GHz";
++}
+diff -ruN a/hi5622_band5g.h b/hi5622_band5g.h
+--- a/hi5622_band5g.h	1970-01-01 07:00:00.000000000 +0700
++++ b/hi5622_band5g.h	2026-11-25 12:39:05.509466021 +0700
+@@ -0,0 +1,117 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_band5g.h - 5 GHz band-enable / band-config helpers for the
++ * Hi5622V100 clean-room Wi-Fi driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-5ghz, shared task task-145,
++ * 2026-11-24).  No vendor source text, object code, firmware byte or
++ * calibration value is reproduced; every constant is a decoded fact with the
++ * vendor-module / firmware address recorded in ../REPORT.md and ../TABLES.md.
++ *
++ * Purpose
++ * -------
++ * The vendor driver builds ONE wiphy per logical band (band type 0 = 2.4 GHz,
++ * 1 = 5 GHz) and keeps two static band/channel tables:
++ *   - 14 channels: ch1..14   (2412..2484 MHz)
++ *   - 29 channels: ch36..64, 100..144, 149..165, 184..196
++ *                 (5180..5320, 5500..5720, 5745..5825, 4920..4980 MHz)
++ * The firmware carries the SAME two tables (2.4 GHz at CA 0x117B48, 5 GHz at
++ * CA 0x117AD4, 4-byte stride) and resolves a channel NUMBER to a band-local
++ * INDEX 0..13 / 0..28 (CA 0x10172C).  The H1 band-config message (g0 id10,
++ * firmware handler CA 0x5FF64) carries the channel NUMBER in a u16 and asks
++ * the firmware chip channel table (CA 0xD6A1E) for the per-channel context,
++ * so no separate 5 GHz "channel id" table exists.
++ *
++ * Everything here is pure C99 (host-testable with tools/selftest.sh); the
++ * driver only acts on it when the band5g module parameter is 1 (default 0 =
++ * bench-validated 2.4 GHz behaviour, 5 GHz AP start fail-closed).
++ */
++#ifndef HI5622_BAND5G_H
++#define HI5622_BAND5G_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#else
++#include <errno.h>
++#include <stddef.h>
++#include <stdint.h>
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++
++#define HI5622_BAND5G_2GHZ		0u
++#define HI5622_BAND5G_5GHZ		1u
++
++#define HI5622_BAND5G_2G_COUNT		14u
++#define HI5622_BAND5G_5G_COUNT		29u
++
++/* Channel flags (derived from the vendor wiphy tables + the regulatory
++ * rules the bench-validated driver already applies; the kernel regdb still
++ * has the final say at wiphy registration). */
++#define HI5622_BAND5G_CHAN_NO_IR	0x01u	/* passive / no initiator */
++#define HI5622_BAND5G_CHAN_RADAR	0x02u	/* DFS radar channel */
++
++struct hi5622_band5g_chan {
++	u16	freq;	/* centre frequency, MHz */
++	u8	num;	/* IEEE channel number */
++	u8	flags;	/* HI5622_BAND5G_CHAN_* */
++};
++
++/* Vendor static band table (2.4 GHz: 14 entries; 5 GHz: 29 entries incl
++ * ch144 and the 4.9 GHz public-safety block).  NULL for an invalid band. */
++const struct hi5622_band5g_chan *hi5622_band5g_channels(u8 band, u16 *count);
++
++/* Channel count of a band, 0 for an invalid band. */
++int hi5622_band5g_chan_count(u8 band);
++
++/* Centre frequency <-> IEEE channel number using the vendor tables.
++ * Returns 0 on success, -EINVAL for an invalid band, -ENOENT when the
++ * frequency/channel is not in the vendor table. */
++int hi5622_band5g_freq_to_chan(u8 band, u16 freq, u8 *out_chan);
++int hi5622_band5g_chan_to_freq(u8 band, u8 chan, u16 *out_freq);
++
++/* Band-local channel index 0..13 (2.4 GHz) / 0..28 (5 GHz) - the index the
++ * firmware CA 0x10172C validator produces and the scan request's entry+0x03
++ * field carries. */
++int hi5622_band5g_chan_index(u8 band, u8 chan, u8 *out_idx);
++
++/* 1 = channel number is in the band table, 0 = not (or invalid band). */
++int hi5622_band5g_chan_valid(u8 band, u8 chan);
++
++/* AP-start module channel config (vendor WAL cmd 0x0124 / g0 id1 key 0x0124,
++ * 4-byte body {band, vap, channel, 0}): resolve+validate the band/channel
++ * pair the cfg80211 chandef asks for.
++ *
++ * FAIL CLOSED: on the 5 GHz band the vendor table validation and the band5g
++ * gate both apply - band5g_enable == 0 returns -EOPNOTSUPP before any frame
++ * can be built.  0 = 2.4 GHz keeps the bench-validated behaviour. */
++struct hi5622_band5g_ap_chan {
++	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
++	u8	channel;	/* IEEE channel number */
++};
++
++int hi5622_band5g_ap_chan_prepare(u32 band5g_enable, u8 band, u16 center_freq,
++				  u8 channel,
++				  struct hi5622_band5g_ap_chan *out);
++
++/* H1 band-config (g0 id10, handler CA 0x5FF64) channel field: the firmware
++ * looks the channel up in its chip channel table, so this must be the IEEE
++ * channel NUMBER derived from the scan frequency - never the raw MHz value
++ * (the old auto path sent 5180 for a 5 GHz scan, which the firmware lookup
++ * cannot resolve).  Same fail-closed band5g gate for the 5 GHz band. */
++int hi5622_band5g_band_cfg_chan(u32 band5g_enable, u8 band, u16 freq,
++				u16 *out_chan);
++
++/* 5 GHz wiphy profile words (vendor static .data+0xe54 supported-band
++ * template): HT cap 0x0062 (20/40 + SGI20/40), VHT cap 0x00400064
++ * (HTC_VHT | 160 MHz | SGI80 | SGI160), VHT MCS map 0xfffa (2 SS MCS0-9).
++ * The 2.4 GHz values are reported for symmetry only. */
++u16 hi5622_band5g_ht_cap_word(u8 band);
++u32 hi5622_band5g_vht_cap_word(u8 band);
++u16 hi5622_band5g_vht_mcs_map(u8 band);
++u8  hi5622_band5g_max_power(u8 band);
++const char *hi5622_band5g_name(u8 band);
++
++#endif /* HI5622_BAND5G_H */
+diff -ruN a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+--- a/hi5622_cfg80211.c	2026-11-25 11:08:51.824992980 +0700
++++ b/hi5622_cfg80211.c	2026-11-25 12:39:05.537672475 +0700
+@@ -48,6 +48,7 @@
+ #include "hi5622_sta_logic.h"
+ #include "hi5622_sta_ops.h"
+ #include "hi5622_data_tx.h"
++#include "hi5622_band5g.h"
+ 
+ /* ---------------------------------------------------------------------
+  * Module parameters (host-only bench experiments; defaults are the safe
+@@ -82,6 +83,18 @@
+ MODULE_PARM_DESC(band_vendor,
+ 		 "use the vendor band tables instead of the shipped lists (2.4 GHz ch1-14, 5 GHz 29 channels incl. ch144 and the 4.9 GHz block; 0=off default)");
+ 
++/* wifi-5ghz lane (task-145, host-only static RE): one switch for the complete
++ * 5 GHz profile on the 5 GHz endpoint wiphy - vendor 29-channel table (ch144 +
++ * 4.9 GHz block), HT cap 0x0062 (20/40+SGI), VHT cap 0x00400064 (160 MHz) with
++ * the 2-SS MCS map - and the fail-closed gate for the 5 GHz AP-start path
++ * (channel config 0x0124 + H1 band config g0 id10 validate against the vendor
++ * tables; 5 GHz AP start is refused while this is 0).  The explicit ht_mode /
++ * vht_cap / band_vendor parameters still take precedence when set. */
++unsigned int hi5622_band5g;
++module_param_named(band5g, hi5622_band5g, uint, 0644);
++MODULE_PARM_DESC(band5g,
++		 "5GHz band enable: 0=off (default, bench-validated 2.4 GHz behaviour; 5 GHz AP start fail-closed), 1=register the 5 GHz endpoint with the vendor 29-ch/HT 0x62/VHT 0x400064 profile and allow 5 GHz AP start");
++
+ /* Documentation-purpose locally-administered address (02:...) - never a
+  * per-unit MAC; each VAP derives its own last byte from the slot. */
+ static const u8 hi5622_cfg11_perm_addr[ETH_ALEN] = {
+@@ -311,6 +324,43 @@
+ 	return 0;
+ }
+ 
++/* wifi-5ghz lane (task-145): 5 GHz wiphy channel array from the lane's
++ * decoded vendor table (29 channels: 36..64, 100..144, 149..165 and the
++ * 4.9 GHz block 184..196).  The kernel regdb still owns availability. */
++static int hi5622_cfg11_band5g_channels(u8 band,
++					struct ieee80211_channel **out,
++					unsigned int *out_n)
++{
++	const struct hi5622_band5g_chan *tbl;
++	struct ieee80211_channel *ch;
++	u16 cnt = 0, i;
++
++	if (!out || !out_n)
++		return -EINVAL;
++	tbl = hi5622_band5g_channels(band, &cnt);
++	if (!tbl || !cnt)
++		return -EINVAL;
++	ch = kcalloc(cnt, sizeof(*ch), GFP_KERNEL);
++	if (!ch)
++		return -ENOMEM;
++	for (i = 0; i < cnt; i++) {
++		ch[i].band = band == HI5622_BAND_2GHZ ? NL80211_BAND_2GHZ :
++							NL80211_BAND_5GHZ;
++		ch[i].center_freq = tbl[i].freq;
++		ch[i].hw_value = tbl[i].num;
++		ch[i].max_power = hi5622_band5g_max_power(band);
++		if (tbl[i].flags & HI5622_BAND5G_CHAN_NO_IR)
++			ch[i].flags |= IEEE80211_CHAN_NO_IR;
++		if (tbl[i].flags & HI5622_BAND5G_CHAN_RADAR) {
++			ch[i].flags |= IEEE80211_CHAN_RADAR;
++			ch[i].flags |= IEEE80211_CHAN_NO_IR;
++		}
++	}
++	*out = ch;
++	*out_n = cnt;
++	return 0;
++}
++
+ /* Copy the static capability templates into the wiphy (cfg80211's
+  * regulatory core modifies the channel arrays, so two wiphys must never
+  * share them). */
+@@ -350,20 +400,34 @@
+ 		sband->ht_cap.cap = hi5622_sta_ht_cap_word(hi5622_ht_mode);
+ 		sband->ht_cap.ampdu_factor = HI5622_STA_HT_AMPDU_FACTOR;
+ 		sband->ht_cap.ampdu_density = HI5622_STA_HT_AMPDU_DENSITY;
++	} else if (hi5622_band5g && band_idx == NL80211_BAND_5GHZ) {
++		/* wifi-5ghz lane: vendor 5 GHz HT word (20/40 + SGI20/40). */
++		sband->ht_cap.cap = hi5622_band5g_ht_cap_word(c->band);
++		sband->ht_cap.ampdu_factor = HI5622_STA_HT_AMPDU_FACTOR;
++		sband->ht_cap.ampdu_density = HI5622_STA_HT_AMPDU_DENSITY;
+ 	}
+-	if (hi5622_vht_cap && band_idx == NL80211_BAND_5GHZ) {
++	if ((hi5622_vht_cap || (hi5622_band5g && band_idx == NL80211_BAND_5GHZ)) &&
++	    band_idx == NL80211_BAND_5GHZ) {
+ 		sband->vht_cap.vht_supported = true;
+-		sband->vht_cap.cap = hi5622_sta_vht_cap_word(c->band);
++		sband->vht_cap.cap = hi5622_vht_cap ?
++				     hi5622_sta_vht_cap_word(c->band) :
++				     hi5622_band5g_vht_cap_word(c->band);
+ 		sband->vht_cap.vht_mcs.rx_highest = 0;
+ 		sband->vht_cap.vht_mcs.tx_highest = 0;
+ 		sband->vht_cap.vht_mcs.rx_mcs_map = HI5622_STA_VHT_MCS_MAP;
+ 		sband->vht_cap.vht_mcs.tx_mcs_map = HI5622_STA_VHT_MCS_MAP;
+ 	}
+-	if (hi5622_band_vendor) {
++	if (hi5622_band_vendor ||
++	    (hi5622_band5g && band_idx == NL80211_BAND_5GHZ)) {
+ 		struct ieee80211_channel *vchans = NULL;
+ 		unsigned int vn = 0;
+ 
+-		ret = hi5622_cfg11_vendor_channels(c->band, &vchans, &vn);
++		if (hi5622_band_vendor)
++			ret = hi5622_cfg11_vendor_channels(c->band, &vchans,
++							   &vn);
++		else
++			ret = hi5622_cfg11_band5g_channels(c->band, &vchans,
++							   &vn);
+ 		if (ret) {
+ 			kfree(sband->channels);
+ 			kfree(sband->bitrates);
+@@ -375,6 +439,12 @@
+ 		sband->n_channels = (int)vn;
+ 	}
+ 	c->wiphy->bands[band_idx] = sband;
++	if (hi5622_band5g && band_idx == NL80211_BAND_5GHZ)
++		dev_info(&c->ctx->pdev->dev,
++			 "cfg80211: band5g=1 5GHz wiphy profile active: %d channels (vendor 29-ch list, ch144 + 4.9 GHz block), HT cap 0x%04x, VHT cap 0x%08x, MCS map 0x%04x\n",
++			 sband->n_channels, sband->ht_cap.cap,
++			 sband->vht_cap.cap,
++			 sband->vht_cap.vht_mcs.rx_mcs_map);
+ 	return 0;
+ }
+ 
+@@ -610,7 +680,9 @@
+ 		 "cfg80211: wiphy allocated for endpoint %s (band %s, %s; wiphy registration is gated on the HCC ready handshake; scan/AP wiring M2/M3)\n",
+ 		 pci_name(ctx->pdev), hi5622_cfg11_band_name(c->band),
+ 		 band == HI5622_BAND_2GHZ ? "13 channels 1-13" :
+-		 "19 LU-plan channels 36-48/52-64/100-140");
++		 (hi5622_band5g ?
++		  "29 vendor 5 GHz channels (band5g=1 profile)" :
++		  "19 LU-plan channels 36-48/52-64/100-140"));
+ 	return 0;
+ }
+ 
+@@ -730,9 +802,9 @@
+ 			n += m;
+ 	}
+ 	ret = sysfs_emit(buf,
+-			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s\n%s",
++			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s band5g=%u\n%s",
+ 			 hi5622_cfg11_auto, hi5622_band_force,
+-			 hi5622_cfg11_band_name(c->band), tmp);
++			 hi5622_cfg11_band_name(c->band), hi5622_band5g, tmp);
+ 	kfree(tmp);
+ 	return ret;
+ }
+diff -ruN a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-25 11:06:46.643297354 +0700
++++ b/hi5622_scan.c	2026-11-25 12:39:05.509998364 +0700
+@@ -38,6 +38,7 @@
+ #include "hi5622_scan.h"
+ #include "hi5622_stability.h"
+ #include "hi5622_vapscan_map.h"
++#include "hi5622_band5g.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -50,6 +51,11 @@
+  * channel-config frame (0 = g0 id1 key 0x0124, 1 = WAL g2 cmd 0x0124). */
+ extern unsigned int hi5622_ap_start_mode;
+ 
++/* wifi-5ghz lane (task-145): 5 GHz band enable, owned by the cfg80211 layer
++ * (hi5622_cfg80211.c).  Gates the 5 GHz AP start and the H1 5 GHz band
++ * config; the band table helpers live in hi5622_band5g.c. */
++extern unsigned int hi5622_band5g;
++
+ /* wifi-beacon-static lane (task-140), FAIL-CLOSED default 0.  The vendor AP
+  * start sends FIVE messages in order: module channel config (0x0124) -> set
+  * SSID (0x0005) -> auth (0x006D) -> AP config (0x0127) -> VAP start (0x0065).
+@@ -943,15 +949,27 @@
+ 			 hi5622_scan_band_cfg_slot);
+ 		return -EINVAL;
+ 	}
+-	if (hi5622_scan_band_cfg_chan)
++	if (hi5622_scan_band_cfg_chan) {
+ 		auto_chan = (u16)hi5622_scan_band_cfg_chan;
+-	else if (n && first < s->n_freqs) {
++	} else if (n && first < s->n_freqs) {
+ 		u16 f = s->freqs[first];
+-
+-		if (f >= 2412u && f <= 2472u)
+-			auto_chan = (u16)((f - 2407u) / 5u);	/* 2412 -> 1 */
+-		else
+-			auto_chan = f;
++		u16 ch = 0;
++		u8 band = (f >= 2400u && f < 2500u) ? HI5622_BAND5G_2GHZ :
++						      HI5622_BAND5G_5GHZ;
++
++		/* wifi-5ghz lane (task-145): the H1 channel field is the IEEE
++		 * channel NUMBER the firmware resolves through its chip channel
++		 * table (CA 0xD6A1E) - the old path sent the raw MHz value for a
++		 * 5 GHz scan (e.g. 5180), which that lookup cannot resolve.
++		 * band5g=0 keeps 5 GHz H1 config fail-closed. */
++		rc = hi5622_band5g_band_cfg_chan(hi5622_band5g, band, f, &ch);
++		if (rc) {
++			dev_warn(dev,
++				 "cfg80211: H1 band-config channel unresolved for scan freq %u MHz (band %u, band5g=%u, %d) - config not sent (fail closed)\n",
++				 (unsigned)f, (unsigned)band, hi5622_band5g, rc);
++			return rc;
++		}
++		auto_chan = ch;
+ 	}
+ 	memset(&bp, 0, sizeof(bp));
+ 	bp.subtype = HI5622_BAND_CFG_SUB_SLOT;
+@@ -1470,6 +1488,32 @@
+ 			 rc);
+ 		goto out;
+ 	}
++	/* wifi-5ghz lane (task-145): band-aware channel gate.  2.4 GHz keeps the
++	 * bench-validated path; the 5 GHz AP start is FAIL-CLOSED unless the
++	 * band5g parameter is 1, and the chandef channel must be in the vendor
++	 * 29-channel table (the same table the firmware validates against at CA
++	 * 0x10172C).  Runs before any frame is built or posted. */
++	{
++		struct hi5622_band5g_ap_chan ac;
++		int brc = hi5622_band5g_ap_chan_prepare(hi5622_band5g, p->band,
++						       p->center_freq,
++						       (u8)p->channel, &ac);
++
++		if (brc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap REFUSED - band %u channel %u/%u MHz not usable (%d): 5 GHz AP needs band5g=1 and a vendor-table channel; no frame sent\n",
++				 (unsigned)p->band, (unsigned)p->channel,
++				 (unsigned)p->center_freq, brc);
++			rc = brc;
++			goto out;
++		}
++		if (ac.channel != p->channel) {
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap channel resolved %u MHz -> ch%u (vendor band table)\n",
++				 (unsigned)p->center_freq, (unsigned)ac.channel);
++			p->channel = ac.channel;
++		}
++	}
+ 	/* Capture the pre-call VAP-base state BEFORE any post.  The firmware
+ 	 * populates module_ctx+0x190 ASYNCHRONOUSLY after vap_add/vap_start, so a
+ 	 * readback immediately after a fresh post is expected to be zero (bench R2
+diff -ruN a/hi5622_vapscan_map.c b/hi5622_vapscan_map.c
+--- a/hi5622_vapscan_map.c	2026-11-24 17:03:08.825639763 +0700
++++ b/hi5622_vapscan_map.c	2026-11-25 12:39:05.510111577 +0700
+@@ -13,6 +13,7 @@
+  */
+ #include "hi5622_vapscan_map.h"
+ #include "hi5622_scan_d2h.h"
++#include "hi5622_band5g.h"
+ 
+ #ifdef __KERNEL__
+ #include <linux/errno.h>
+@@ -45,31 +46,6 @@
+ 	}
+ }
+ 
+-/* 2.4 GHz channel number of an advertised frequency (kHz-exact table). */
+-static int hi5622_band2g_chan(u16 freq)
+-{
+-	if (freq < 2412u || freq > 2472u || ((freq - 2412u) % 5u))
+-		return -1;
+-	return (int)((freq - 2412u) / 5u) + 1;
+-}
+-
+-/* 5 GHz: our wiphy table order is also the vendor band channel index [I]. */
+-static const u16 hi5622_band5g_freq[] = {
+-	5180, 5200, 5220, 5240, 5260, 5280, 5300, 5320,
+-	5500, 5520, 5540, 5560, 5580, 5600, 5620, 5640,
+-	5660, 5680, 5700,
+-};
+-
+-static int hi5622_band5g_index(u16 freq)
+-{
+-	size_t i;
+-
+-	for (i = 0; i < sizeof(hi5622_band5g_freq) / sizeof(u16); i++)
+-		if (hi5622_band5g_freq[i] == freq)
+-			return (int)i;
+-	return -1;
+-}
+-
+ int hi5622_vapscan_scan_req(struct vs_frame *f,
+ 			    const struct hi5622_scan_req_params *p)
+ {
+@@ -105,23 +81,20 @@
+ 	sp.n_chans = (u8)p->n_channels;
+ 	for (i = 0; i < p->n_channels; i++) {
+ 		u16 freq = p->freq[i];
+-		int ch;
++		u8 chan = 0, idx = 0;
+ 
+-		if (p->band == 0) {
+-			ch = hi5622_band2g_chan(freq);
+-			if (ch < 0)
+-				return -EINVAL;
+-			sp.chans[i].num = (u8)ch;
+-			sp.chans[i].band = 0;
+-			sp.chans[i].idx = (u8)(ch - 1);
+-		} else {
+-			ch = hi5622_band5g_index(freq);
+-			if (ch < 0)
+-				return -EINVAL;
+-			sp.chans[i].num = (u8)((freq - 5000u) / 5u);
+-			sp.chans[i].band = 1;
+-			sp.chans[i].idx = (u8)ch;
+-		}
++		/* wifi-5ghz lane (task-145): the scan-request channel entry is
++		 * {channel number; band; 0; band-local INDEX}.  The index must be
++		 * the vendor table position (0..13 / 0..28) the firmware's CA
++		 * 0x10172C validator and mac_get_channel_num_from_idx use; the old
++		 * hard-coded 19-channel 5 GHz list is wrong after ch140 and lacks
++		 * ch144 / 149..165 / the 4.9 GHz block entirely. */
++		if (hi5622_band5g_freq_to_chan(p->band, freq, &chan) ||
++		    hi5622_band5g_chan_index(p->band, chan, &idx))
++			return -EINVAL;
++		sp.chans[i].num = chan;
++		sp.chans[i].band = p->band;
++		sp.chans[i].idx = idx;
+ 		sp.chans[i].pad = 0;
+ 	}
+ 	rc = vs_build_scan_req(f, &sp);
+diff -ruN a/Kbuild b/Kbuild
+--- a/Kbuild	2026-11-25 11:08:51.822896655 +0700
++++ b/Kbuild	2026-11-25 12:39:09.512732781 +0700
+@@ -33,7 +33,7 @@
+ 		 vapscan_frames.o hi5622_vapscan_map.o \
+ 		 hi5622_scan_d2h.o hi5622_vapscan_provider.o \
+ 		 vapstart_frames.o hi5622_ap_frames.o \
+-		 hi5622_band_cfg.o hi5622_key_frames.o hi5622_keys.o \
++		 hi5622_band_cfg.o hi5622_band5g.o hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \

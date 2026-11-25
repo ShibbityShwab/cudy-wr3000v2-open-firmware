@@ -1,0 +1,33 @@
+# host unit tests - wifi-assoc-e2e (RF-free, no bench-router contact)
+# command: python3 tests/test_assoc_e2e.py -v
+# date: 2026-11-25 (lane task-158)
+
+test_assoc_dry (__main__.TestCliDryRun.test_assoc_dry) ... ok
+test_cleanup_dry (__main__.TestCliDryRun.test_cleanup_dry) ... ok
+test_preflight_dry (__main__.TestCliDryRun.test_preflight_dry) ... ok
+test_reset_dry (__main__.TestCliDryRun.test_reset_dry) ... ok
+test_scan_dry (__main__.TestCliDryRun.test_scan_dry) ... ok
+test_status_dry (__main__.TestCliDryRun.test_status_dry) ... ok
+test_verify (__main__.TestCliDryRun.test_verify) ... ok
+test_watch_dry (__main__.TestCliDryRun.test_watch_dry) ... ok
+test_profiles_sane (__main__.TestConfigRendering.test_profiles_sane) ... ok
+test_templates_substitute_and_redact (__main__.TestConfigRendering.test_templates_substitute_and_redact) ... ok
+test_no_nonlab_credentials (__main__.TestLaneHygiene.test_no_nonlab_credentials) ... ok
+test_self_checks_all_pass (__main__.TestLaneHygiene.test_self_checks_all_pass) ... ok
+test_absent_target (__main__.TestScanAssess.test_absent_target) ... ok
+test_open_profile (__main__.TestScanAssess.test_open_profile) ... ok
+test_weak_rssi_fail (__main__.TestScanAssess.test_weak_rssi_fail) ... ok
+test_wpa2_pass (__main__.TestScanAssess.test_wpa2_pass) ... ok
+test_wpa3_profile (__main__.TestScanAssess.test_wpa3_profile) ... ok
+test_wrong_profile_warns (__main__.TestScanAssess.test_wrong_profile_warns) ... ok
+test_bss_count (__main__.TestScanParser.test_bss_count) ... ok
+test_target_fields (__main__.TestScanParser.test_target_fields) ... ok
+test_wpa3_mfp (__main__.TestScanParser.test_wpa3_mfp) ... ok
+test_cases (__main__.TestSupplicantClassification.test_cases) ... ok
+test_progress_only_reports_stage (__main__.TestSupplicantClassification.test_progress_only_reports_stage) ... ok
+Ran 23 tests in 0.042s
+OK
+
+# verify self-check:
+[verify] self-check: 41/41 PASS
+[verify] VERIFY PASS

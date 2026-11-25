@@ -1,0 +1,35 @@
+{
+  "comment": "Canonical association-rung profiles for the Cudy WR3000 v2 bench AP. NO SECRETS: the PSK default is the published lab value test-passphrase-121; the WPA3 fixture ships wpa_passphrase=CHANGEME-lab-only and MUST be substituted at staging time from ASSOC_PSK (router-side script does this). Override any field with ASSOC_SSID / ASSOC_PSK / ASSOC_FREQ / ASSOC_HOSTAPD_CONF on the router.",
+  "freq": 2437,
+  "channel": 6,
+  "min_rssi_dbm": -70,
+  "good_rssi_dbm": -55,
+  "profiles": {
+    "open": {
+      "ssid": "wr3000v2-apstart",
+      "security": "open",
+      "hostapd_conf": "/etc/hi5622/hostapd-open.proven.conf",
+      "client_template": "wpa_supplicant-open.template.conf",
+      "psk_required": false,
+      "rsn_expect": "none"
+    },
+    "wpa2": {
+      "ssid": "cudy-ap-test",
+      "security": "wpa2-psk",
+      "hostapd_conf": "/etc/hi5622/hostapd-wpa2.conf",
+      "client_template": "wpa_supplicant-wpa2.template.conf",
+      "psk_default": "test-passphrase-121",
+      "psk_required": true,
+      "rsn_expect": "psk-ccmp"
+    },
+    "wpa3": {
+      "ssid": "cudy-wr3000v2-wpa3",
+      "security": "wpa3-sae",
+      "hostapd_conf": "/etc/hi5622/hostapd-wpa3-sae.conf",
+      "client_template": "wpa_supplicant-wpa3-sae.template.conf",
+      "psk_default": "test-passphrase-121",
+      "psk_required": true,
+      "rsn_expect": "sae-ccmp-mfp"
+    }
+  }
+}

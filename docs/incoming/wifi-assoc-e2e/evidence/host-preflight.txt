@@ -1,0 +1,170 @@
+# live read-only host preflight (python3 scripts/assoc_e2e.py preflight)
+# date: 2026-11-25 (lane task-158); no RF state changed, no router contact
+
+[preflight] 
+[preflight] === host tools ===
+[preflight] tool iw             OK /usr/bin/iw
+[preflight] tool wpa_supplicant OK /usr/bin/wpa_supplicant
+[preflight] tool wpa_cli        OK /usr/bin/wpa_cli
+[preflight] tool ip             OK /usr/bin/ip
+[preflight] tool nmcli          /usr/bin/nmcli
+[preflight] tool rfkill         /usr/bin/rfkill
+[preflight] tool modprobe       /usr/bin/modprobe
+[preflight] tool sudo           /usr/bin/sudo
+[preflight] tool python3        /usr/bin/python3
+[preflight] 
+[preflight] === interfaces ===
+[preflight] + iw dev
+[preflight]   out| phy#3
+[preflight]   out| 	Unnamed/non-netdev interface
+[preflight]   out| 		wdev 0x300000002
+[preflight]   out| 		addr MAC-REDACTED
+[preflight]   out| 		type P2P-device
+[preflight]   out| 		txpower 13.00 dBm
+[preflight]   out| 	Interface wlan0
+[preflight]   out| 		ifindex 12
+[preflight]   out| 		wdev 0x300000001
+[preflight]   out| 		addr MAC-REDACTED
+[preflight]   out| 		ssid slowphone
+[preflight]   out| 		type managed
+[preflight]   out| 		channel 40 (5200 MHz), width: 80 MHz, center1: 5210 MHz
+[preflight]   out| 		txpower 18.00 dBm
+[preflight]   out| 		multicast TXQ:
+[preflight]   out| 			qsz-byt	qsz-pkt	flows	drops	marks	overlmt	hashcol	tx-bytes	tx-packets
+[preflight]   out| 			0	0	0	0	0	0	0	0		0
+[preflight] iface wlan0      type=managed phy=phy3 addr=MAC-REDACTED
+[preflight] + iw dev
+[preflight]   out| phy#3
+[preflight]   out| 	Unnamed/non-netdev interface
+[preflight]   out| 		wdev 0x300000002
+[preflight]   out| 		addr MAC-REDACTED
+[preflight]   out| 		type P2P-device
+[preflight]   out| 		txpower 13.00 dBm
+[preflight]   out| 	Interface wlan0
+[preflight]   out| 		ifindex 12
+[preflight]   out| 		wdev 0x300000001
+[preflight]   out| 		addr MAC-REDACTED
+[preflight]   out| 		ssid slowphone
+[preflight]   out| 		type managed
+[preflight]   out| 		channel 40 (5200 MHz), width: 80 MHz, center1: 5210 MHz
+[preflight]   out| 		txpower 18.00 dBm
+[preflight]   out| 		multicast TXQ:
+[preflight]   out| 			qsz-byt	qsz-pkt	flows	drops	marks	overlmt	hashcol	tx-bytes	tx-packets
+[preflight]   out| 			0	0	0	0	0	0	0	0		0
+[preflight] client iface: wlan1   base/uplink iface: wlan0
+[preflight] NOTE: client iface wlan1 does not exist yet; 'reset' will add it on phy3 (or pass --use-base to drop the uplink instead)
+[preflight] 
+[preflight] === wiphy ===
+[preflight] + iw phy phy3 info
+[preflight]   out| Wiphy phy3
+[preflight]   out| 	wiphy index: 3
+[preflight]   out| 	max # scan SSIDs: 4
+[preflight]   out| 	max scan IEs length: 477 bytes
+[preflight]   out| 	max # sched scan SSIDs: 10
+[preflight]   out| 	max # match sets: 16
+[preflight]   out| 	Retry short limit: 7
+[preflight]   out| 	Retry long limit: 4
+[preflight]   out| 	Coverage class: 0 (up to 0m)
+[preflight]   out| 	Device supports AP-side u-APSD.
+[preflight]   out| 	Device supports T-DLS.
+[preflight]   out| 	Supported Ciphers:
+[preflight]   out| 		* WEP40 (00-0f-ac:1)
+[preflight]   out| 		* WEP104 (00-0f-ac:5)
+[preflight]   out| 		* TKIP (00-0f-ac:2)
+[preflight]   out| 		* CCMP-128 (00-0f-ac:4)
+[preflight]   out| 		* CCMP-256 (00-0f-ac:10)
+[preflight]   out| 		* GCMP-128 (00-0f-ac:8)
+[preflight]   out| 		* GCMP-256 (00-0f-ac:9)
+[preflight]   out| 		* CMAC (00-0f-ac:6)
+[preflight]   out| 		* CMAC-256 (00-0f-ac:13)
+[preflight]   out| 		* GMAC-128 (00-0f-ac:11)
+[preflight]   out| 		* GMAC-256 (00-0f-ac:12)
+[preflight]   out| 	Available Antennas: TX 0x3 RX 0x3
+[preflight]   out| 	Configured Antennas: TX 0x3 RX 0x3
+[preflight]   out| 	Supported interface modes:
+[preflight]   out| 		 * managed
+[preflight]   out| 		 * AP
+[preflight]   out| 		 * AP/VLAN
+[preflight]   out| 		 * monitor
+[preflight]   out| 		 * P2P-client
+[preflight]   out| 		 * P2P-GO
+[preflight]   out| 		 * P2P-device
+[preflight]   out| 	Band 1:
+[preflight]   out| 		Capabilities: 0x9ff
+[preflight]   out| 			RX LDPC
+[preflight]   out| 			HT20/HT40
+[preflight]   out| 			SM Power Save disabled
+[preflight]   out| 			RX Greenfield
+[preflight]   out| 			RX HT20 SGI
+[preflight]   out| ... (730 more lines in evidence)
+[preflight] phy=phy3 two_managed_combo=True has_2437MHz=True
+[preflight]   combo: * #{ managed, P2P-client } <= 2, #{ P2P-GO } <= 1, #{ P2P-device } <= 1,
+[preflight]   combo: * #{ managed, P2P-client } <= 2, #{ AP } <= 1, #{ P2P-device } <= 1,
+[preflight]   combo: * MCS: ff ff ff ff ff ff ff ff ff ff
+[preflight]   combo: * maximum A-MSDU length
+[preflight]   combo: * supported channel width
+[preflight]   combo: * short GI for 40 MHz
+[preflight]   combo: * max A-MPDU length exponent
+[preflight]   combo: * min MPDU start spacing
+[preflight]   combo: * IBSS: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * managed: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * AP: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * AP/VLAN: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * mesh point: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * P2P-client: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * P2P-GO: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * P2P-device: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * NAN: 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * Unknown mode (13): 0x00 0x10 0x20 0x30 0x40 0x50 0x60 0x70 0x80 0x90 0xa0 0xb0 0xc0 0xd0 0xe0 0xf0
+[preflight]   combo: * IBSS: 0x40 0xb0 0xc0 0xd0
+[preflight]   combo: * managed: 0x40 0xb0 0xd0
+[preflight]   combo: * AP: 0x00 0x20 0x40 0xa0 0xb0 0xc0 0xd0
+[preflight]   combo: * AP/VLAN: 0x00 0x20 0x40 0xa0 0xb0 0xc0 0xd0
+[preflight]   combo: * mesh point: 0xb0 0xc0 0xd0
+[preflight]   combo: * P2P-client: 0x40 0xd0
+[preflight]   combo: * P2P-GO: 0x00 0x20 0x40 0xa0 0xb0 0xc0 0xd0
+[preflight]   combo: * P2P-device: 0x40 0xb0 0xd0
+[preflight]   combo: * NAN: 0xb0 0xd0
+[preflight]   combo: * Unknown mode (13): 0xd0
+[preflight]   combo: * [ RRM ]: RRM
+[preflight]   combo: * [ SET_SCAN_DWELL ]: scan dwell setting
+[preflight]   combo: * [ BEACON_RATE_LEGACY ]: legacy beacon rate setting
+[preflight]   combo: * [ BEACON_RATE_HT ]: HT beacon rate setting
+[preflight]   combo: * [ BEACON_RATE_VHT ]: VHT beacon rate setting
+[preflight]   combo: * [ FILS_STA ]: STA FILS (Fast Initial Link Setup)
+[preflight]   combo: * [ CQM_RSSI_LIST ]: multiple CQM_RSSI_THOLD records
+[preflight]   combo: * [ CONTROL_PORT_OVER_NL80211 ]: control port over nl80211
+[preflight]   combo: * [ ACK_SIGNAL_SUPPORT ]: ack signal level support
+[preflight]   combo: * [ TXQS ]: FQ-CoDel-enabled intermediate TXQs
+[preflight]   combo: * [ CAN_REPLACE_PTK0 ]: can safely replace PTK 0 when rekeying
+[preflight]   combo: * [ AIRTIME_FAIRNESS ]: airtime fairness scheduling
+[preflight]   combo: * [ AQL ]: Airtime Queue Limits (AQL)
+[preflight]   combo: * [ CONTROL_PORT_NO_PREAUTH ]: disable pre-auth over nl80211 control port support
+[preflight]   combo: * [ MULTICAST_REGISTRATIONS ]: mgmt frame registration for multicast
+[preflight]   combo: * [ SCAN_FREQ_KHZ ]: scan on kHz frequency support
+[preflight]   combo: * [ CONTROL_PORT_OVER_NL80211_TX_STATUS ]: tx status for nl80211 control port support
+[preflight]   combo: * [ BEACON_RATE_HE ]: HE beacon rate support (AP/mesh)
+[preflight]   combo: * [ POWERED_ADDR_CHANGE ]: can change MAC address while up
+[preflight] 
+[preflight] === NetworkManager / rfkill ===
+[preflight] + nmcli -t -f DEVICE,STATE,CONNECTION device
+[preflight]   out| wlan0:connected:slowphone
+[preflight]   out| tailscale0:connected (externally):tailscale0
+[preflight]   out| lo:connected (externally):lo
+[preflight]   out| p2p-dev-wlan0:disconnected:
+[preflight]   out| enp195s0f3u1:unmanaged:
+[preflight] nmcli wlan0: wlan0:connected:slowphone
+[preflight] + rfkill list
+[preflight]   out| 1: hci0: Bluetooth
+[preflight]   out| 	Soft blocked: no
+[preflight]   out| 	Hard blocked: no
+[preflight]   out| 4: phy3: Wireless LAN
+[preflight]   out| 	Soft blocked: no
+[preflight]   out| 	Hard blocked: no
+[preflight] rfkill: 4: phy3: Wireless LAN
+[preflight] 
+[preflight] === lane sanity ===
+[preflight] lane-secret scan: PASS (only published lab placeholder values)
+[preflight] profiles: open, wpa2, wpa3
+[preflight] PREFLIGHT PASS (read-only)
+[preflight] evidence dir: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/wifi-assoc-e2e/20261125T054341Z
