@@ -1,0 +1,11 @@
+RESULT: 84/84 checks PASS
+RESULT: 46/46 checks PASS
+== DONE - dfs_set module (host-built, NOT fired)
+artifact:  /tmp/dfs-set-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+size:      391388 B (stripped); unstripped 1444204 B
+sha256:    1b47f0daff7e2e48d0ac6dcbc34b4135872f6a16088e8d20b88c71d47c684acb
+unstripped: 292ea0ce10227b8057a78483c02d05e72453f5a72384b4127732a4b437b092b1
+text:      a8b737a466106cfed51fecc54f4e836a23b6e2509056681a76feaeb3f558d335
+params:    66 (65 + dfs_set)
+base:      the byte-exact R5 tree (/tmp/r5-rebuilt/hi5622_wifi.ko = 24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c)
+tests:     C contract selftest + Python integration test (see /tmp/dfs-set-artifact/*.txt)

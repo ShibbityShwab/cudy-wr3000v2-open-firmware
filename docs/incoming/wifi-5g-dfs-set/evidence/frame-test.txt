@@ -1,0 +1,57 @@
+=== frame constants (from the tree's own defines) ===
+PASS   1  key == 0x07E7
+PASS   2  wire length 29
+PASS   3  body len 1
+PASS   4  arm body 0x01
+PASS   5  clear body 0x00
+PASS   6  tag 0x5A5A
+PASS   7  group id 1
+PASS   8  node word1 == (29<<16)|0x6D2B
+PASS   9  0x07E7 is NOT the 0x01F7 dfs_mode key
+PASS  10  field B == 0x00 (the AP-start module context, F2 fix)
+
+=== the six sub-base registers + arm pattern ===
+PASS  11  reg base 0x4010E000
+PASS  12  reg A0 0x4010E0A0
+PASS  13  reg count 6
+PASS  14  arm mask 0x2D
+PASS  15  arm mask = {1,0,1,1,0,1}
+PASS  16  the C table lists the six decoded CAs in order
+PASS  17  the reg table literal is present
+PASS  18  the reg table has 6 entries (3 + 3 with 4 stride adds)
+PASS  19  builder writes key at hdr+20
+PASS  20  builder writes the body byte from the argument
+PASS  21  builder refuses any body other than arm/clear
+
+=== INDEPENDENT frame KATs ===
+PASS  22  arm frame == the firmware decode KAT
+PASS  23  clear frame == the firmware decode KAT
+PASS  24  arm/clear differ only in the body byte
+PASS  25  arm KAT group nibble 0
+PASS  26  arm KAT key @+20
+PASS  27  arm KAT body len @+22
+PASS  28  arm KAT total @+4
+PASS  29  arm KAT tail
+PASS  30  the 0x01F7 sibling frame body is {03}, not {01}
+
+=== hi5622_scan.c integration + placement order ===
+PASS  31  include added
+PASS  32  module_param_named(dfs_set, ...) present
+PASS  33  parameter is a fail-closed uint
+PASS  34  beacon_static gate present
+PASS  35  plan call present
+PASS  36  precheck call present
+PASS  37  both frame posts present
+PASS  38  postchecks present
+PASS  39  status line appended
+PASS  40  the six registers are read for the evidence
+PASS  41  dfs_set block is after the 0x0065 VAP-start post-read
+PASS  42  dfs_set block is before the 0x0242 band-start post-read
+PASS  43  the CLEAR half follows the ARM half
+PASS  44  the status block comes AFTER the arm/clear ordering block
+PASS  45  the scan-side probe reads the CAC flag from mctx+0x4A5
+
+=== Kbuild ===
+PASS  46  hi5622_dfs_set.o added to the module
+
+RESULT: 46/46 checks PASS
