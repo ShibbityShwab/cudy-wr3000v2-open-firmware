@@ -1,0 +1,731 @@
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -224,8 +224,11 @@
+  *   vap_start_g0=0 (default) = no frame at all - the wire bytes stay exactly
+  *                  those of the band1-start-send-2 base;
+  *   vap_start_g0=1 = post the 40-byte 0x0065 g0-id1 frame ONCE on a BAND-1
+- *                  AP start, AFTER the key-0x0064 VAP add and BEFORE the
+- *                  0x00F7/0x0242 steps, only with beacon_static vendor order,
++ *                  AP start, AFTER the 0x0124 channel post whose worker
++ *                  stores the channel/band bytes mctx[0x10..0x13] the G8
++ *                  gate reads (R4 fire: at the old pre-0x0124 position G8
++ *                  refused with mctx[0x11]=0) and BEFORE the 0x0242 band
++ *                  start, only with beacon_static vendor order,
+  *                  and only when the read-only G1..G13 probe pack passes
+  *                  (G5 in particular: mctx[0x190] != 0 or the worker faults
+  *                  at CA 0x46470).  After the post the driver re-reads
+@@ -236,7 +239,7 @@
+ static unsigned int hi5622_vap_start_g0;
+ module_param_named(vap_start_g0, hi5622_vap_start_g0, uint, 0444);
+ MODULE_PARM_DESC(vap_start_g0,
+-		 "5GHz AP start: H2D key 0x0065 g0-id1 VAP-start send (0=off default = byte-identical to the 0x0242 base, 1=post the 40-byte frame after the 0x0064 VAP add and before the 0x00F7/0x0242 steps on a band-1 beacon_static AP whose G5/G12 probe pack passes, >1 refused)");
++		 "5GHz AP start: H2D key 0x0065 g0-id1 VAP-start send (0=off default = byte-identical to the 0x0242 base, 1=post the 40-byte frame after the 0x0124 channel post and before the 0x0242 band start on a band-1 beacon_static AP whose G5/G12 probe pack passes, >1 refused)");
+ /* Read-only outcome for the sysfs status line (never a wire input). */
+ static int hi5622_vap_start_g0_last_rc = -ENODATA;	/* never attempted */
+ static unsigned int hi5622_vap_start_g0_posts;
+@@ -2223,154 +2226,6 @@
+ 			 HI5622_STAB_VAP_WAIT_MS,
+ 			 base_was_posted && !restart_plain
+ 				 ? "pre-existing latch" : "fresh base post");
+-		/* lane wifi-band1-start-send-3 (task-209, R4): the H2D g0-id1
+-		 * key-0x0065 VAP-start event.  Placement contract (sibling
+-		 * ../wifi-band-start-prestart TABLES T7/T11): AFTER the key-0x0064
+-		 * VAP add (the worker's AP branch sets mctx[0x0E]=1 on the module
+-		 * context the add bound) and BEFORE every later step, in particular
+-		 * before the 0x0242 band start whose pre-start resolver CA 0x4AE7C
+-		 * requires mctx[0x0E] in {1,2,3}.  A G1..G13 probe failure means the
+-		 * frame must NOT be posted (G5: the worker would fault at CA
+-		 * 0x46470); the sequence then aborts with the pack in dmesg.  After
+-		 * the post the G12 read (mctx[0x0E]==1) gates the 0x0242. */
+-		{
+-			struct hi5622_vap_start_g0_plan vgp;
+-			struct hi5622_vap_start_g0_probe vgprobe;
+-			struct hi5622_band_start_state vgst;
+-			u32 vg_out0 = 0;
+-			u32 vg_state_0e;
+-			u8 vg_band;
+-			int vg12, vgrc;
+-
+-			memset(&vgst, 0, sizeof(vgst));
+-			vgrc = hi5622_vap_start_g0_plan(hi5622_vap_start_g0,
+-							hi5622_beacon_static,
+-							(unsigned int)p->band,
+-							hi5622_vap_add_index,
+-							&vgp);
+-			if (vgrc) {
+-				dev_warn(wdev_dev,
+-					 "cfg80211: start_ap beacon_static REFUSED - vap_start_g0=%u is not a valid VAP-start parameter (%d); no AP frame sent\n",
+-					 hi5622_vap_start_g0, vgrc);
+-				hi5622_vap_start_g0_refusals++;
+-				rc = vgrc;
+-				goto out;
+-			}
+-			if (vgp.post) {
+-				hi5622_scan_vap_start_g0_probe(c->ctx, &vgprobe,
+-							       (u8)hi5622_vap_add_index);
+-				dev_info(wdev_dev,
+-					 "cfg80211: vap_start_g0 pre: mctx=0x%08x type=%u band=%u ch=%u field=%u state0=0x%02x state1=%u state4=0x%02x count=%u entry0=%u published=0x%08x d6e=%u ec8=%u b190=0x%08x b440=%u b4ac=0x%08x plink6c6=%u (%s)\n",
+-					 vgprobe.mctx, (unsigned)vgprobe.type,
+-					 (unsigned)vgprobe.band, (unsigned)vgprobe.ch,
+-					 (unsigned)vgprobe.field,
+-					 (unsigned)vgprobe.state0,
+-					 (unsigned)vgprobe.state1,
+-					 (unsigned)vgprobe.state4,
+-					 (unsigned)vgprobe.count,
+-					 (unsigned)vgprobe.entry0,
+-					 vgprobe.published, (unsigned)vgprobe.d6e,
+-					 (unsigned)vgprobe.ec8, vgprobe.b190,
+-					 (unsigned)vgprobe.b440, vgprobe.b4ac,
+-					 (unsigned)vgprobe.plink6c6,
+-					 hi5622_vap_start_g0_verdict(&vgprobe));
+-				vgrc = hi5622_vap_start_g0_precheck(&vgprobe);
+-				if (vgrc) {
+-					dev_warn(wdev_dev,
+-						 "cfg80211: vap_start_g0 REFUSED (%d): %s\n",
+-						 vgrc,
+-						 hi5622_vap_start_g0_verdict(&vgprobe));
+-					hi5622_vap_start_g0_refusals++;
+-					rc = vgrc;
+-					goto out;
+-				}
+-				if (!hi5622_vap_start_g0_helper_ok(&vgprobe))
+-					dev_info(wdev_dev,
+-						 "cfg80211: vap_start_g0 G6 warn: u32[mctx+0x4AC]=0 (the worker logs and returns; the AP path does not dereference it) - continuing\n");
+-				vg_state_0e = vgprobe.mctx ?
+-					(u8)hi5622_fw_ram_read(c->ctx,
+-						vgprobe.mctx +
+-						HI5622_VAP_START_G0_MCTX_STATE_OFF) : 0u;
+-				vg_band = vgprobe.mctx ?
+-					(u8)hi5622_fw_ram_read(c->ctx,
+-						vgprobe.mctx +
+-						HI5622_VAP_START_G0_MCTX_BAND_OFF) : 0u;
+-				if (restart_plain) {
+-					/* Never start a live VAP twice: a host-side
+-					 * stop restart re-posts the AP config only.  The
+-					 * G12 gate does not apply (no 0x0065 issued). */
+-					dev_info(wdev_dev,
+-						 "cfg80211: vap_start_g0: restart after host-side stop - the 0x0065 VAP start is NOT re-posted\n");
+-					vap_start_g0_ok = true;
+-				} else {
+-					len = 0;
+-					vgrc = hi5622_vap_start_g0_build(wire,
+-						HI5622_FRAME_MAX_TOTAL, &len, &vgp);
+-					if (vgrc) {
+-						dev_warn(wdev_dev,
+-							 "cfg80211: start_ap beacon_static: VAP-start builder refused (%d) - sequence aborted, no frame sent\n",
+-							 vgrc);
+-						hi5622_vap_start_g0_refusals++;
+-						rc = vgrc;
+-						goto out;
+-					}
+-					vgrc = hi5622_frame_post(c->ctx, wire, len,
+-								 "vap_start_g0", &vg_out0);
+-					hi5622_vap_start_g0_last_rc = vgrc;
+-					if (vgrc) {
+-						dev_warn(wdev_dev,
+-							 "cfg80211: start_ap beacon_static: VAP-start frame (g0 id1 key 0x0065) not posted (%d) - sequence aborted\n",
+-							 vgrc);
+-						rc = vgrc;
+-						goto out;
+-					}
+-					hi5622_vap_start_g0_posts++;
+-					posted++;
+-					dev_info(wdev_dev,
+-						 "cfg80211: start_ap beacon_static frame %u/%u 'vap_start_g0' posted (%zu B, g0 id1 key 0x0065, field B=%u, body {00,01,01,00,00,00,00,00,00,00,00,00}) - after the 0x0064 VAP add and before the 0x00F7/0x0242 steps\n",
+-						 posted, plan_n, len,
+-						 (unsigned)vgp.module);
+-					/* G12: the worker path is asynchronous; wait the
+-					 * bounded constant, then read mctx[0x0E]. */
+-					msleep(HI5622_VAP_START_G0_WAIT_MS);
+-					vg_state_0e = (u8)hi5622_fw_ram_read(c->ctx,
+-						vgprobe.mctx +
+-						HI5622_VAP_START_G0_MCTX_STATE_OFF);
+-					vg_band = (u8)hi5622_fw_ram_read(c->ctx,
+-						vgprobe.mctx +
+-						HI5622_VAP_START_G0_MCTX_BAND_OFF);
+-					hi5622_band_start_read_state(c->ctx, &vgst);
+-					vg12 = hi5622_vap_start_g0_postcheck(
+-						(unsigned int)vg_state_0e);
+-					dev_info(wdev_dev,
+-						 "cfg80211: vap_start_g0 post: mctx[0x0e]=%u mctx[0x11]=%u state1=%u state4=0x%02x vap=0x%08x vap+0x10=0x%08x (%s)\n",
+-						 (unsigned)vg_state_0e,
+-						 (unsigned)vg_band,
+-						 (unsigned)vgst.started,
+-						 (unsigned)vgst.vap_index,
+-						 vgst.vap_object,
+-						 vgst.vap_object_p10,
+-						 vg12 ?
+-						 "G12 FAIL - the 0x0065 event did not set mctx[0x0E]=1; the 0x0242 must NOT be posted" :
+-						 "G12 pass - the 0x0242 band start may be posted");
+-					vap_start_g0_ok = (vg12 == 0);
+-					if (!vap_start_g0_ok &&
+-					    hi5622_band_start ==
+-					    HI5622_BAND_START_PARM_MAX) {
+-						dev_warn(wdev_dev,
+-							 "cfg80211: vap_start_g0: G12 failed and band_start=1 - REFUSED to post the 0x0242 (CA 0x4AE7C would return 0 and state[4] would become 0xFF); capture the pack and power-cycle\n");
+-						hi5622_vap_start_g0_refusals++;
+-						rc = -EIO;
+-						goto out;
+-					}
+-				}
+-			} else if (hi5622_vap_start_g0 ==
+-				   HI5622_VAP_START_G0_PARM_MAX) {
+-				dev_info(wdev_dev,
+-					 "cfg80211: vap_start_g0: band %u is not band 1 - clean no-post (the 0x0065 step is a band-1 repair)\n",
+-					 (unsigned)p->band);
+-			}
+-		}
+ 		/* lane wifi-desc-table-send (task-188): the H2D 0x00F7
+ 		 * descriptor-table install.  Placement contract (sibling
+ 		 * wifi-fw-desc-table FIRE-RECIPE R2/R3): AFTER the VAP base
+@@ -2551,10 +2406,259 @@
+ 				}
+ 			}
+ 		}
++		memset(&cp, 0, sizeof(cp));
++		cp.band = p->band;
++		cp.channel = (u8)p->channel;
++		cp.vap_id = p->vap_id;
++		cp.module = p->module;
++		cp.dst = 0u;
++		cp.seq = 3u;
++		len = 0;
++		rc = ops->build_chan_cfg(wire, HI5622_FRAME_MAX_TOTAL, &len,
++					 &cp);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static: channel-config builder refused (%d) - sequence aborted\n",
++				 rc);
++			rc = rc < 0 ? rc : -EIO;
++			goto out;
++		}
++		rc = hi5622_frame_post(c->ctx, wire, len, "ap_chan", NULL);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap beacon_static: channel-config frame not posted (%d) - sequence aborted\n",
++				 rc);
++			goto out;
++		}
++		posted++;
++		dev_info(wdev_dev,
++			 "cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config\n",
++			 posted, plan_n, len, p->band, p->channel);
++		{
++			/* lane wifi-5ghz-beacon (task-175): vendor-synchronous channel
++			 * activation.  The vendor waits for the firmware's 0x0124
++			 * channel-config response before the AP frames; our ladder only
++			 * drains the H2D announce.  Fail closed on an invalid parameter
++			 * and on a wait timeout (no AP frame is sent against an
++			 * unprogrammed 5 GHz RF path). */
++			struct hi5622_beacon5g_plan b5;
++			int prc = hi5622_beacon5g_plan(
++				hi5622_ap_chan_wait_ms, hi5622_beacon_static, p->band,
++				hi5622_fw_ram_read(c->ctx,
++					HI5622_STAB_MODULE_TABLE_SLOT0_CPU),
++				hi5622_fw_ram_read(c->ctx,
++					HI5622_STAB_MODULE_TABLE_BASE_CPU), &b5);
++
++			if (prc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static REFUSED - ap_chan_wait_ms=%u is not a valid channel-activation parameter (%d); no AP frame sent\n",
++					 hi5622_ap_chan_wait_ms, prc);
++				rc = prc;
++				goto out;
++			}
++			if (b5.wait_ms) {
++				u32 waited = 0, chrd = 0;
++				bool ready = false;
++
++				if (!b5.mctx) {
++					dev_warn(wdev_dev,
++						 "cfg80211: 5GHz channel activation: module table unresolved - sleeping %u ms blind (readback unavailable), continuing\n",
++						 b5.wait_ms);
++					msleep(b5.wait_ms);
++				} else {
++					dev_info(wdev_dev,
++						 "cfg80211: 5GHz channel activation: waiting up to %u ms for the firmware module channel context (ctx 0x%08x, channel=%u band=%u)\n",
++						 b5.wait_ms, b5.mctx,
++						 (unsigned)p->channel, (unsigned)p->band);
++					while (waited < b5.wait_ms) {
++						chrd = hi5622_fw_ram_read(c->ctx,
++							 b5.mctx + HI5622_BEACON5G_MCTX_CHAN_OFF);
++						ready = hi5622_beacon5g_chan_ctx_ready(chrd,
++								 p->band, p->channel);
++						if (ready)
++							break;
++						msleep(HI5622_BEACON5G_WAIT_POLL_MS);
++						waited += HI5622_BEACON5G_WAIT_POLL_MS;
++					}
++					if (!ready) {
++						dev_warn(wdev_dev,
++							 "cfg80211: start_ap beacon_static REFUSED - the firmware module channel context did not report channel=%u band=%u valid after %u ms (ctx 0x%08x word=0x%08x); the 5GHz channel/RF was not programmed - no AP frame sent, power-cycle\n",
++							 (unsigned)p->channel,
++							 (unsigned)p->band, waited,
++							 b5.mctx, chrd);
++						rc = -EIO;
++						goto out;
++					}
++					dev_info(wdev_dev,
++						 "cfg80211: 5GHz channel activation: firmware channel context programmed after %u ms (word=0x%08x)\n",
++						 waited, chrd);
++				}
++			}
++			hi5622_scan_beacon5g_gates(c->ctx, wdev_dev);
++		}
++		/* lane wifi-band1-start-send-3 (task-209, R4) + send-4 (task-211,
++		 * the R4b reorder): the H2D g0-id1 key-0x0065 VAP-start event.
++		 * Placement contract (sibling ../wifi-band-start-prestart TABLES
++		 * T7/T11, corrected by the R4 fire 2026-11-26): AFTER the
++		 * key-0x0064 VAP add (the worker's AP branch sets mctx[0x0E]=1 on
++		 * the module context the add bound) and AFTER the 0x0124 channel
++		 * post, whose worker stores the channel/band bytes
++		 * mctx[0x10..0x13] that the G8 gate reads - at the old
++		 * pre-0x0124 position G8 refused with mctx[0x11]=0 (R4 fire) and
++		 * the 0x4C3FC branch's [mctx+0x190]+0x10 word is channel-context
++		 * data.  It must still precede every later step, in particular
++		 * the 0x0242 band start whose pre-start resolver CA 0x4AE7C
++		 * requires mctx[0x0E] in {1,2,3}.  A G1..G13 probe failure means
++		 * the frame must NOT be posted (G5: the worker would fault at CA
++		 * 0x46470); the sequence then aborts with the pack in dmesg.
++		 * After the post the G12 read (mctx[0x0E]==1) gates the 0x0242. */
++		{
++			struct hi5622_vap_start_g0_plan vgp;
++			struct hi5622_vap_start_g0_probe vgprobe;
++			struct hi5622_band_start_state vgst;
++			u32 vg_out0 = 0;
++			u32 vg_state_0e;
++			u8 vg_band;
++			int vg12, vgrc;
++
++			memset(&vgst, 0, sizeof(vgst));
++			vgrc = hi5622_vap_start_g0_plan(hi5622_vap_start_g0,
++							hi5622_beacon_static,
++							(unsigned int)p->band,
++							hi5622_vap_add_index,
++							&vgp);
++			if (vgrc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static REFUSED - vap_start_g0=%u is not a valid VAP-start parameter (%d); no AP frame sent\n",
++					 hi5622_vap_start_g0, vgrc);
++				hi5622_vap_start_g0_refusals++;
++				rc = vgrc;
++				goto out;
++			}
++			if (vgp.post) {
++				hi5622_scan_vap_start_g0_probe(c->ctx, &vgprobe,
++							       (u8)hi5622_vap_add_index);
++				dev_info(wdev_dev,
++					 "cfg80211: vap_start_g0 pre: mctx=0x%08x type=%u band=%u ch=%u field=%u state0=0x%02x state1=%u state4=0x%02x count=%u entry0=%u published=0x%08x d6e=%u ec8=%u b190=0x%08x b440=%u b4ac=0x%08x plink6c6=%u (%s)\n",
++					 vgprobe.mctx, (unsigned)vgprobe.type,
++					 (unsigned)vgprobe.band, (unsigned)vgprobe.ch,
++					 (unsigned)vgprobe.field,
++					 (unsigned)vgprobe.state0,
++					 (unsigned)vgprobe.state1,
++					 (unsigned)vgprobe.state4,
++					 (unsigned)vgprobe.count,
++					 (unsigned)vgprobe.entry0,
++					 vgprobe.published, (unsigned)vgprobe.d6e,
++					 (unsigned)vgprobe.ec8, vgprobe.b190,
++					 (unsigned)vgprobe.b440, vgprobe.b4ac,
++					 (unsigned)vgprobe.plink6c6,
++					 hi5622_vap_start_g0_verdict(&vgprobe));
++				vgrc = hi5622_vap_start_g0_precheck(&vgprobe);
++				if (vgrc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: vap_start_g0 REFUSED (%d): %s\n",
++						 vgrc,
++						 hi5622_vap_start_g0_verdict(&vgprobe));
++					hi5622_vap_start_g0_refusals++;
++					rc = vgrc;
++					goto out;
++				}
++				if (!hi5622_vap_start_g0_helper_ok(&vgprobe))
++					dev_info(wdev_dev,
++						 "cfg80211: vap_start_g0 G6 warn: u32[mctx+0x4AC]=0 (the worker logs and returns; the AP path does not dereference it) - continuing\n");
++				vg_state_0e = vgprobe.mctx ?
++					(u8)hi5622_fw_ram_read(c->ctx,
++						vgprobe.mctx +
++						HI5622_VAP_START_G0_MCTX_STATE_OFF) : 0u;
++				vg_band = vgprobe.mctx ?
++					(u8)hi5622_fw_ram_read(c->ctx,
++						vgprobe.mctx +
++						HI5622_VAP_START_G0_MCTX_BAND_OFF) : 0u;
++				if (restart_plain) {
++					/* Never start a live VAP twice: a host-side
++					 * stop restart re-posts the AP config only.  The
++					 * G12 gate does not apply (no 0x0065 issued). */
++					dev_info(wdev_dev,
++						 "cfg80211: vap_start_g0: restart after host-side stop - the 0x0065 VAP start is NOT re-posted\n");
++					vap_start_g0_ok = true;
++				} else {
++					len = 0;
++					vgrc = hi5622_vap_start_g0_build(wire,
++						HI5622_FRAME_MAX_TOTAL, &len, &vgp);
++					if (vgrc) {
++						dev_warn(wdev_dev,
++							 "cfg80211: start_ap beacon_static: VAP-start builder refused (%d) - sequence aborted, no frame sent\n",
++							 vgrc);
++						hi5622_vap_start_g0_refusals++;
++						rc = vgrc;
++						goto out;
++					}
++					vgrc = hi5622_frame_post(c->ctx, wire, len,
++								 "vap_start_g0", &vg_out0);
++					hi5622_vap_start_g0_last_rc = vgrc;
++					if (vgrc) {
++						dev_warn(wdev_dev,
++							 "cfg80211: start_ap beacon_static: VAP-start frame (g0 id1 key 0x0065) not posted (%d) - sequence aborted\n",
++							 vgrc);
++						rc = vgrc;
++						goto out;
++					}
++					hi5622_vap_start_g0_posts++;
++					posted++;
++					dev_info(wdev_dev,
++						 "cfg80211: start_ap beacon_static frame %u/%u 'vap_start_g0' posted (%zu B, g0 id1 key 0x0065, field B=%u, body {00,01,01,00,00,00,00,00,00,00,00,00}) - after the 0x0124 channel post (mctx[0x10..0x13] stored) and before the 0x0242 band start\n",
++						 posted, plan_n, len,
++						 (unsigned)vgp.module);
++					/* G12: the worker path is asynchronous; wait the
++					 * bounded constant, then read mctx[0x0E]. */
++					msleep(HI5622_VAP_START_G0_WAIT_MS);
++					vg_state_0e = (u8)hi5622_fw_ram_read(c->ctx,
++						vgprobe.mctx +
++						HI5622_VAP_START_G0_MCTX_STATE_OFF);
++					vg_band = (u8)hi5622_fw_ram_read(c->ctx,
++						vgprobe.mctx +
++						HI5622_VAP_START_G0_MCTX_BAND_OFF);
++					hi5622_band_start_read_state(c->ctx, &vgst);
++					vg12 = hi5622_vap_start_g0_postcheck(
++						(unsigned int)vg_state_0e);
++					dev_info(wdev_dev,
++						 "cfg80211: vap_start_g0 post: mctx[0x0e]=%u mctx[0x11]=%u state1=%u state4=0x%02x vap=0x%08x vap+0x10=0x%08x (%s)\n",
++						 (unsigned)vg_state_0e,
++						 (unsigned)vg_band,
++						 (unsigned)vgst.started,
++						 (unsigned)vgst.vap_index,
++						 vgst.vap_object,
++						 vgst.vap_object_p10,
++						 vg12 ?
++						 "G12 FAIL - the 0x0065 event did not set mctx[0x0E]=1; the 0x0242 must NOT be posted" :
++						 "G12 pass - the 0x0242 band start may be posted");
++					vap_start_g0_ok = (vg12 == 0);
++					if (!vap_start_g0_ok &&
++					    hi5622_band_start ==
++					    HI5622_BAND_START_PARM_MAX) {
++						dev_warn(wdev_dev,
++							 "cfg80211: vap_start_g0: G12 failed and band_start=1 - REFUSED to post the 0x0242 (CA 0x4AE7C would return 0 and state[4] would become 0xFF); capture the pack and power-cycle\n");
++						hi5622_vap_start_g0_refusals++;
++						rc = -EIO;
++						goto out;
++					}
++				}
++			} else if (hi5622_vap_start_g0 ==
++				   HI5622_VAP_START_G0_PARM_MAX) {
++				dev_info(wdev_dev,
++					 "cfg80211: vap_start_g0: band %u is not band 1 - clean no-post (the 0x0065 step is a band-1 repair)\n",
++					 (unsigned)p->band);
++			}
++		}
+ 		/* lane wifi-band1-start-send (task-206): the H2D g0-id1 key
+ 		 * 0x0242 band-start event (the stock WAL "set_green_ap").
+-		 * Placement contract (sibling wifi-band1-start T2/T5): AFTER
+-		 * the 0x01F7 mode event and BEFORE the 0x0124 channel post.
++		 * Placement contract (sibling wifi-band1-start T2/T5; the R4b
++		 * reorder of wifi-band1-start-send-4, task-211): AFTER the
++		 * 0x01F7 mode event, the 0x0124 channel post and the key-0x0065
++		 * VAP start.  The stock order is VAP add -> channel config ->
++		 * VAP start -> green_ap enable: the 0x0124 worker must have
++		 * stored the channel/band bytes the VAP start's G8 gate and the
++		 * 0x4C3FC pre-start word read before the band start runs.
+ 		 * The worker CA 0x4C524 calls the per-band MAC start
+ 		 * CA 0x4AF0C directly (subcmd 1 sync start at 0x4C612), whose
+ 		 * band-1 branch ORs 1|8|0x20|0x1000 (= 0x1029) into
+@@ -2626,7 +2730,7 @@
+ 				hi5622_band_start_posts++;
+ 				posted++;
+ 				dev_info(wdev_dev,
+-					 "cfg80211: start_ap beacon_static frame %u/%u 'band_start' posted (%zu B, g0 id1 key 0x0242, subcmd=1 sync start, field B=%u) - after the 0x01F7 mode and before the 0x0124 channel post\n",
++					 "cfg80211: start_ap beacon_static frame %u/%u 'band_start' posted (%zu B, g0 id1 key 0x0242, subcmd=1 sync start, field B=%u) - after the 0x01F7 mode, the 0x0124 channel post and the 0x0065 VAP start\n",
+ 					 posted, plan_n, len,
+ 					 (unsigned)bsp.module);
+ 				/* Read-only evidence for the Lead: the
+@@ -2714,96 +2818,6 @@
+ 				}
+ 			}
+ 		}
+-		memset(&cp, 0, sizeof(cp));
+-		cp.band = p->band;
+-		cp.channel = (u8)p->channel;
+-		cp.vap_id = p->vap_id;
+-		cp.module = p->module;
+-		cp.dst = 0u;
+-		cp.seq = 3u;
+-		len = 0;
+-		rc = ops->build_chan_cfg(wire, HI5622_FRAME_MAX_TOTAL, &len,
+-					 &cp);
+-		if (rc) {
+-			dev_warn(wdev_dev,
+-				 "cfg80211: start_ap beacon_static: channel-config builder refused (%d) - sequence aborted\n",
+-				 rc);
+-			rc = rc < 0 ? rc : -EIO;
+-			goto out;
+-		}
+-		rc = hi5622_frame_post(c->ctx, wire, len, "ap_chan", NULL);
+-		if (rc) {
+-			dev_warn(wdev_dev,
+-				 "cfg80211: start_ap beacon_static: channel-config frame not posted (%d) - sequence aborted\n",
+-				 rc);
+-			goto out;
+-		}
+-		posted++;
+-		dev_info(wdev_dev,
+-			 "cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config\n",
+-			 posted, plan_n, len, p->band, p->channel);
+-		{
+-			/* lane wifi-5ghz-beacon (task-175): vendor-synchronous channel
+-			 * activation.  The vendor waits for the firmware's 0x0124
+-			 * channel-config response before the AP frames; our ladder only
+-			 * drains the H2D announce.  Fail closed on an invalid parameter
+-			 * and on a wait timeout (no AP frame is sent against an
+-			 * unprogrammed 5 GHz RF path). */
+-			struct hi5622_beacon5g_plan b5;
+-			int prc = hi5622_beacon5g_plan(
+-				hi5622_ap_chan_wait_ms, hi5622_beacon_static, p->band,
+-				hi5622_fw_ram_read(c->ctx,
+-					HI5622_STAB_MODULE_TABLE_SLOT0_CPU),
+-				hi5622_fw_ram_read(c->ctx,
+-					HI5622_STAB_MODULE_TABLE_BASE_CPU), &b5);
+-
+-			if (prc) {
+-				dev_warn(wdev_dev,
+-					 "cfg80211: start_ap beacon_static REFUSED - ap_chan_wait_ms=%u is not a valid channel-activation parameter (%d); no AP frame sent\n",
+-					 hi5622_ap_chan_wait_ms, prc);
+-				rc = prc;
+-				goto out;
+-			}
+-			if (b5.wait_ms) {
+-				u32 waited = 0, chrd = 0;
+-				bool ready = false;
+-
+-				if (!b5.mctx) {
+-					dev_warn(wdev_dev,
+-						 "cfg80211: 5GHz channel activation: module table unresolved - sleeping %u ms blind (readback unavailable), continuing\n",
+-						 b5.wait_ms);
+-					msleep(b5.wait_ms);
+-				} else {
+-					dev_info(wdev_dev,
+-						 "cfg80211: 5GHz channel activation: waiting up to %u ms for the firmware module channel context (ctx 0x%08x, channel=%u band=%u)\n",
+-						 b5.wait_ms, b5.mctx,
+-						 (unsigned)p->channel, (unsigned)p->band);
+-					while (waited < b5.wait_ms) {
+-						chrd = hi5622_fw_ram_read(c->ctx,
+-							 b5.mctx + HI5622_BEACON5G_MCTX_CHAN_OFF);
+-						ready = hi5622_beacon5g_chan_ctx_ready(chrd,
+-								 p->band, p->channel);
+-						if (ready)
+-							break;
+-						msleep(HI5622_BEACON5G_WAIT_POLL_MS);
+-						waited += HI5622_BEACON5G_WAIT_POLL_MS;
+-					}
+-					if (!ready) {
+-						dev_warn(wdev_dev,
+-							 "cfg80211: start_ap beacon_static REFUSED - the firmware module channel context did not report channel=%u band=%u valid after %u ms (ctx 0x%08x word=0x%08x); the 5GHz channel/RF was not programmed - no AP frame sent, power-cycle\n",
+-							 (unsigned)p->channel,
+-							 (unsigned)p->band, waited,
+-							 b5.mctx, chrd);
+-						rc = -EIO;
+-						goto out;
+-					}
+-					dev_info(wdev_dev,
+-						 "cfg80211: 5GHz channel activation: firmware channel context programmed after %u ms (word=0x%08x)\n",
+-						 waited, chrd);
+-				}
+-			}
+-			hi5622_scan_beacon5g_gates(c->ctx, wdev_dev);
+-		}
+ 	} else {
+ 		/* v7 base: post the vendor mode-1 VAP base once per module load
+ 		 * (skipped when a scan or a previous AP start already posted it). */
+--- a/hi5622_scan_logic.c
++++ b/hi5622_scan_logic.c
+@@ -719,7 +719,9 @@
+  * 0x00F7 step added by wifi-desc-table-send, task-188;
+  * 0x01F7 step added by wifi-dfs-mode-send, task-190;
+  * 0x0242 step added by wifi-band1-start-send, task-206;
+- * 0x0065 step added by wifi-band1-start-send-3, task-209)
++ * 0x0065 step added by wifi-band1-start-send-3, task-209;
++ * R4b reorder by wifi-band1-start-send-4, task-211: the 0x0124 channel
++ * post now precedes the 0x0065 and 0x0242 steps)
+  * ===================================================================*/
+ unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
+ 				unsigned int vap_start_g0,
+@@ -733,13 +735,6 @@
+ 		return 0;
+ 	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_VAP_ADD;
+-	/* The H2D 0x0065 VAP-start event must follow the key-0x0064 VAP add
+-	 * (the worker's AP branch sets mctx[0x0E] = 1 on the module context the
+-	 * add created/bound) and precede every later step: the 0x0242 band-start
+-	 * resolver CA 0x4AE7C requires mctx[0x0E] in {1,2,3}.  Only the
+-	 * fail-closed value 1 enables the step. */
+-	if (vap_start_g0 == 1u && n < max)
+-		out[n++] = HI5622_BEACON_STEP_VAP_START_G0;
+ 	/* The H2D 0x00F7 descriptor table must be installed after the VAP base
+ 	 * bound the module band object (0x0064) and before the 0x0124 channel
+ 	 * post: the band-1 RF programme evaluates the armed record at 0x0124
+@@ -754,18 +749,32 @@
+ 	 * the step. */
+ 	if (dfs_mode == 1u && n < max)
+ 		out[n++] = HI5622_BEACON_STEP_DFS_MODE;
++	/* The 0x0124 channel post (R4b, wifi-band1-start-send-4) is not
++	 * optional: its worker stores the channel/band bytes mctx[0x10..0x13]
++	 * that key 0x0065's G8 gate and the 0x0242 pre-start
++	 * [mctx+0x190]+0x10 word read (R4 fire: G8 refused with mctx[0x11]=0
++	 * when the 0x0065 ran first).  It also runs the band-1 RF programme
++	 * record the 0x00F7/0x01F7 steps armed. */
++	if (n < max)
++		out[n++] = HI5622_BEACON_STEP_CHAN;
++	/* The H2D 0x0065 VAP-start event must follow the 0x0124 channel post
++	 * (G8 reads mctx[0x11] = 1 only after it) and the key-0x0064 VAP add
++	 * (the worker's AP branch sets mctx[0x0E] = 1 on the module context the
++	 * add created/bound), and precede every later step: the 0x0242
++	 * band-start resolver CA 0x4AE7C requires mctx[0x0E] in {1,2,3}.  Only
++	 * the fail-closed value 1 enables the step. */
++	if (vap_start_g0 == 1u && n < max)
++		out[n++] = HI5622_BEACON_STEP_VAP_START_G0;
+ 	/* The H2D 0x0242 band-start event (the stock WAL "set_green_ap") must
+-	 * follow the 0x01F7 mode event and precede the 0x0124 channel post:
+-	 * its worker CA 0x4C524 calls the per-band MAC start CA 0x4AF0C
+-	 * directly and arms the band-1 0x1029 bits in 0x4010C220, which the
+-	 * 0x0124 band-1 RF programme path depends on.  Only the fail-closed
+-	 * value 1 enables the step; the optional fallback rungs run inside
+-	 * the same step (band_start_fallback). */
++	 * follow the 0x01F7 mode event, the 0x0124 channel post and the
++	 * key-0x0065 VAP start (G12): its worker CA 0x4C524 calls the per-band
++	 * MAC start CA 0x4AF0C directly and arms the band-1 0x1029 bits in
++	 * 0x4010C220, which the 0x0124 band-1 RF programme path depends on.
++	 * Only the fail-closed value 1 enables the step; the optional fallback
++	 * rungs run inside the same step (band_start_fallback). */
+ 	if (band_start == 1u && n < max)
+ 		out[n++] = HI5622_BEACON_STEP_BAND_START;
+ 	if (n < max)
+-		out[n++] = HI5622_BEACON_STEP_CHAN;
+-	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_SSID;
+ 	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_AP_CFG;
+--- a/hi5622_scan_logic.h
++++ b/hi5622_scan_logic.h
+@@ -292,8 +292,7 @@
+  * only when the fail-closed dfs_mode parameter is exactly 1.
+  *
+  * wifi-band1-start-send (task-206) inserts the H2D g0-id1 key 0x0242
+- * band-start step (the WAL set_green_ap command) after the 0x01F7 mode
+- * step and still before the 0x0124 channel post: the 0x0242 worker
++ * band-start step (the WAL set_green_ap command): the 0x0242 worker
+  * CA 0x4C524 calls the per-band MAC start CA 0x4AF0C directly (subcmd 1 at
+  * 0x4C612, subcmd 2 at 0x4C652), which is the path that sets the band-1
+  * arm bits 0x1029 in 0x4010C220.  The step is present only when the
+@@ -308,16 +307,28 @@
+  * {1,2,3}).  The step is present only when the fail-closed vap_start_g0
+  * parameter is exactly 1; it is only posted for a band-1 AP start whose
+  * G1..G13 probe pack passes, and the 0x0242 step is then gated on the
+- * post-0x0065 G12 read (mctx[0x0E] == 1). */
++ * post-0x0065 G12 read (mctx[0x0E] == 1).
++ *
++ * wifi-band1-start-send-4 (task-211) applies the R4b reorder.  The R4 fire
++ * (2026-11-26) refused at the 0x0065 step's own G8 gate with '-22: mctx[0x11]
++ * is not 1 (5 GHz)': the 0x0065 step ran before the 0x0124 channel post,
++ * whose worker stores the channel/band bytes mctx[0x10..0x13] the later
++ * steps and the 0x4C3FC pre-start [mctx+0x190]+0x10 word read.  The plan
++ * order is therefore vap_add -> desc_table -> dfs_mode -> ap_chan ->
++ * vap_start_g0 -> band_start -> ap_ssid -> ap_cfg -> ap_vap_start (the stock
++ * order VAP add -> channel config -> VAP start -> green_ap enable).  All
++ * fail-closed gates are unchanged: G8 (mctx[0x11]==1) now passes after the
++ * 0x0124, G12 (mctx[0x0E]==1) still gates the 0x0242, G5
++ * (mctx[0x190]!=0) still gates the 0x0065. */
+ 
+ enum hi5622_beacon_step {
+ 	HI5622_BEACON_STEP_NONE = 0,
+ 	HI5622_BEACON_STEP_VAP_ADD = 1,		/* mode-1 base: user_add only */
+-	HI5622_BEACON_STEP_VAP_START_G0 = 2,	/* H2D 0x0065 VAP start (R4) */
+-	HI5622_BEACON_STEP_DESC_TABLE = 3,	/* H2D 0x00F7 table (C1 fix) */
+-	HI5622_BEACON_STEP_DFS_MODE = 4,	/* H2D 0x01F7 RF mode (F1) */
+-	HI5622_BEACON_STEP_BAND_START = 5,	/* H2D 0x0242 band-1 start (R3b) */
+-	HI5622_BEACON_STEP_CHAN = 6,		/* channel config after the arm */
++	HI5622_BEACON_STEP_DESC_TABLE = 2,	/* H2D 0x00F7 table (C1 fix) */
++	HI5622_BEACON_STEP_DFS_MODE = 3,	/* H2D 0x01F7 RF mode (F1) */
++	HI5622_BEACON_STEP_CHAN = 4,		/* 0x0124 channel ctx (R4b) */
++	HI5622_BEACON_STEP_VAP_START_G0 = 5,	/* H2D 0x0065 VAP start (R4) */
++	HI5622_BEACON_STEP_BAND_START = 6,	/* H2D 0x0242 band-1 start (R3b) */
+ 	HI5622_BEACON_STEP_SSID = 7,		/* provider frame 0 */
+ 	HI5622_BEACON_STEP_AP_CFG = 8,		/* provider frame 1 */
+ 	HI5622_BEACON_STEP_VAP_START = 9,	/* AFTER the AP config */
+@@ -328,17 +339,16 @@
+  * returns 0 (the legacy bench-proven path is executed instead, unchanged).
+  * vap_start=0 drops only the final VAP-start step (ladder isolation rung).
+  * vap_start_g0=0 (default) drops the 0x0065 VAP-start step; exactly 1 inserts
+- * it directly after vap_add and before desc_table; any other value is
++ * it after ap_chan and before band_start (the R4b order); any other value is
+  * refused by the kernel layer before this plan is built.  desc_table=0
+- * (default) drops the 0x00F7 step; exactly 1 inserts it between vap_add (and
+- * the 0x0065 step when requested) and ap_chan; any other value is refused by
+- * the kernel layer before this plan is built.  dfs_mode=0 (default) drops
+- * the 0x01F7 step; exactly 1 inserts it between desc_table and ap_chan (after
+- * it when both are 1); any other value is refused by the kernel layer before
+- * this plan is built.  band_start=0 (default) drops the 0x0242 step; exactly
+- * 1 inserts it between dfs_mode and ap_chan (after the 0x00F7/0x01F7 steps
+- * when they are 1); any other value is refused by the kernel layer before
+- * this plan is built. */
++ * (default) drops the 0x00F7 step; exactly 1 inserts it between vap_add and
++ * ap_chan; any other value is refused by the kernel layer before this plan is
++ * built.  dfs_mode=0 (default) drops the 0x01F7 step; exactly 1 inserts it
++ * between desc_table and ap_chan (after it when both are 1); any other value
++ * is refused by the kernel layer before this plan is built.  band_start=0
++ * (default) drops the 0x0242 step; exactly 1 inserts it after ap_chan (and
++ * after the 0x0065 step when requested) and before ap_ssid; any other value
++ * is refused by the kernel layer before this plan is built. */
+ unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
+ 				unsigned int vap_start_g0,
+ 				unsigned int desc_table, unsigned int dfs_mode,
+--- a/hi5622_vap_start_g0.h
++++ b/hi5622_vap_start_g0.h
+@@ -40,12 +40,20 @@
+  * Fail-closed module parameter (owned by hi5622_scan.c):
+  *   vap_start_g0=0 (default)  no 0x0065 frame at all - current behaviour;
+  *   vap_start_g0=1            post the 40-B frame once per band-1 AP start,
+- *                             AFTER the key-0x0064 VAP add and BEFORE the
+- *                             0x00F7 / 0x0242 steps, only with the
+- *                             beacon_static vendor order, and only when the
+- *                             G1..G13 probe pack passes;
++ *                             AFTER the key-0x0064 VAP add AND AFTER the
++ *                             0x0124 channel post (whose worker stores the
++ *                             channel/band bytes mctx[0x10..0x13] that G8
++ *                             reads; R4 fire), BEFORE the 0x0242 band start,
++ *                             only with the beacon_static vendor order, and
++ *                             only when the G1..G13 probe pack passes;
+  *   vap_start_g0>1            refused (-EINVAL) before any frame.
+  *
++ * R4b (lane wifi-band1-start-send-4, task-211): the step is posted AFTER the
++ * 0x0124 channel post, not before it.  The R4 fire refused at G8 ('mctx[0x11]
++ * is not 1 (5 GHz)') because the 0x0124 worker is what stores the band byte
++ * and the channel-context word the pre-start reads; the order is now
++ * vap_add -> desc_table -> dfs_mode -> ap_chan -> vap_start_g0 -> band_start.
++ *
+  * The probe pack (read-only firmware RAM; the caller fills it):
+  *   G1  mctx != 0                          G8  u8[mctx+0x11] == 1 (band 5G)
+  *   G2  bandobj != 0 && count == 1         G9  u8[mctx+0x440] == 0
+--- a/hi5622_band_start.h
++++ b/hi5622_band_start.h
+@@ -31,8 +31,9 @@
+  *                            behaviour, byte-identical to the F2 ladder;
+  *   band_start=1             post the 33-byte 0x0242 sync-start frame on a
+  *                            BAND-1 AP start with the beacon_static vendor
+- *                            order, AFTER the 0x01F7 DFS/RF-mode step and
+- *                            BEFORE the 0x0124 channel post;
++ *                            order, AFTER the 0x01F7 DFS/RF-mode step, the
++ *                            0x0124 channel post and the key-0x0065 VAP
++ *                            start (R4b reorder, wifi-band1-start-send-4);
+  *   band_start>1             refused (-EINVAL) before any frame.
+  *
+  *   band_start_fallback=0 (default)  no fallback rung;
