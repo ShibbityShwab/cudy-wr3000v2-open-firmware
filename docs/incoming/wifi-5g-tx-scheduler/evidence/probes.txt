@@ -1,0 +1,40 @@
+=== R0 probe pack (read-only, same boot; compare 5G vs 2.4G) ===
+RAM : BAR0 = CA + 0x6B8000 ; phys = 0x40000000 + BAR0
+IO  : BAR0 = 0x3B8000 + (CA - 0x40000000) ; phys = 0x40000000 + BAR0
+
+object                                   CA         BAR0       phys       expect
+--------------------------------------------------------------------------------------------------------
+GATE_EN 0x40101220                       0x40101220 0x004B9220 0x404B9220 band0 bit1 set when 2.4G AP runs
+GATE_SUS 0x40101208                      0x40101208 0x004B9208 0x404B9208 0 = no suspend
+band0 object slot                        0x0018081C 0x0083881C 0x4083881C nonzero
+band1 object slot                        0x00180830 0x00838830 0x40838830 nonzero
+band0 MAC block                          0x40110000 0x004C8000 0x404C8000 0x548/0x54C = 0x6101-style init
+band1 MAC block                          0x40114000 0x004CC000 0x404CC000 0x548/0x54C = 0x6101-style init
+band0 TRX reg                            0x4010820C 0x004C020C 0x404C020C 0x33
+band1 TRX reg                            0x4010E150 0x004C6150 0x404C6150 0x33
+band1 TRX reg2                           0x4010E154 0x004C6154 0x404C6154 0xFF
+
+LIVE per-band IRQ handler table (IRQ install store in CA 0xC74B0):
+irq    CA         BAR0       phys      
+47     0x0017D4EC 0x008354EC 0x408354EC
+49     0x0017D4F4 0x008354F4 0x408354F4
+50     0x0017D4F8 0x008354F8 0x408354F8
+51     0x0017D4FC 0x008354FC 0x408354FC
+52     0x0017D500 0x00835500 0x40835500
+82     0x0017D578 0x00835578 0x40835578
+83     0x0017D57C 0x0083557C 0x4083557C
+59     0x0017D51C 0x0083551C 0x4083551C
+53     0x0017D504 0x00835504 0x40835504
+55     0x0017D50C 0x0083550C 0x4083550C
+56     0x0017D510 0x00835510 0x40835510
+57     0x0017D514 0x00835514 0x40835514
+58     0x0017D518 0x00835518 0x40835518
+84     0x0017D580 0x00835580 0x40835580
+85     0x0017D584 0x00835584 0x40835584
+60     0x0017D520 0x00835520 0x40835520
+
+expected installed values: 5G wrappers <band1>, 2.4G wrappers <band0>:
+  2.4G: irq47=0x0AEC95, irq49=0x0B54C9, irq50=0x0B0D51, irq51=0x0AEC69, irq52=0x0AEB75, irq82=0x0AE48D, irq83=0x0B0D51, irq59=0x0B0C45
+  5G: irq53=0x0AEC89, irq55=0x0B54BD, irq56=0x0B0D45, irq57=0x0AEC5D, irq58=0x0AEB69, irq84=0x0AE481, irq85=0x0B0D45, irq60=0x0B0C39
+
+forbidden: RC misc window 0x10160000..0x1016FFFF

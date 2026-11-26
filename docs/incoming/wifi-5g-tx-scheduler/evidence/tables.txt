@@ -1,0 +1,124 @@
+=== T1. the 45 names (CA order) ===
+  0x12266C  smac_coex_rx_abort_end_5g_isr
+  0x12268C  smac_coex_rx_abort_end_2g_isr
+  0x1226AC  smac_rx_complete_5g_isr
+  0x1226C4  smac_rx_complete_2g_isr
+  0x1226DC  smac_tx_complete_5g_isr
+  0x1226F4  smac_tx_complete_2g_isr
+  0x12270C  smac_common_timer_5g_isr
+  0x122728  smac_common_timer_2g_isr
+  0x122744  smac_coex_pta_rx_abort_timeout_5g_isr
+  0x12276C  smac_coex_pta_rx_abort_timeout_2g_isr
+  0x122794  smac_coex_tx_abort_end_5g_isr
+  0x1227B4  smac_coex_tx_abort_end_2g_isr
+  0x1227D4  smac_coex_pta_tx_abort_timeout_5g_isr
+  0x1227FC  smac_coex_pta_tx_abort_timeout_2g_isr
+  0x122824  smac_msg_proc_set_mu_edca_timer_req
+  0x122848  smac_msg_proc_ac_suspend_req
+  0x122868  smac_msg_proc_set_cali_self_cts_tx_num_req
+  0x122894  smac_msg_proc_set_cali_ppdu_tx_num_req
+  0x1228BC  smac_msg_proc_rx_ring_reset_req
+  0x1228DC  smac_msg_proc_update_tx_bypass_ctrl_req
+  0x122904  smac_msg_proc_beacon_tx_resume_req
+  0x122928  smac_msg_proc_beacon_tx_suspend_req
+  0x12294C  smac_msg_proc_clr_hw_fifo_req
+  0x12296C  smac_msg_proc_tx_resume_req
+  0x122988  smac_msg_proc_tx_suspend_req
+  0x1229A8  smac_msg_proc_enable_trx_req
+  0x1229C8  smac_msg_proc_disable_trx_req
+  0x1229E8  smac_tbtt_5g_isr
+  0x1229FC  smac_tbtt_2g_isr
+  0x122A10  smac_rx_timeout_5g_isr
+  0x122A28  smac_rx_timeout_2g_isr
+  0x122A44  smac_pre_tx_5g_isr
+  0x122A58  smac_pre_tx_2g_isr
+  0x122A6C  smac_backoff_timeout_5g_isr
+  0x122A88  smac_backoff_timeout_2g_isr
+  0x122AA4  smac_user_queue_empty_5g_isr
+  0x122AC4  smac_user_queue_empty_2g_isr
+  0x122AE4  smac_user_ps_5g_isr
+  0x122AF8  smac_user_ps_2g_isr
+  0x122B0C  smac_tx_abort_start_5g_isr
+  0x122B28  smac_tx_abort_start_2g_isr
+  0x122B44  smac_lifetime_expire_5g_isr
+  0x122B60  smac_lifetime_expire_2g_isr
+  0x122B7C  smac_tx_exit_5g_isr
+  0x122B90  smac_tx_exit_2g_isr
+
+=== T2. ISR handler table CA 0x10B058 (32 entries, name order) ===
+  idx name                                     handler
+  0   smac_coex_rx_abort_end_5g_isr            0x0E6D00
+  1   smac_coex_rx_abort_end_2g_isr            0x0E6CBC
+  2   smac_rx_complete_5g_isr                  0x0E6C94
+  3   smac_rx_complete_2g_isr                  0x0E6EE8
+  4   smac_tx_complete_5g_isr                  0x0E6C10
+  5   smac_tx_complete_2g_isr                  0x0E7060
+  6   smac_common_timer_5g_isr                 0x0E700C
+  7   smac_common_timer_2g_isr                 0x0E6A00
+  8   smac_coex_pta_rx_abort_timeout_5g_isr    0x0E6BF4
+  9   smac_coex_pta_rx_abort_timeout_2g_isr    0x0E69DC
+  10  smac_coex_tx_abort_end_5g_isr            0x0E6BBC
+  11  smac_coex_tx_abort_end_2g_isr            0x0E6B48
+  12  smac_coex_pta_tx_abort_timeout_5g_isr    0x0E6F74
+  13  smac_coex_pta_tx_abort_timeout_2g_isr    0x0E6F1C
+  14  smac_tbtt_5g_isr                         0x0E69CA
+  15  smac_tbtt_2g_isr                         0x0E69A2
+  16  smac_rx_timeout_5g_isr                   0x0E698E
+  17  smac_rx_timeout_2g_isr                   0x0E6984
+  18  smac_pre_tx_5g_isr                       0x0E77FA
+  19  smac_pre_tx_2g_isr                       0x0EB438
+  20  smac_backoff_timeout_5g_isr              0x0E77DA
+  21  smac_backoff_timeout_2g_isr              0x0E77A8
+  22  smac_user_queue_empty_5g_isr             0x0E7788
+  23  smac_user_queue_empty_2g_isr             0x0E7768
+  24  smac_user_ps_5g_isr                      0x0E7748
+  25  smac_user_ps_2g_isr                      0x0EB3B8
+  26  smac_tx_abort_start_5g_isr               0x0E7736
+  27  smac_tx_abort_start_2g_isr               0x0E770C
+  28  smac_lifetime_expire_5g_isr              0x0E76A0
+  29  smac_lifetime_expire_2g_isr              0x0E6A1C
+  30  smac_tx_exit_5g_isr                      0x0E7144
+  31  smac_tx_exit_2g_isr                      0x0E83F4
+
+=== T3. SMAC message-processor table CA 0x10B0DC ===
+  idx0  0x0E70EC
+  idx1  0x0DB7A0
+  idx2  0x0E8520
+  idx3  0x0E6B00
+  idx4  0x0E6AB4
+  idx5  0x0E6A70
+  idx6  0x0E6A26
+  idx7  0x0DB718
+  idx8  0x0E8214
+  idx9  0x0E83AC
+
+=== T4. per-band IRQ registration (boot init CA 0xD1B68) ===
+  band irq    flags    wrapper  shared body
+  2.4G 47     5        0x0AEC95 0x000000
+  2.4G 49     5        0x0B54C9 0x000000
+  2.4G 50     5        0x0B0D51 0x000000
+  2.4G 51     5        0x0AEC69 0x000000
+  2.4G 52     5        0x0AEB75 0x000000
+  2.4G 82     14       0x0AE48D 0x000000
+  2.4G 83     5        0x0B0D51 0x000000
+  2.4G 59     5        0x0B0C45 0x000000
+  5G   53     5        0x0AEC89 0x000000
+  5G   55     5        0x0B54BD 0x000000
+  5G   56     5        0x0B0D45 0x000000
+  5G   57     5        0x0AEC5D 0x000000
+  5G   58     5        0x0AEB69 0x000000
+  5G   84     14       0x0AE481 0x000000
+  5G   85     5        0x0B0D45 0x000000
+  5G   60     5        0x0B0C39 0x000000
+
+=== T5. the beacon TX gate words and their firmware writers ===
+  GATE_EN  0x40101220 : bit0=5 GHz bit1=2.4 GHz (MAC start CA 0x4AF0C)
+  GATE_SUS 0x40101208 : == GATE_EN -24
+  handler    role             effect
+  0x0E6A26  resume 5g    GATE_EN |= 1 ; GATE_SUS &= ~(0x1|0x4)
+  0x0E6A70  suspend 5g   GATE_EN &= ~1; GATE_SUS |= (0x1|0x4)
+  0x0E6AB4  resume 2g    GATE_EN |= 2 ; GATE_SUS &= ~(0x2|0x8)
+  0x0E6B00  suspend 2g   GATE_EN &= ~2; GATE_SUS |= (0x2|0x8)
+
+=== T6. TRX enable/disable worker CA 0xE8520 (msg table idx 2) ===
+  band byte = u8(msg+0xA); band1 writes ['0x4010E150', '0x4010E154'] ; band0 writes ['0x4010820C', '0x40108214']

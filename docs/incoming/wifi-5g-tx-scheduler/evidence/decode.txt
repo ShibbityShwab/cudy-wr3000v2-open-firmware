@@ -1,0 +1,45 @@
+=== firmware band-1 beacon TX gate - decode ===
+
+[1] the 45-name blob CA 0x12266C..0x122BA4
+    45 names: 32 per-band ISR names (16 x 5g/2g) + 13 smac_msg_proc
+    every name is DEAD static data: no u32 literal, no movw/movt
+    reference to any name CA exists in the image [V]
+
+[2] static handler tables (same section, name order)
+    ISR table CA 0x10B058: 32 thumb pointers
+      idx14 tbtt_5g -> 0x0E69CA ; idx15 tbtt_2g -> 0x0E69A2
+      tbtt_5g  body CA 0x0E69CA: 6 insns, stops at bx lr/pop pc, no BL and no device literal
+      tbtt_2g  body CA 0x0E69A2: 11 insns, stops at bx lr/pop pc, no BL and no device literal
+    MSG table CA 0x10B0DC: 10 pointers; idx2 = 0x0E8520 (enable/disable TRX worker); idx3..6 = the four beacon TX resume/suspend procs
+
+[3] the per-band beacon TX gate (host-visible words)
+    0x40101220  per-band SMAC/TX enable : bit0 = 5 GHz, bit1 = 2.4 GHz
+    0x40101208  per-band suspend latch  : 5 GHz bits 0x1|0x4, 2.4 GHz bits 0x2|0x8
+      CA 0x0E6A26 resume 5g    ldr r2, [pc, #44]; orr.w r3, r3, #1; bic.w r3, r3, #1; bic.w r3, r3, #4; ldr r0, [pc, #44]; 
+      CA 0x0E6A70 suspend 5g   ldr r2, [pc, #36]; bic.w r3, r3, #1; ldr r3, [pc, #24]; orr.w r2, r2, #1; orr.w r2, r2, #4; ldr r0, [pc, #56]; 
+      CA 0x0E6AB4 resume 2g    ldr r2, [pc, #48]; orr.w r3, r3, #2; bic.w r3, r3, #2; bic.w r3, r3, #8; ldr r0, [pc, #48]; 
+      CA 0x0E6B00 suspend 2g   ldr r2, [pc, #40]; bic.w r3, r3, #2; ldr r3, [pc, #28]; orr.w r2, r2, #2; orr.w r2, r2, #8; ldr r0, [pc, #88]; 
+
+[4] boot init CA 0xD1B68 - the per-band IRQ registration
+    IRQ install fn CA 0xC74B0 stores the handler at [0x17D398 + 0x98 + 4*irq]
+    wrapper object CA 0x180814: +0x8 = band0 object, +0x1C = band1 object
+    pair       band0 (IRQ->wrapper)         band1 (IRQ->wrapper)        
+    IRQ 47/53  0x0AEC95 flags 5           0x0AEC89 flags 5 
+    IRQ 49/55  0x0B54C9 flags 5           0x0B54BD flags 5 
+    IRQ 50/56  0x0B0D51 flags 5           0x0B0D45 flags 5 
+    IRQ 51/57  0x0AEC69 flags 5           0x0AEC5D flags 5 
+    IRQ 52/58  0x0AEB75 flags 5           0x0AEB69 flags 5 
+    IRQ 82/84  0x0AE48D flags 14          0x0AE481 flags 14
+    IRQ 83/85  0x0B0D51 flags 5           0x0B0D45 flags 5 
+    IRQ 59/60  0x0B0C45 flags 5           0x0B0C39 flags 5 
+    identical shared bodies, only the wrapper band object differs [V]
+    => the band-1 TBTT ISR entry is registered identically at boot
+
+[5] host trigger boundary
+    table A (217 rows) / table B (88 rows) host workers: none is a beacon/TRX processor or any of the 45 handlers [V]
+    => the beacon_tx_resume messages are firmware-internal; the host cannot post them, it can only set the two gate words above
+
+[6] conclusion
+    This build has NO firmware beacon-build/queue task: the TBTT handlers are 6/11-insn reporting stubs and the beacon TX is
+    hardware TBTT-driven.  The firmware's only per-band gate is 0x40101220 + 0x40101208:
+    band1 beacons only leave the chip while bit0 is set and the 0x1/0x4 suspend latches are clear.

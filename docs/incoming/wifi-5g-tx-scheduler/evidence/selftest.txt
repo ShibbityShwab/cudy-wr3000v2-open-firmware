@@ -1,0 +1,149 @@
+=== selftest: image identity ===
+PASS   1  firmware length == 928920
+PASS   2  firmware sha256 == 7fc87e20...311b
+
+=== selftest: the 45-name blob ===
+PASS   3  blob CA 0x12266C..0x122BA4 holds 45 names
+PASS   4  first name is coex_rx_abort_end_5g
+PASS   5  last name is smac_tx_exit_2g_isr
+PASS   6  names 0..13 are the first 7 per-band ISR pairs
+PASS   7  names 14..26 are the 13 smac_msg_proc names
+PASS   8  names 27..44 are the last 9 per-band ISR pairs
+PASS   9  13 msg_proc + 32 ISR names = 45
+PASS  10  no u32 literal anywhere equals a name CA (dead names)
+PASS  11  no movw/movt constant equals a name CA (dead names)
+PASS  12  no code loads a static table base (0x10B058/0x10B0DC): tables are uninstalled static data
+
+=== selftest: static handler tables ===
+PASS  13  ISR table CA 0x10B058 has 32 entries
+PASS  14  all ISR table entries are odd (thumb) pointers
+PASS  15  all ISR table entries point into image code (< 0x122C98)
+PASS  16  ISR table idx14 (tbtt_5g) = CA 0x0E69CA
+PASS  17  ISR table idx15 (tbtt_2g) = CA 0x0E69A2
+PASS  18  tbtt_5g handler is a leaf of <= 8 insns
+PASS  19  tbtt_5g handler contains no BL (no beacon build/queue)
+PASS  20  tbtt_2g handler is a leaf of <= 12 insns
+PASS  21  tbtt_2g handler contains no BL (no beacon build/queue)
+PASS  22  msg table CA 0x10B0DC has 10 entries
+PASS  23  msg table entries are thumb pointers
+PASS  24  msg table idx2 is the TRX worker 0x0E8520
+PASS  25  msg table carries the 4 beacon resume/suspend procs
+
+=== selftest: beacon TX gate processors ===
+PASS  26  CA 0x0E6A26 loads 0x40101220 (gate enable)
+PASS  27  CA 0x0E6A26 touches the suspend latch (0x40101208 literal or r2-24)
+PASS  28  CA 0x0E6A70 loads 0x40101220 (gate enable)
+PASS  29  CA 0x0E6A70 touches the suspend latch (0x40101208 literal or r2-24)
+PASS  30  CA 0x0E6AB4 loads 0x40101220 (gate enable)
+PASS  31  CA 0x0E6AB4 touches the suspend latch (0x40101208 literal or r2-24)
+PASS  32  CA 0x0E6B00 loads 0x40101220 (gate enable)
+PASS  33  CA 0x0E6B00 touches the suspend latch (0x40101208 literal or r2-24)
+PASS  34  GATE_SUS == GATE_EN -24
+PASS  35  resume 5g: 0xE6A40 orr.w r3, r3, #1
+PASS  36  resume 5g: 0xE6A4A bic.w r3, r3, #1
+PASS  37  resume 5g: 0xE6A5A bic.w r3, r3, #4
+PASS  38  suspend 5g: 0xE6A8A bic.w r3, r3, #1
+PASS  39  suspend 5g: 0xE6A98 orr.w r2, r2, #1
+PASS  40  suspend 5g: 0xE6AA0 orr.w r2, r2, #4
+PASS  41  resume 2g: 0xE6AD0 orr.w r3, r3, #2
+PASS  42  resume 2g: 0xE6ADA bic.w r3, r3, #2
+PASS  43  resume 2g: 0xE6AEA bic.w r3, r3, #8
+PASS  44  suspend 2g: 0xE6B1C bic.w r3, r3, #2
+PASS  45  suspend 2g: 0xE6B2A orr.w r2, r2, #2
+PASS  46  suspend 2g: 0xE6B32 orr.w r2, r2, #8
+PASS  47  suspend writes use [r2,#-24] (the 0x40101208 latch)
+
+=== selftest: MAC start band -> gate bit mapping ===
+PASS  48  MAC start reads band u8(perlink+0x11D)
+PASS  49  band == 1 -> r2 = 1 (band1/5GHz bit0)
+PASS  50  band != 1 -> r2 = 2 (band0/2.4GHz bit1)
+
+=== selftest: per-band IRQ registration (boot init CA 0xD1B68) ===
+PASS  51  band0 IRQ 47 ldr-site 0x0D1EEE -> wrapper 0x0AEC95
+PASS  52  band0 IRQ 47 movs r0 is #47
+PASS  53  band0 IRQ 47 flags #5
+PASS  54  band0 IRQ 49 ldr-site 0x0D1EFE -> wrapper 0x0B54C9
+PASS  55  band0 IRQ 49 movs r0 is #49
+PASS  56  band0 IRQ 49 flags #5
+PASS  57  band0 IRQ 50 ldr-site 0x0D1F0E -> wrapper 0x0B0D51
+PASS  58  band0 IRQ 50 movs r0 is #50
+PASS  59  band0 IRQ 50 flags #5
+PASS  60  band0 IRQ 51 ldr-site 0x0D1F1E -> wrapper 0x0AEC69
+PASS  61  band0 IRQ 51 movs r0 is #51
+PASS  62  band0 IRQ 51 flags #5
+PASS  63  band0 IRQ 52 ldr-site 0x0D1F2E -> wrapper 0x0AEB75
+PASS  64  band0 IRQ 52 movs r0 is #52
+PASS  65  band0 IRQ 52 flags #5
+PASS  66  band0 IRQ 82 ldr-site 0x0D1F3E -> wrapper 0x0AE48D
+PASS  67  band0 IRQ 82 movs r0 is #82
+PASS  68  band0 IRQ 82 flags #14
+PASS  69  band0 IRQ 83 ldr-site 0x0D1F4E -> wrapper 0x0B0D51
+PASS  70  band0 IRQ 83 movs r0 is #83
+PASS  71  band0 IRQ 83 flags #5
+PASS  72  band0 IRQ 59 ldr-site 0x0D1F5E -> wrapper 0x0B0C45
+PASS  73  band0 IRQ 59 movs r0 is #59
+PASS  74  band0 IRQ 59 flags #5
+PASS  75  band1 IRQ 53 ldr-site 0x0D21D6 -> wrapper 0x0AEC89
+PASS  76  band1 IRQ 53 movs r0 is #53
+PASS  77  band1 IRQ 53 flags #5
+PASS  78  band1 IRQ 55 ldr-site 0x0D21E6 -> wrapper 0x0B54BD
+PASS  79  band1 IRQ 55 movs r0 is #55
+PASS  80  band1 IRQ 55 flags #5
+PASS  81  band1 IRQ 56 ldr-site 0x0D21F6 -> wrapper 0x0B0D45
+PASS  82  band1 IRQ 56 movs r0 is #56
+PASS  83  band1 IRQ 56 flags #5
+PASS  84  band1 IRQ 57 ldr-site 0x0D2206 -> wrapper 0x0AEC5D
+PASS  85  band1 IRQ 57 movs r0 is #57
+PASS  86  band1 IRQ 57 flags #5
+PASS  87  band1 IRQ 58 ldr-site 0x0D2216 -> wrapper 0x0AEB69
+PASS  88  band1 IRQ 58 movs r0 is #58
+PASS  89  band1 IRQ 58 flags #5
+PASS  90  band1 IRQ 84 ldr-site 0x0D2226 -> wrapper 0x0AE481
+PASS  91  band1 IRQ 84 movs r0 is #84
+PASS  92  band1 IRQ 84 flags #14
+PASS  93  band1 IRQ 85 ldr-site 0x0D2236 -> wrapper 0x0B0D45
+PASS  94  band1 IRQ 85 movs r0 is #85
+PASS  95  band1 IRQ 85 flags #5
+PASS  96  band1 IRQ 60 ldr-site 0x0D2246 -> wrapper 0x0B0C39
+PASS  97  band1 IRQ 60 movs r0 is #60
+PASS  98  band1 IRQ 60 flags #5
+
+=== selftest: per-band wrapper functions (band object selector) ===
+PASS  99  wrapper 0x0AE480 -> band1 obj [+0x1C] -> body 0x0AE45C
+PASS 100  wrapper 0x0AE48C -> band0 obj [+0x8] -> body 0x0AE45C
+PASS 101  wrappers 0x0AE480/0x0AE48C load object 0x180814
+PASS 102  wrapper 0x0AEB68 -> band1 obj [+0x1C] -> body 0x0AEA9C
+PASS 103  wrapper 0x0AEB74 -> band0 obj [+0x8] -> body 0x0AEA9C
+PASS 104  wrappers 0x0AEB68/0x0AEB74 load object 0x180814
+PASS 105  wrapper 0x0AEC5C -> band1 obj [+0x1C] -> body 0x0AEB80
+PASS 106  wrapper 0x0AEC68 -> band0 obj [+0x8] -> body 0x0AEB80
+PASS 107  wrappers 0x0AEC5C/0x0AEC68 load object 0x180814
+PASS 108  wrapper 0x0AEC88 -> band1 obj [+0x1C] -> body 0x0AEC74
+PASS 109  wrapper 0x0AEC94 -> band0 obj [+0x8] -> body 0x0AEC74
+PASS 110  wrappers 0x0AEC88/0x0AEC94 load object 0x180814
+PASS 111  wrapper 0x0B0C38 -> band1 obj [+0x1C] -> body 0x0B0AB8
+PASS 112  wrapper 0x0B0C44 -> band0 obj [+0x8] -> body 0x0B0AB8
+PASS 113  wrappers 0x0B0C38/0x0B0C44 load object 0x180814
+PASS 114  wrapper 0x0B0D44 -> band1 obj [+0x1C] -> body 0x0B0CE0
+PASS 115  wrapper 0x0B0D50 -> band0 obj [+0x8] -> body 0x0B0CE0
+PASS 116  wrappers 0x0B0D44/0x0B0D50 load object 0x180814
+PASS 117  wrapper 0x0B54BC -> band1 obj [+0x1C] -> body 0x0B53A4
+PASS 118  wrapper 0x0B54C8 -> band0 obj [+0x8] -> body 0x0B53A4
+PASS 119  wrappers 0x0B54BC/0x0B54C8 load object 0x180814
+
+=== selftest: IRQ install store (live table is RAM-readable) ===
+PASS 120  install fn CA 0xC74B0 adds irq<<2 to the ctl base
+PASS 121  install fn stores handler at [r3, #152]
+PASS 122  install fn ctl base literal = 0x17D398
+PASS 123  handler-table RAM CA = 0x17D398 + 0x98 = 0x17D430
+
+=== selftest: host trigger boundary (no key posts the gate) ===
+PASS 124  no table A worker is a beacon/TRX gate processor
+PASS 125  no table B worker is a beacon/TRX gate processor
+PASS 126  tables A/B are 217/88 rows with a 0x1451 sentinel
+
+=== selftest: probe pack sanity ===
+PASS 127  no probe falls into the forbidden RC misc window
+PASS 128  probe set covers both gate words and all 16 IRQ slots
+
+RESULT: 128 checks, 0 failed
