@@ -101,9 +101,13 @@ name CA and both tables.)
 
 ## 3. The two static handler tables (same section) [V]
 
-**CA 0x10B058 - 32 thumb handler pointers, exact ISR-name order** (T2).
-The 32 entries are the 16 per-band source handlers; the 5g/2g pairs are two
-entries each, and the order is the blob order. Index 14/15 are the TBTT pair:
+**CA 0x10B058 - 32 thumb handler pointers, ISR-name order** (T2).
+The 32 entries are 16 adjacent per-band pairs; the pairing is [V] (each pair
+is a 5g/2g twin - e.g. idx22/23 call the twin helpers 0xBEB50/0xBEAE8 and
+idx18/19 are 5g/2g, and the neighbouring message table's four beacon
+processors are likewise 2+2), while *which name* belongs to each entry follows
+the blob order [I: the 5g entries are the odd/even half of each pair, the blob
+lists 5g first]. Index 14/15 are the TBTT pair:
 `smac_tbtt_5g_isr` -> CA **0xE69CA**, `smac_tbtt_2g_isr` -> CA **0xE69A2**.
 
 **CA 0x10B0DC - 10 thumb SMAC message-processor pointers** (T3). The block
