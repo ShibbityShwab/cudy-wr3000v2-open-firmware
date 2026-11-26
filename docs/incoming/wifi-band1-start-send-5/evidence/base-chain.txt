@@ -1,0 +1,17 @@
+R5 chain base: the gate-inverted module tree (deployed module 9bf1d846...)
+
+fired 0x0242 base and R4b tree reproduced with ../wifi-band1-start-send-4/tools/build-r4b-order.sh;
+gate inversion = ../wifi-vap-start-gates/patches/0001-g9-g11-rf-enable-invert.patch
+R5 order = ./patches/0001-r5-order.patch (this lane)
+
+base tree source pins (sha256):
+ab14fa07f53ef199c503178ce8ae8c0966f6b0cf3ee5b435b2c72e54618b2375  hi5622_scan.c
+ab7b8bac84f8a1f57d3ccd0b2f6ceca730b33aa67d77244b4df9a54ec7a3d97b  hi5622_scan_logic.c
+3bfe123919f4d1eb466173b8f3c811cb5f02e3a10f6f5139af8b14f797e4058e  hi5622_scan_logic.h
+346b5441af3aef8b02f968733e54009039c542ee4175ce08a386f99a347bb52e  hi5622_vap_start_g0.c
+92b17b152d48c633ea4a82d130a2522b285734178e3f44c2cbf4a5ba48613031  hi5622_vap_start_g0.h
+443b071d3ce131c21d46c54e9f7f510221cf75d31a39603c8e68907394bd1ddc  hi5622_band_start.h
+
+base artefact (host-built gate-inverted module, local evidence only):
+9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82  /tmp/vsg-artifact/hi5622_wifi.ko
+382376 B

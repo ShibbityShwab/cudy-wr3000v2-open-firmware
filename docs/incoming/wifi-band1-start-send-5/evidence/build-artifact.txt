@@ -1,0 +1,12 @@
+vap_start_g0_selftest: 295 checks, 0 failures
+r5_order_frame_test: 110 checks, 0 failures
+== DONE - R5 order module (host-built, NOT fired)
+artifact:  /tmp/r5-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+size:      383240 B (stripped); unstripped 1424680 B
+sha256:    24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c
+unstripped: 233df986cfcd2c6a5936a5cab532e9d1986e473b40ca194144f02a2a036a0cfa
+text:      a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d
+params:    65 (unchanged)
+base:      gate-inverted tree (wifi-vap-start-gates 0001 on /tmp/r4border-build)
+base artefact (gate-inverted 9bf1d846...): 9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+tests:     295 C + 110 Python checks, 0 failures

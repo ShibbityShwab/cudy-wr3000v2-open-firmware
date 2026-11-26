@@ -1,0 +1,95 @@
+--- a/src/vap_start_g0_selftest.c
++++ b/src/vap_start_g0_selftest.c
+@@ -1,8 +1,9 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ /*
+  * vap_start_g0_selftest.c - host selftest for the H2D g0-id1 key 0x0065
+- * VAP-start step and its R4b ordering (lane wifi-band1-start-send-4,
+- * task 211; the frame/gate model is the send-3 task-209 one).
++ * VAP-start step and its R5 ordering (lane wifi-band1-start-send-5,
++ * task 213; the frame/gate model is the send-3 task-209 one, the
++ * G9/G11 RF-enable gates are the wifi-vap-start-gates task-212 ones).
+  *
+  * ORIGINAL clean-room test code.  Compiles the REAL patched-tree model
+  * (hi5622_vap_start_g0.c), the REAL AP-start plan model
+@@ -11,13 +12,15 @@
+  * compiler - no kernel, no device, no firmware.  It asserts:
+  *   - the byte-exact 40-B key-0x0065 frame (and its cross-check against the
+  *     independent sibling builder for every module index 0..0x12);
+- *   - the R4b AP-start plan order: vap_add -> desc_table -> dfs_mode ->
+- *     ap_chan -> vap_start_g0 -> band_start -> ap_ssid -> ap_cfg ->
+- *     ap_vap_start (the 0x0124 channel post before the 0x0065/0x0242);
++ *   - the R5 AP-start plan order: vap_add -> desc_table -> dfs_mode ->
++ *     ap_chan -> ap_ssid -> ap_cfg -> vap_start_g0 -> band_start ->
++ *     ap_vap_start (the AP config before the 0x0065/0x0242, matching the
++ *     stock channel config -> AP config -> start_vap -> green_ap order);
+  *   - the fail-closed parameter/build matrix;
+  *   - every G1..G14 probe gate, the G8 sequencing (band 0 before the
+  *     0x0124 channel post is refused, band 1 after it passes) and the G12
+- *     post-check.
++ *     post-check.  R5 keeps every gate and every frame byte unchanged; only
++ *     the step order changes, so all 40-B KATs stay byte-identical.
+  */
+ #include <stdio.h>
+ #include <string.h>
+@@ -363,12 +366,12 @@
+ {
+ 	static const char *want9[] = {
+ 		"vap_add", "desc_table", "dfs_mode", "ap_chan",
+-		"vap_start_g0", "band_start", "ap_ssid", "ap_cfg",
++		"ap_ssid", "ap_cfg", "vap_start_g0", "band_start",
+ 		"ap_vap_start",
+ 	};
+ 	static const char *want8[] = {
+ 		"vap_add", "desc_table", "dfs_mode", "ap_chan",
+-		"band_start", "ap_ssid", "ap_cfg", "ap_vap_start",
++		"ap_ssid", "ap_cfg", "band_start", "ap_vap_start",
+ 	};
+ 	static const char *want_min[] = {
+ 		"vap_add", "ap_chan", "ap_ssid", "ap_cfg",
+@@ -383,17 +386,22 @@
+ 	CK(plan[1] == HI5622_BEACON_STEP_DESC_TABLE, "plan[1] desc_table");
+ 	CK(plan[2] == HI5622_BEACON_STEP_DFS_MODE, "plan[2] dfs_mode");
+ 	CK(plan[3] == HI5622_BEACON_STEP_CHAN, "plan[3] ap_chan (R4b)");
+-	CK(plan[4] == HI5622_BEACON_STEP_VAP_START_G0,
+-	   "plan[4]=0x%02x is not the 0x0065 step", plan[4]);
+-	CK(plan[5] == HI5622_BEACON_STEP_BAND_START, "plan[5] band_start");
+-	/* the R4b enum order: channel post before 0x0065 before 0x0242 */
+-	CK(HI5622_BEACON_STEP_CHAN < HI5622_BEACON_STEP_VAP_START_G0 &&
++	CK(plan[4] == HI5622_BEACON_STEP_SSID, "plan[4] ap_ssid (R5)");
++	CK(plan[5] == HI5622_BEACON_STEP_AP_CFG,
++	   "plan[5]=0x%02x is not the AP config step", plan[5]);
++	CK(plan[6] == HI5622_BEACON_STEP_VAP_START_G0,
++	   "plan[6]=0x%02x is not the 0x0065 step", plan[6]);
++	CK(plan[7] == HI5622_BEACON_STEP_BAND_START, "plan[7] band_start");
++	/* the R5 enum order: AP config before 0x0065 before 0x0242 */
++	CK(HI5622_BEACON_STEP_CHAN < HI5622_BEACON_STEP_SSID &&
++	   HI5622_BEACON_STEP_SSID < HI5622_BEACON_STEP_AP_CFG &&
++	   HI5622_BEACON_STEP_AP_CFG < HI5622_BEACON_STEP_VAP_START_G0 &&
+ 	   HI5622_BEACON_STEP_VAP_START_G0 < HI5622_BEACON_STEP_BAND_START,
+-	   "enum order ap_chan < vap_start_g0 < band_start");
++	   "enum order ap_chan < ap_ssid < ap_cfg < vap_start_g0 < band_start");
+ 	CK(HI5622_BEACON_STEP_DFS_MODE < HI5622_BEACON_STEP_CHAN,
+ 	   "enum order dfs_mode < ap_chan");
+-	CK(HI5622_BEACON_STEP_BAND_START < HI5622_BEACON_STEP_SSID,
+-	   "enum order band_start < ap_ssid");
++	CK(HI5622_BEACON_STEP_BAND_START < HI5622_BEACON_STEP_VAP_START,
++	   "enum order band_start < ap_vap_start");
+ 	for (i = 0; i < n && i < 9u; i++)
+ 		CK(strcmp(hi5622_beacon_step_name(plan[i]), want9[i]) == 0,
+ 		   "step %u name %s != %s", i,
+@@ -445,10 +453,12 @@
+ 	}
+ }
+ 
+-/* R4b sequencing model (the R4 fire evidence): the 0x0065 probe pack is
++/* R4b/R5 sequencing model (the R4 fire evidence): the 0x0065 probe pack is
+  * evaluated only after the 0x0124 channel post.  Before it, mctx[0x11] is 0
+  * and G8 refuses exactly as the fire did; after it the band byte is 1 and the
+- * pack passes, then G12 (mctx[0x0E]==1) gates the 0x0242 band start. */
++ * pack passes, then G12 (mctx[0x0E]==1) gates the 0x0242 band start.  R5 adds
++ * the AP config (0x0127) before the probe/post as well: it programs the VAP
++ * context (beacon interval/DTIM/template) the band start must not precede. */
+ static void test_g8_sequence(void)
+ {
+ 	struct hi5622_vap_start_g0_probe p;
