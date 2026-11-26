@@ -1,0 +1,39 @@
+fw: rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin  928920 B  sha256 7fc87e2051e80b5e...
+PASS A1 image word0 == 0x46971 (boot entry, Thumb fn 0x46970)  0x46971
+PASS A2 image word4 == 0xC742D (second entry pointer)  0xc742d
+PASS B1 lit CA 0x4751C == 0x47625 (task entry, Thumb bit set)  0x47625
+PASS B2 0x47416 is ldr r1,[pc,#imm] resolving to CA 0x4751C  0x4751c
+PASS B3 entry fn 0x46970 has no BL caller (reached from image word0)  []
+PASS B4 fn 0x47624 has no BL caller (installed as a task entry pointer)  []
+PASS B5 task entry bytes: 2 literal loads, then push.w (0x4FF0E92D at 0x47628)  c14bc24a2de9f04f
+PASS B6 registration helper CA 0xC745C takes the descriptor in r0 (0x47412 add r0,sp)  06a8
+PASS C1 device init 0xD1B68 has exactly one BL caller  ['0x48314']
+PASS C2 that call site is inside the registered task body (0x47624..0x49300)
+PASS D1 gate: 0xD1B7C loads CA 0x17FCA8 (module ctx) from pool 0xD1CE8  0x17fca8
+PASS D2 gate reads u8[0x17FCA8+0xB68] == u8[0x180810] (ldrb.w r3,[r3,#0xb68])  93f8683b
+PASS D3 gate: cmp #1; bls 0xD3F9E (flag==0 -> skip, ==1 -> init, >1 -> error 0x65)  012b039342f2
+PASS E1 0xD1BA6 loads CA 0x174BE0 (device array base)  0x174be0
+PASS E2 device count u8[0x174BEE] := 2 (0xD1BAC movs r2,#2; 0xD1BAE strb r2,[r3,#0xe])  02229a73
+PASS E3 loop head 0xD3F40 loads CA 0x174BE0; 0xD3F44 is ldrb r1,[r2,#0xe]  0x174be0 917b
+PASS F1 r4 base literal CA 0x174C30 (device array + 0x40) at pool 0xD1D18  0x174c30
+PASS F2 r5 = r4 - 0x40 (0xD1D92 sub.w r5,r4,#0x40)  a4f14005
+PASS F3 band-0 init object = 0x174C30-0x40 = 0x174BF0 (= get_device(0))
+PASS F4 call site: 0xD3BAA mov r0,r5 ; 0xD3BAC bl 0xC016C  0xc016c
+PASS G1 getter CA 0xF4F48: movw #0xE28 / mla / pool word 0xF4F60 == 0x174BF0  0x174bf0
+PASS G2 getter bound: cmp r1,#1; bhi (bands 0..1 only)  012906d8
+PASS H1 name literal at CA 0x1060F7 is &pst_device->st_device_alloced_ppdu_dscr_list...
+PASS H2 pool word CA 0xC0484 == 0x1060F7 (the name ptr)  0x1060f7
+PASS H3 list init CA 0xC016C has the single BL caller 0xD3BAC  ['0xd3bac']
+PASS H4 head/prev self stores at 0xC02B2/0xC02B6 (str.w sb,[r4,#0x66c]/[r4,#0x670])  c4f86c96c4f87096
+PASS H5 name store 0xC02C2 is str.w r3,[r4,#0x67c]  c4f87c36
+PASS H6 count store 0xC02D0 is str.w r6,[r4,#0x674]  c4f87466
+PASS H7 descriptor allocator CA 0xBF128 at 0xC0402 with size 0x1A0 (0xC03F4)  0xbf128
+PASS H8 append: 0xC043A ldr [r4,#0x670]; 0xC0450 count++ str [r4,#0x674]  d4f87036
+PASS I1 manager literal pool CA 0x943C8 == 0x170E28  0x170e28
+PASS I2 resolver 0xFE578: add.w r4,r4,#0x18c; ldrh.w r3,[r0,#0x6dc]; ldr.w r0,[r0,r4,lsl#2]  04f5c674b0f8dc36
+PASS I3 module-context array base literal CA 0x49330 == 0x119758 (ctx id 0)  0x119758
+PASS I4 19 contexts, stride 0xB40: manager+0x630 table, loop bound 0xD5C0/0xB40 == 19  19 04f2c767
+PASS I5 probe formula object (ctx id 0) 0x119758 != init object 0x174BF0
+PASS I6 the probed +0x67C (0x119DD4) is not the PPDU-list field (0x17526C)  0x119dd4 vs 0x17526c
+
+selftest: 36/36 PASS

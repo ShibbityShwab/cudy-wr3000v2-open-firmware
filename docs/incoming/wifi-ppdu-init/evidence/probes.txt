@@ -1,0 +1,9 @@
+fw: rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin  928920 B  sha256 7fc87e2051e80b5e...
+P1 CA 00180810 phys 40838810 w1  device-init gate byte (1 = run)            u8[0x17FCA8+0xB68]: 1=init, 0=skip, >1=error 0x65
+P2 CA 0017526C phys 4082D26C w4  PPDU list name ptr (band 0)                expect 0x001060F7 after the init ran
+P3 CA 0017525C phys 4082D25C w4  PPDU list head next (band 0)               expect 0x0017525C (=object+0x66C) after the init
+P4 CA 00175260 phys 4082D260 w4  PPDU list head prev (band 0)               expect 0x0017525C too
+P5 CA 00175264 phys 4082D264 w4  PPDU descriptor count (band 0)             preallocated 0x1a0-B descriptors count
+P6 CA 00176094 phys 4082E094 w4  band-1 list name ptr                       expect 0x001060F7 if band 1 inited
+P7 CA 00174BEE phys 4082CBEE w1  device count in the init array             the init writes 2; 0 on a never-inited array
+P8 CA 00119DD4 phys 407D1DD4 w4  the OLD probe object (resolver ctx id 0)   NOT the list field; its zero is not a PPDU-list proof

@@ -1,0 +1,12 @@
+fw: rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin  928920 B  sha256 7fc87e2051e80b5e...
+chain: image word0 CA 0x40000 = 0x00046971 (fn 0x46970, boot entry)
+  fn 0x46970 @0x47416 loads 0x47625 and registers it via CA 0xC745C
+  fn 0x47624 (entry 0x47625) @0x48314 bl 0xD1B68 (after a bounded wait loop)
+  fn 0xD1B68: memset(0x174BE0,0,0x1C68); gate u8[0x180810]==1;
+              device count u8[0x174BEE]=2; loop band=0..count-1
+              r4 = 0x174C30 + band*0xE28 ; r5 = r4-0x40 = get_device(band)
+  fn 0xD1B68 @0xD3BAC bl 0xC016C(r5) = PPDU descriptor-list create/init
+  fn 0xC016C: head/prev self at obj+0x66C/+0x670; count 0 at +0x674;
+              debug name 0x1060F7 at +0x67C; preallocates 0x1a0-B
+              descriptors via CA 0xBF128 and appends them (0xC043A..0xC0450)
+  getter CA 0xF4F48: 0x174BF0 + band*0xE28 for band 0..1 (else NULL)
