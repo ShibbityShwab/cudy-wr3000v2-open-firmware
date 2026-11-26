@@ -1,0 +1,22 @@
+# BUILD evidence - lane wifi-app-ie (task-234), host build 2026-11-26
+# Command: tools/build-app-ie.sh  (HOST-ONLY; no device, no flash)
+# Base: the pinned R5-order tree /tmp/r5-build (../wifi-band1-start-send-5/tools/build-r5-order.sh)
+# Patch: patches/0001-app-ie.patch (sha256 2c7f6621d49000934df74e608efa52dba93118366103fb96301b57e3c6126043)
+#
+# Base pins (sha256):
+#   Kbuild                    1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d
+#   hi5622_scan.c             86d6c57ecc98d80906af1eeee1e5d6641c21a7ed5c1b2b53c70b85236b5b9373
+#   hi5622_scan_logic.c       15c50d34fa7ed0f9bd5262e5b317c13a97228207dcc599673b72788e2b9bcfea
+#   hi5622_scan_logic.h       6af774ef76b730c8f45d621bf338d12b041b96a3792be985df59ac5092a603e8
+#   cfg80211-provider.symvers bd18897af88f58d550be31acf430e08af2b82f54e0fcdc780c8f1464e7f94df7
+# Lane pins (sha256):
+#   src/hi5622_app_ie.h       e0f3b39f9b15d410ed70a62a7e7977433d3454158457a7b9c7c4e0902929432c
+#   src/hi5622_app_ie.c       19c9cbf7d822a05eac919ac4bf660058b38b86d67b4a912feac0470be5a306ba
+#   patches/0001-app-ie.patch 2c7f6621d49000934df74e608efa52dba93118366103fb96301b57e3c6126043
+#
+# Result: PASS (0 compiler warnings, 0 errors; 67 params = 65 base + app_ie + app_ie_type)
+#   installed : 0c8390e8b498b668a066f4e7c74ad9fdafa7aa5586db22fb81313409cfcb0bdb  368348 B
+#   .text     : 7867d4f0294bae925c9118a4e4360fd1b4815f6d57c9abea8318a9e1caa9a207  159576 B
+#   unstripped: 5d553a43db70dd9682264e3443388ad1c58be5bc2b56148db106fd3ad688d156 1444468 B
+# NOTE: the installed sha is pinned for WORK=/tmp/app-ie-build (module strings
+# embed the build path); another path yields another file hash but the same .text hash.

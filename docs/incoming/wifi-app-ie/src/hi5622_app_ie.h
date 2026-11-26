@@ -87,6 +87,15 @@ typedef uint32_t u32;
 /* The vendor-specific IE element id this lane injects. */
 #define HI5622_APP_IE_ELEM_ID		0xddu
 
+/* The firmware per-VAP IE slot table (path A): slot = vap + 0x24c +
+ * 20*type; the slot is {u32 ie_ptr; u32 ie_len; u32 ie_cap; u8 key[6];}
+ * (firmware handler CA 0xFDB72 / host mirror mac_vap_save_app_ie).  These
+ * offsets are the read-only evidence the fire's probe uses. */
+#define HI5622_APP_IE_SLOT_OFF		0x24cu
+#define HI5622_APP_IE_SLOT_LEN_OFF	0x250u
+#define HI5622_APP_IE_SLOT_CAP_OFF	0x254u
+#define HI5622_APP_IE_SLOT_STRIDE	20u
+
 /* One prepared frame request (the plan) and the builder contract. */
 struct hi5622_app_ie_plan {
 	bool	 post;		/* 1 = build/post, 0 = parameter off */

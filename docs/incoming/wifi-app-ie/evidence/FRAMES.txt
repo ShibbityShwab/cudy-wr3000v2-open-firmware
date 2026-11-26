@@ -1,0 +1,28 @@
+# FRAMES evidence - lane wifi-app-ie (task-234)
+# Every frame below is a decoded protocol frame quoted as hex TEXT (vendor
+# binary/firmware bytes are never committed).  Source: sibling lane
+# wifi-stock-h2d-census evidence/NEW-FAMILIES.txt (the first-ever stock H2D
+# capture, task-232, commit e977557) and this lane's builder/firmware decode.
+#
+# [1] the captured stock g0 id 0x20 frame [V] (23 B, len == total, t=1.6 s,
+#     group 0 / id 32 / ctx-and-VAP index 4, mode 0):
+#   00 01 00 04 17 00 20 00 00 00 5a 5a | 00 00 00 00 | 04 00 00 00 | 00 00 00
+#   header 12 B: group 0, b1=0x01, b2=0x00, b3=VAP/module 4, total=0x0017,
+#                id=0x0020, b8=0, b9=0, tag=0x5a5a
+#   payload 11 B: ie_len=0 (u32), type=4, mode=0, pad 2, 3 zero tail bytes
+#
+# [2] host-synthesized reference frame for the same request (this lane's
+#     builder; byte-identical to [1] - the host selftest asserts it):
+#   00 01 00 04 17 00 20 00 00 00 5a 5a 00 00 00 00 04 00 00 00 00 00 00
+#
+# [3] host-synthesized frame carrying one well-formed vendor IE [V]:
+#   ie = dd 07 00 50 f2 04 01 02 03   (id 0xDD, len 7, OUI 00:50:F2, type 04)
+#   wire: header(12) | ie_len=9 (u32) | type | mode | pad 2 | ie (9) | tail 3
+#   total = 0x0020 (32 B) = 23 + 9
+#
+# [4] firmware handler anchors [V] (CA = file offset + 0x40000; Thumb):
+#   group-0 HCC receive table entry index 27: id 0x20 -> handler CA 0x85631
+#   (table CA 0x10CCFC, 40 entries; h2d catalogue registrar CA 0x102866)
+#   payload_len = u16(total)-12 must be <= 616; ie_len = u32(payload+0) <= 608
+#   mode (payload byte 5) == 0 -> per-VAP slot table vap+0x24c+20*type
+#   mode != 0 -> special path: type in {12,17,18}, 6-byte prefix + IE

@@ -27,9 +27,12 @@ installs the per-VAP IE table the firmware appends to management frames.
 | `FIRE-RECIPE.md` | the attended fire: module load + 2.4 GHz HE AP with hostapd `vendor_elements=` + laptop scan/probe verification + read-only probes |
 | `evidence/` | host-test and build evidence (text only) |
 
-**Status:** host-side complete (decode [V] on the wire format and the handler;
-integration built and host-tested). The frame-class slot semantics are graded
-[I] (TABLES T6); the on-air half is the Lead's attended fire. The capture log
-itself (`/tmp/h2d-stock.log`) is local evidence, never committed.
+**Status:** host-side complete - decode [V] on the wire format and the
+firmware handler, the integration built on the pinned base (**0 warnings, 67
+params**, artifact pins in BUILD-NOTES.md), host tests **55/55**, and a
+read-only firmware slot read-back built into the ladder step. The frame-class
+slot semantics remain [I] (TABLES T6); the on-air half is the Lead's attended
+fire (FIRE-RECIPE.md). The capture log itself (`/tmp/h2d-stock.log`) is local
+evidence, never committed.
 
 **Read order:** REPORT.md -> TABLES.md -> BUILD-NOTES.md -> FIRE-RECIPE.md.
