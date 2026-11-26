@@ -1,0 +1,7 @@
+== 1. compile the real R4b-patched-tree models + the real sibling builders
+== 2. run the C selftest (KAT, R4b plan order, fail-closed matrix, G8/G12/G5)
+vap_start_g0_selftest: 293 checks, 0 failures
+== 3. independent Python re-derivation + source contract (R4b order)
+r4b_order_frame_test: 93 checks, 0 failures
+== TOTAL: 386 checks, 0 failures (C 293/0, Python 93/0)
+== ALL HOST TESTS PASS (no device contacted)

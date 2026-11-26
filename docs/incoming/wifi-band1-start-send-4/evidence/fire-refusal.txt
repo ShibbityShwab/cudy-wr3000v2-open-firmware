@@ -1,0 +1,19 @@
+The R4 fire (2026-11-28 07:00, root ledger mem-entries.md:28416) - the refusal
+this lane's reorder answers:
+
+  cfg80211: vap_start_g0 REFUSED (-22): G8: mctx[0x11] is not 1 (5 GHz) - no frame posted
+
+The G8 gate (hi5622_vap_start_g0.c hi5622_vap_start_g0_precheck) reads
+u8[mctx+0x11], which the 0x0124 channel post stores.  The send-3 order
+posted the 0x0065 before the 0x0124, so mctx[0x11] was 0 and the driver
+refused its own frame before the wire (fail-closed gate working as
+designed).  The R4b reorder moves the 0x0124 channel post before the
+0x0065 VAP start and the 0x0242 band start, so G8 now reads 1.
+
+R4 fire readback (ledger mem-entries.md:28416), for the recipe baseline:
+  state 0x40817A40 = 0x01000000;  0x404C4220 = 0x1039;  mode = 0;
+  R+0x3A8 = 0x05A00060;  R+0x3AC = 0x05940596;  page golden:1;
+  the 5200 MHz scan saw only the neighbors (no beacon).
+
+No device was contacted by this lane; this file quotes the committed
+root-ledger fire entry (read-only, decoded text only).

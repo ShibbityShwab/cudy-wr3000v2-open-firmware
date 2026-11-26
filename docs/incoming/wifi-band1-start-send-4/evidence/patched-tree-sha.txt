@@ -1,0 +1,18 @@
+lane wifi-band1-start-send-4 (task-211) - patch + tree pins
+patch: patches/0001-r4b-order.patch sha256 3628899843628984b1373f9c1e2ccd6539aff8920ac3188401a24a83b1c21775, 34330 B
+base (send-3) tree:
+  send-3 hi5622_scan.c da488e3cd69db6c9d6c9f661806eecf21ccc6f44f4f0dd08ab5571c7d1f95370
+  send-3 hi5622_scan_logic.c 7e5edbc42a3c4abd2c619672226870fb13db48c3045fd49252b3a200d321326c
+  send-3 hi5622_scan_logic.h fc4e43d1d55a36f0d92deafd144f4488515515dc4e7e516a1f3f04c1f6c994d8
+  send-3 hi5622_band_start.h 3fd2c6088af4381736854e5ca1e6c176e0ae659b72a1b9f051f2bd1fef972aea
+  send-3 hi5622_vap_start_g0.c ece5c0d60701d05ce0c1ab5afbb75229cfb2a2734bf9c17fb99706e0eb2e81ff
+  send-3 hi5622_vap_start_g0.h 68c2eb79cb77cf33bae6559659b28f8ff58bf6d396e9cd4bec26b7d2e6e4eef8
+  send-3 Kbuild 1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d
+R4b-patched tree:
+  r4b    hi5622_scan.c ab14fa07f53ef199c503178ce8ae8c0966f6b0cf3ee5b435b2c72e54618b2375
+  r4b    hi5622_scan_logic.c ab7b8bac84f8a1f57d3ccd0b2f6ceca730b33aa67d77244b4df9a54ec7a3d97b
+  r4b    hi5622_scan_logic.h 3bfe123919f4d1eb466173b8f3c811cb5f02e3a10f6f5139af8b14f797e4058e
+  r4b    hi5622_band_start.h 443b071d3ce131c21d46c54e9f7f510221cf75d31a39603c8e68907394bd1ddc
+  r4b    hi5622_vap_start_g0.c ece5c0d60701d05ce0c1ab5afbb75229cfb2a2734bf9c17fb99706e0eb2e81ff
+  r4b    hi5622_vap_start_g0.h fe165a82f87b745c54354976e52b387ee1d3d0e537f1806a86aa29712903df21
+  r4b    Kbuild 1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d

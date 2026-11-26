@@ -1,0 +1,15 @@
+pinned chain rebuild (host, /tmp; no device) - 2026-11-28
+The /tmp base chain was absent (host cleanup); tools/build-r4b-order.sh
+rebuilt it from the committed patches and the three sibling build
+scripts; every pinned tree sha and artifact hash was reproduced:
+
+== fired base artifact pinned: e231240292f059e431ede6a2e9a347c357cdc2c371... (371212 B, 63 params)
+== fired base artifact pinned: e231240292f059e431ede6a2e9a347c357cdc2c371... (371212 B, 63 params)
+== send-2 tree reproduced (64-param artifact pinned)
+== DONE - host-built module with the explicit VAP/module-index contract (NOT fired)
+artifact: /tmp/g0start-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+== DONE - host-built module with the key-0x0065 VAP-start step (NOT fired)
+
+send-3 (R4) artifact reproduced: 382,072 B sha bb0434c24b333f889daf6b062b6e771cb5b045e28ad2ef9c9c2c05f2a78c9711, 65 params
+send-2 artifact reproduced: 373,056 B sha b8f6fe359c7e6138669c63be426733d4898266cd2da4be965b483bddc9ff5b71, 64 params
+fired 0x0242 base artifact: 371,212 B sha e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params

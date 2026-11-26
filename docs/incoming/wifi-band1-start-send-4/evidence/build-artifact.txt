@@ -1,0 +1,11 @@
+artifact: /tmp/r4border-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 382188 B (stripped); unstripped 1423196 B
+sha256: b9926c1c4201cfe698c9fb6828a0d4e6a4fc45ba620bb49d745859ef7fda1102
+unstripped sha256: a9d5d675b68f441b1a28c291a034aa025d71e20a3ad4d6150cd7d6df3516b0ed
+text sha256: f2848fdc3db7c0913a208aefd7fc85230817cc143158d9f50ef3529e59cbf6ff
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 65 (64 send-2 + vap_start_g0; unchanged by the reorder)
+chain: fired 0x0242 base (e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + send-2 patch (968d70c5c4f13005e6ddee7f1bed2423888c8a58ed7582a7806b8ea031b813fb) + send-3 patch (0a8a1c1bda3ebaaf05933b670d996a2962f2679ecf0075237bf6d4adef30fc4c) + this order patch (3628899843628984b1373f9c1e2ccd6539aff8920ac3188401a24a83b1c21775)
+R4b order: vap_add -> desc_table -> dfs_mode -> ap_chan -> vap_start_g0 -> band_start -> ap_ssid -> ap_cfg -> ap_vap_start
+vap_start_g0: read-only uint, default 0; G8 (mctx[0x11]==1) now passes after the ap_chan; G12 (mctx[0x0E]==1) gates the 0x0242; G5 (mctx[0x190]!=0) gates the 0x0065
+patched tree shas: scan=ab14fa07f53ef199c503178ce8ae8c0966f6b0cf3ee5b435b2c72e54618b2375 logic.c=ab7b8bac84f8a1f57d3ccd0b2f6ceca730b33aa67d77244b4df9a54ec7a3d97b logic.h=3bfe123919f4d1eb466173b8f3c811cb5f02e3a10f6f5139af8b14f797e4058e bstart.h=443b071d3ce131c21d46c54e9f7f510221cf75d31a39603c8e68907394bd1ddc vsg.h=fe165a82f87b745c54354976e52b387ee1d3d0e537f1806a86aa29712903df21 (vsg.c + kbuild unchanged from send-3)
