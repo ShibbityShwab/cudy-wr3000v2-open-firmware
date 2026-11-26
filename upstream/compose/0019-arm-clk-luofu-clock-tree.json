@@ -1,0 +1,17 @@
+{
+  "entry": "0019-arm-clk-luofu-clock-tree",
+  "message": "commit-messages/0019-arm-clk-luofu-clock-tree.txt",
+  "status": "ready-for-review",
+  "pieces": [
+    {
+      "patch": "019-arm-clk-luofu-clock-tree.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "027-arm-clk-luofu-readonly-mux-fix.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "e738abe1d004f7ba1f07777bddd625046109db3c6f13332bce00574f24def311"
+}
