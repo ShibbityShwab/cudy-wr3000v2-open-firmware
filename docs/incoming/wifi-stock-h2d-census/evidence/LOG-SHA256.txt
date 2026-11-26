@@ -1,0 +1,5 @@
+capture: /tmp/h2d-stock.log (local; copied to build/wifi-stock-h2d-census/h2d-stock.log, gitignored)
+bytes: 335359
+423ebf26434b926b95f3916753cb59bf2c56b2f10b85be7123a69894e83c186b  /tmp/h2d-stock.log
+cat /tmp/h2d-stock.log
+regenerate: python3 tools/decode_stock_census.py --input LOG > evidence/CENSUS.txt

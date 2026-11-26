@@ -1,0 +1,46 @@
+records=1129 valid=332 alias=4 torn=793 span_s=86.5
+ch={0: 1129} prime=7 flags={0: 1129} tag@+10=1129/1129
+
+[valid-by-length families]  (node len == frame total)
+  g0 id29  [hmac_edca_opt_timeout_fn V*]         n= 181
+  g0 id1  [hmac_config_send_event V*]            n= 142
+  g0 id2  [hmac_config_alg_send_event V*]        n=   4
+  g0 id32  [hmac_config_h2d_send_app_ie V]       n=   2
+  g0 id36  [hmac_scan_config_bss_color V]        n=   1
+  g0 id12  [hmac_enc_scan_send_req V*]           n=   1
+  g0 id22  [hmac_chan_do_sync V]                 n=   1
+  config keys: 26 distinct; 0x00d8=39, 0x0073=11, 0x0069=9, 0x07e8=9, 0x0127=8, 0x01cf=6, 0x0052=6, 0x07d9=5, 0x0124=5, 0x000b=5, 0x0000=4, 0x0005=4, 0x015d=4, 0x0065=4, 0x003c=4, 0x07e7=3, 0x03e4=3, 0x00f7=3, 0x011e=2, 0x0078=2, 0x0079=1, 0x02bd=1, 0x02c2=1, 0x00ec=1, 0x006f=1, 0x00e8=1
+
+[aliases folded]  (valid length, stale head)
+  g12 id1 -> g0 id1 key 0x00d8   len=48  head=0c183000  ts=90552
+  g12 id1 -> g0 id1 key 0x0127   len=184  head=0c183000  ts=93693
+  g12 id1 -> g0 id1 key 0x0127   len=184  head=0c183000  ts=120559
+  g12 id1 -> g0 id1 key 0x0127   len=184  head=0c183000  ts=150566
+
+[torn records by raw family / content class]
+  g2  id29  torn-timer             n= 382  (IEEE1905 frag in over-read: 103)
+  g4  id0   torn-d2h-oam           n= 143
+  g4  id4   torn-d2h-heartbeat     n=  93  (IEEE1905 frag in over-read: 4)
+  g0  id1   torn-unknown           n=  61  (IEEE1905 frag in over-read: 13)
+  g0  id1   torn-config            n=  40  (IEEE1905 frag in over-read: 3)
+  g0  id29  torn-unknown           n=  33  (IEEE1905 frag in over-read: 1)
+  g2  id0   torn-unknown           n=  12
+  g1  id37  torn-unknown           n=   7  (IEEE1905 frag in over-read: 6)
+  g12 id29  torn-timer             n=   7  (IEEE1905 frag in over-read: 7)
+  g1  id3   torn-unknown           n=   6
+  g1  id18  torn-unknown           n=   3
+  g1  id35  torn-unknown           n=   2
+  g1  id38  torn-unknown           n=   1
+  g2  id37  torn-unknown           n=   1
+  g8  id0   torn-unknown           n=   1
+  g2  id9   torn-unknown           n=   1
+
+[IEEE 1905.1 (Multi-AP) frag in sampler over-read] n=171
+  ts=68391 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=68391 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=68391 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=68392 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=88198 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=88198 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=88199 g2 id29 len=72 total=16 frag@50 overrun=56
+  ts=88380 g2 id29 len=72 total=16 frag@50 overrun=56

@@ -1,0 +1,1 @@
+selftest: PASS (12 checks: census split, alias fold, over-read, 1905 detector, redaction)
