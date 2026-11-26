@@ -93,8 +93,8 @@ CONFIG_CFG80211_USE_KERNEL_REGDB_KEYS=y
 CONFIG_CLKSRC_MMIO=y
 CONFIG_CLONE_BACKWARDS=y
 CONFIG_CLZ_TAB=y
-CONFIG_CMDLINE="ubi.mtd=rootfsb ubi.block=0,0 root=/dev/ubiblock0_0 rootfstype=squashfs rootwait console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1 luofu_switch.arm=1 luofu_switch.egress=1 luofu_switch.qidmap=1 luofu_switch.eps=1 luofu_switch.qminit=1 luofu_switch.pfe=1 luofu_switch.naptinit=1 luofu_switch.ifc=1 luofu_switch.ext=1 luofu_pie.arm=1 luofu_pie.rxcfg=1 luofu_gmac.macregs=1 oops=panic panic=0"
-CONFIG_CMDLINE_FORCE=y
+CONFIG_CMDLINE="console=ttyS0,115200 earlycon noinitrd cma=0 maxcpus=2 nr_cpus=2 additional_cpus=1 oops=panic panic=0"
+# CONFIG_CMDLINE_FORCE is not set
 CONFIG_COMMON_CLK=y
 CONFIG_COMMON_CLK_HI3516CV300=y
 CONFIG_COMMON_CLK_HI3519=y
@@ -393,10 +393,10 @@ CONFIG_ZSTD_DECOMPRESS=y
 # ---- prompted defaults carried explicitly (2026-11-24 derivation) ----
 
 
-# ---- bench-readout symbols (release line, not an upstream-target default) ----
+# ---- the bench-readout symbols: removed for the submission target (CONFIG_DEVMEM/the UART-side readout is a bench instrument, not an upstream default) ----
 # CONFIG_DEVMEM is required by the UART-side bench readout used by every
 # hardware session; CONFIG_EXCLUSIVE_SYSTEM_RAM must stay unset-compatible.
 # Both are carried here explicitly because a locally modified generic config
 # (other lanes' trees) can make the emitted delta omit them.
-CONFIG_DEVMEM=y
-CONFIG_EXCLUSIVE_SYSTEM_RAM=y
+# CONFIG_DEVMEM is not set
+# CONFIG_EXCLUSIVE_SYSTEM_RAM is not set
