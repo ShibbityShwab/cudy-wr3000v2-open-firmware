@@ -118,6 +118,6 @@ VAP start 0x0065 after ap_cfg -> AP-ENABLED.
 
 ## T8. evidence
 
-`evidence/decode.txt` (33 PASS lines incl. the worker no-access scan),
+`evidence/decode.txt` (32 PASS lines incl. the worker no-access scan),
 `evidence/tables.txt`, `evidence/selftest.txt` (39 checks, 0 failures).
 Regenerate with `tools/fw_vap_start_gates_re.py` (see README).
