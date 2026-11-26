@@ -1,0 +1,4 @@
+assemble-target: sources OK: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/target-skeleton
+assemble-target:   files: 85 (66 patches), bytes: 1141289
+assemble-target:   dts: 715 lines base / 90 lines overlay
+assemble-target: manifest written: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/upstream2/validation/assembly/target-manifest.tsv
