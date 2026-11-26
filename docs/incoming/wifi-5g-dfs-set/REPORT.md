@@ -216,9 +216,10 @@ dmesg (between the 0x0065 and 0x0242 lines): `dfs_set pre:` (gates open,
 firmware armed the band-1 SMAC sub-base + CAC flag)`. Host probes: the six
 sub-base registers at phys 0x404C6000/04/08/A0/A4/A8 with bit0s
 `{1,0,1,1,0,1}` (+0x08 raw 0xFFFF on our boot), the CAC flag
-`u32(MCTX+0x4A5)`, the band-1 MAC enable 0x404C4220, the RF mode/R image, the
-page golden and the 5200 MHz scan. The manual bar0write3 path is **retired** -
-this rung uses the firmware's own writer.
+`u32(MCTX+0x4A5)`, the band-1 MAC enable 0x404C4220, the band-1 producer
+counter (CA 0x1766D8 -> phys 0x4082E6D8), the RF mode/R image, the page golden
+and the 5200 MHz scan. The manual bar0write3 path is **retired** - this rung
+uses the firmware's own writer.
 
 ---
 

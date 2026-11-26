@@ -130,10 +130,11 @@ phys = 0x40000000 + CA + 0x6B8000). The `dfs_set pre:` dmesg line already gives
 | D7 | band-1 run-state | bandobj 0x15E570+0x14D0 -> phys 0x40817A40 | state[4]=0x00, state[1]=2 (unchanged from R5) |
 | D8 | page golden | `cat /sys/bus/pci/devices/0000:00:00.0/boot` | 0x86807FEF; never a crash |
 | D9 | on-air beacon | `iw dev OBS scan freq 5200` | ch40 AP `cudy-ap-test-5g40` - **the optional jackpot** (see below) |
+| D10 | band-1 SMAC/PPDU producer counter | band1 object 0x175A18 + 0xCC0 = CA 0x1766D8 -> phys **0x4082E6D8** | the committed producer entry counter (wifi-rx-smac-complete T5); the 2026-11-26 bench record has the stock's band-1 counter word = `0x0E0F0F` vs ours 0 (interpretation [U]). Read-only; a **movement** after the arm would show the band-1 SMAC/ISR path came alive |
 
 **PASS** iff D1-D3 show the firmware's writer took effect (pattern 0x2D + flag 1),
 D2/D5/D6/D7 are unchanged from R5, D8 is golden, and every new dmesg line is the
-expected one. **D9 is NOT required for PASS of this rung** - the honest
+expected one. D10 is an observation (no expected value this rung; record it). **D9 is NOT required for PASS of this rung** - the honest
 expectation is that the beacon still needs the deeper TBTT/CAC-completion path
 (`hmac_start_all_bss_of_band` is host code we do not run); if D9 passes, the
 arm path also kicked the SMAC init and that is the 5 GHz jackpot - record it.

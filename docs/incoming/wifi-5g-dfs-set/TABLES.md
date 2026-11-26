@@ -172,6 +172,12 @@ column): `0x404C60xx = CA 0x4010E0xx`:
 | 0x404C60A4 | +0xA4 | [U] | [U] | bit0 := 0 | " |
 | 0x404C60A8 | +0xA8 | [U] | [U] | bit0 := 1 | " |
 
+Band-1 SMAC producer counter (the rx-smac-complete T5 observable): band1
+object 0x175A18 + 0xCC0 = CA **0x1766D8** -> phys **0x4082E6D8**; the 2026-11-26
+bench record has the stock's band-1 counter word = `0x0E0F0F` vs ours 0 (the
+exact word interpretation is [U]; the committed u8 counter is the low byte).
+The fire reads it before/after the ARM and records any movement.
+
 So the **firmware's own ARM writer** is the proper path to the stock's state
 (and it sets the three registers the manual flip never touched); the manual
 bar0write3 is retired (see FIRE-RECIPE). On our boot expect bit0s
