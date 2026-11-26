@@ -1,0 +1,4 @@
+# wifi-rc-impl-2 module rebuilds from the reproduced base (append-only)
+2569-11-26T04:47:00Z run1 base_manifest=2d87525e patch=67083c2d verify=PASS module=ca22773a861db31b524edd69f0c5522b03862207191b1d8b83ba302fc0c97d8b/1519716 activity=3d43a3cd261d28245e47a964161a0d605caae97a70baa81bea1eee630e294536/401884 text=ba81e4b38b4a965143b7a7689c9639525e9af9852e05c968c9da65ff42ab7839 params=67 tests=37/25/76
+# run 2 (immediately after, same command): identical to run 1 (sha256 of the log: f1dc540972b503f5b9e616a35fb4e910f739ca8044631439b929e2c2dffc82a8 vs f1dc540972b503f5b9e616a35fb4e910f739ca8044631439b929e2c2dffc82a8)
+2569-11-26T04:47:00Z run2 identical=yes

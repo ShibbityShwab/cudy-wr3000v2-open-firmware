@@ -1,0 +1,5 @@
+# RC-2 host suites on the rebuilt patched tree (TREE=/tmp/rc2-build)
+# command: cd ../wifi-rc-impl-2 && TREE=/tmp/rc2-build ./tools/run-host-tests.sh
+rc2_frame_selftest: 37 passed, 0 failed, 37 checks
+rc2_matrix_selftest: 76 passed, 0 failed, 76 checks
+# same three lines also appeared in run 2 (identical tree).

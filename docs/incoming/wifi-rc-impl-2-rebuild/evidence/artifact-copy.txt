@@ -1,0 +1,9 @@
+# rebuilt module copies (LOCAL EVIDENCE ONLY - never committed)
+# the expected artifact: the activity-strip form the lane deploys
+3d43a3cd261d28245e47a964161a0d605caae97a70baa81bea1eee630e294536  /tmp/rc2-rebuilt/hi5622_wifi.ko
+ca22773a861db31b524edd69f0c5522b03862207191b1d8b83ba302fc0c97d8b  /tmp/rc2-rebuilt/hi5622_wifi.unstripped.ko
+401884 /tmp/rc2-rebuilt/hi5622_wifi.ko
+1519716 /tmp/rc2-rebuilt/hi5622_wifi.unstripped.ko
+# /tmp/rc2-rebuilt/hi5622_wifi.ko        = the rebuilt ACTIVITY form (expected 3d43a3cd.../401884 B)
+# /tmp/rc2-rebuilt/hi5622_wifi.unstripped.ko = the rebuilt unstripped form (expected ca22773a.../1519716 B)
+# also copied to build/wifi-rc-impl-2-rebuild/ in the checkout (gitignored)

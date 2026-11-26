@@ -1,0 +1,30 @@
+# IMAGE #3 merged driver source tree - identity of the reproduced tree
+# date: 2569-11-26T04:47:00Z
+#
+# reproduced tree: /tmp/wifi-image-3-module (97 source files, artifacts removed)
+# pin file:       ../wifi-rc-impl-2/evidence/base-pin.txt
+# (compare with ../wifi-image-3/build-evidence/module-build/source-chain.txt)
+#
+source_files 97
+source_manifest_sha256 2d87525e1bab6bbf94486244b55fd1396e2ad691645d40c8469d247ffd766c45
+pin_expected       2d87525e1bab6bbf94486244b55fd1396e2ad691645d40c8469d247ffd766c45
+# (the rc-impl-2 build ran 'pin: base tree OK (9 pinned files + manifest 2d87525e...)' - PASS)
+#
+# Patch application record onto the dfs-mode tree (matches source-chain.txt):
+#   field-B fix   ../wifi-fw-dfs-worker/patches/0001-fieldb-context.patch  2 files, clean
+#   T4 watermark  ../wifi-rx-watermark/patches/0001-rx-refill-watermark.patch  3 files, clean
+#   BA skeleton   ../wifi-ba-agg/patches/0001-ba-skeleton.patch  3 files, Kbuild hunk offset +2 (as recorded)
+#   HE caps       ../wifi-ax-he-caps/patches/0001-he-caps.patch  cfg80211.c clean; Kbuild hunk
+#                 FAILED exactly as recorded -> hi5622_he_caps.o inserted after hi5622_dfs_mode.o,
+#                 hi5622_he_caps.c/.h copied from ../wifi-ax-he-caps/src
+#
+# BYTE-EXACT cross-check: rebuild the IMAGE #3 base module from this tree, in the
+# canonical path, with the image-3 invocation (make -s ... M=/tmp/wifi-image-3-module):
+base_module_unstripped 1441520 B  88d6537228baee7e22f4587c1a6d957a1f8940df9f278c4bbbebc2673d4e1ef8
+  pinned (/home/shibbityshwab/wifi-image-3-module-artifacts/hi5622_wifi.unstripped.ko):
+                                     88d6537228baee7e22f4587c1a6d957a1f8940df9f278c4bbbebc2673d4e1ef8  MATCH
+base_module_activity   379092 B  545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99
+  pinned (hi5622_wifi.activity.ko):  545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99  MATCH
+base_module_text_sha256            494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1
+  pinned (../wifi-image-3/build-evidence/module-build/artifacts.txt .text): 494ccd42...  MATCH
+# => the reproduced tree IS the IMAGE #3 build tree, not an equivalent.
