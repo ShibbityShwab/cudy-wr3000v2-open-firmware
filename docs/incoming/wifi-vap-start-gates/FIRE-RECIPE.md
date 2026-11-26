@@ -12,33 +12,39 @@ the RC misc window 0x10160000..0x1016FFFF, never rmmod the vendor modules, a
 page/state/mask anomaly -> power-cycle, no blind flash.
 
 **Module under test:** the R4b tree (send-3 lineage + the R4b order patch, 65
-parameters, 382,188 B sha `b9926c1c...1102` is the fired R4b artefact) with
-**this lane's two gate inversions** applied:
+parameters; the fired R4b artefact is 382,188 B sha `b9926c1c...1102`) with
+**this lane's two gate inversions** applied
+(`patches/0001-g9-g11-rf-enable-invert.patch`, `hi5622_vap_start_g0.c/.h`).
 
-    patches/0001-g9-g11-rf-enable-invert.patch   (hi5622_vap_start_g0.c/.h)
-    patches/0002-gate-selftest-update.patch      (host selftest, optional for the build)
+Reproduce it host-side with `tools/build-gates.sh` (a copy of
+/tmp/r4border-build + the patch + the 6.18.60 build + the host tests). The
+verified build of 2026-11-28:
 
-Expected build: identical 65 parameters, only `hi5622_vap_start_g0.c/.h`
-change; the artefact sha/size MUST be recorded by the builder (there is no
-pinned sha for the gate-inverted build in this lane - do not confuse it with
-the fired R4b `b9926c1c` / send-3 `bb0434c2` / send-2 `b8f6fe35`
-artefacts).
+    /tmp/vsg-artifact/hi5622_wifi.ko
+    382,376 B (stripped); sha256 9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+    unstripped sha256 99eeb5b97594062bfa407b6b9505ab838d7d4f88c5d1c853b785411b77496777
+    .text sha256 f9ce407d6d60314d07ed996b01bfdbf666764d0a8c91c71c44b1b473371ee550
+    vermagic 6.18.60 SMP mod_unload ARMv7 p2v8 ; modinfo -p | wc -l = 65 (no new parameter)
+
+**This is NOT the fired R4b artefact** (382,188 B / `b9926c1c...`): deploy the
+gate-inverted build and record its sha in the fire log. Do not confuse it with
+the send-3 R4 `bb0434c2` or the send-2 `b8f6fe35` artefacts either.
+(Details: BUILD-NOTES.md, evidence/build-artifact.txt.)
 
 ## R0 - build + host tests (host only, no device)
 
-    # 1) from the R4b gate lane's pinned chain, reproduce /tmp/r4border-build
-    #    (see ../wifi-band1-start-send-4/tools/build-r4b-order.sh), then:
-    cd /tmp/r4border-build
-    patch -p1 < .../wifi-vap-start-gates/patches/0001-g9-g11-rf-enable-invert.patch
-    # rebuild with the same Kbuild invocation the R4b build script used
-    # -> hi5622_wifi.ko; verify modinfo -p | wc -l == 65
-    patch -p1 -d .../opensource/docs/incoming/wifi-band1-start-send-4 \
-          < .../wifi-vap-start-gates/patches/0002-gate-selftest-update.patch
-    .../wifi-band1-start-send-4/tools/run-host-tests.sh   # TREE_OVERRIDE=/tmp/r4border-build
+    # 1) reproduce the R4b source tree (host only):
+    ../wifi-band1-start-send-4/tools/build-r4b-order.sh   # -> /tmp/r4border-build
+    # 2) apply the gate inversion + rebuild + run the host tests:
+    opensource/docs/incoming/wifi-vap-start-gates/tools/build-gates.sh
+    #    -> /tmp/vsg-artifact/hi5622_wifi.ko
+    #       (382,376 B, sha256 9bf1d846...cf82, 65 params, 0 warnings;
+    #        C selftest 293/0 + Python R4b-order 93/0)
 
 Host tests must pass (the C selftest now starts its default probe at
-`b440=1, ec8=1` and asserts the inverted refusals). Record the new .ko size,
-sha256 and 65-param count.
+`b440=1, ec8=1` and asserts the inverted refusals; patch 0002 is applied to a
+temp copy - the committed send-4 lane is not edited). Record the deployed
+.ko size, sha256 and 65-param count.
 
 ## R1 - device preconditions (read-only)
 

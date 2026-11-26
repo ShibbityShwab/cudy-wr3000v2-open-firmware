@@ -33,5 +33,16 @@ The tool `tools/fw_vap_start_gates_re.py` re-derives every claim
 `evidence/`. No vendor byte is copied into the repository.
 
 See **REPORT.md** for the decode, **TABLES.md** for the field/gate matrices,
-**FIRE-RECIPE.md** for the corrected fire recipe and
-`patches/0001-g9-g11-rf-enable-invert.patch` for the driver gate change.
+**FIRE-RECIPE.md** for the corrected fire recipe, **BUILD-NOTES.md** for the
+host-built gate-inverted module and
+`patches/0001-g9-g11-rf-enable-invert.patch` (module) +
+`patches/0002-gate-selftest-update.patch` (host test).
+
+## Host-built artifact (local evidence only)
+
+Reproduce with `tools/build-gates.sh` (base /tmp/r4border-build + patch 0001):
+
+    /tmp/vsg-artifact/hi5622_wifi.ko  382,376 B
+    sha256 9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+    65 params, 0 warnings; C selftest 293/0 + Python R4b-order 93/0.
+    NOT the fired R4b artifact (382,188 B / b9926c1c).

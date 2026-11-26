@@ -1,0 +1,144 @@
+hi5622_vap_start_g0: the G9/G11 gates are the RF-enable/band-up flags (1 = normal), not busy flags
+
+Lane wifi-vap-start-gates (task-212).  The key-0x0065 worker CA 0x46394 never
+reads mctx+0x440 or bandobj+0xEC8; the firmware gate CA 0x944DE requires BOTH
+== 1 to enable the 5 GHz RF programme (CA 0x40684 -> CA 0x101890).  The R4b
+fire's programmed RF image proves both were 1 at ap_chan; the fired G9/G11
+(== 0) refused a normal state.  Invert to == 1, refusal -EAGAIN (the RF
+programme would otherwise be skipped).
+
+--- a/hi5622_vap_start_g0.c
++++ b/hi5622_vap_start_g0.c
+@@ -133,16 +133,22 @@
+ 	 * branch CA 0x40684 skips the VAP. */
+ 	if (p->band != HI5622_VAP_START_G0_BAND)
+ 		return -EINVAL;
+-	/* G9: the band-config flag opens the CA 0x944DE/0x101890 RF branch; a
+-	 * set flag means this is not the first start of a fresh band. */
+-	if (p->b440 != 0u)
+-		return -EBUSY;
++	/* G9: mctx[0x440] is the module's RF-programme / band-config ENABLE
++	 * byte, not a busy flag.  CA 0x944DE (the gate of the 5 GHz RF
++	 * programme CA 0x40684 -> CA 0x101890) requires it == 1; the R4b
++	 * fire's programmed RF image proves 1 is the normal band-1 state
++	 * (lane wifi-vap-start-gates, task-212).  0 = the band/config apply
++	 * never ran and the RF programme is silently skipped. */
++	if (p->b440 != HI5622_VAP_START_G0_RF_ENABLED)
++		return -EAGAIN;
+ 	/* G10: CA 0x4C3FC's band-id gate (CA 0x581C8) must pass. */
+ 	if (p->d6e != 0u)
+ 		return -EINVAL;
+-	/* G11: the band must not already be up. */
+-	if (p->ec8 != 0u)
+-		return -EALREADY;
++	/* G11: bandobj+0xEC8 is the band-up/enable byte; CA 0x944DE
++	 * requires it == 1 (1 = band up = normal; 0 = the RF programme and
++	 * the 0x0242 resolver's band gate would both fail closed). */
++	if (p->ec8 != HI5622_VAP_START_G0_BAND_UP)
++		return -EAGAIN;
+ 	/* G13: a fresh band run-state: no armed request, no start marker, and
+ 	 * state[4] still unset (0) or empty (0xFF). */
+ 	if (p->state0 != 0u || p->state1 != 0u ||
+@@ -170,16 +176,16 @@
+ 		return "G7: mctx[4] is not 2 (AP create type) - no frame posted";
+ 	if (p->band != HI5622_VAP_START_G0_BAND)
+ 		return "G8: mctx[0x11] is not 1 (5 GHz) - no frame posted";
+-	if (p->b440 != 0u)
+-		return "G9: mctx[0x440] band-config flag is set - no frame posted";
++	if (p->b440 != HI5622_VAP_START_G0_RF_ENABLED)
++		return "G9: mctx[0x440] RF-enable flag is ZERO - the CA 0x944DE/0x101890 RF programme would be skipped (the 0x0124 ap_chan must set it); no frame posted";
+ 	if (p->d6e != 0u)
+ 		return "G10: bandobj+0xD6E band-id gate is nonzero - no frame posted";
+-	if (p->ec8 != 0u)
+-		return "G11: bandobj+0xEC8 says the band is already up - no frame posted";
++	if (p->ec8 != HI5622_VAP_START_G0_BAND_UP)
++		return "G11: bandobj+0xEC8 band-up flag is ZERO - the band is not up and the RF programme would be skipped; no frame posted";
+ 	if (p->state0 != 0u || p->state1 != 0u ||
+ 	    (p->state4 != 0x00u && p->state4 != HI5622_VAP_START_G0_STATE_NO_VAP))
+ 		return "G13: the band run-state is not fresh (state[0]/state[1] nonzero or state[4] out of {0x00,0xFF}) - no frame posted";
+-	return "the G1..G13 gates are open; G6 (helper object) and G14 (per-link branch) are non-gating observations";
++	return "the G1..G13 gates are open (G9/G11 = the RF-programme enable/band-up flags, 1 = normal); G6 (helper object) and G14 (per-link branch) are non-gating observations";
+ }
+ 
+ bool hi5622_vap_start_g0_helper_ok(
+--- a/hi5622_vap_start_g0.h
++++ b/hi5622_vap_start_g0.h
+@@ -54,11 +54,21 @@
+  * and the channel-context word the pre-start reads; the order is now
+  * vap_add -> desc_table -> dfs_mode -> ap_chan -> vap_start_g0 -> band_start.
+  *
++ * G9/G11 (lane wifi-vap-start-gates, task-212): the R4b fire refused at its
++ * own G9 ('mctx[0x440] band-config flag is set') - WRONG.  The firmware
++ * readers use the opposite polarity: CA 0x944DE returns 1 only when
++ * mctx[0x11]==1 && mctx[0x440]==1 && bandobj[0xEC8]==1, and that 1 is the
++ * ENABLE of the 5 GHz RF programme (CA 0x40684 -> CA 0x101890).  The
++ * key-0x0065 worker CA 0x46394 never reads either byte; the R4b fire's
++ * programmed RF image (R+0x3AC = 0x03E6138A) proves both were 1 at the
++ * ap_chan post - a normal state.  The gates therefore require 1 and refuse
++ * on 0 ('the RF programme would be skipped').
++ *
+  * The probe pack (read-only firmware RAM; the caller fills it):
+  *   G1  mctx != 0                          G8  u8[mctx+0x11] == 1 (band 5G)
+- *   G2  bandobj != 0 && count == 1         G9  u8[mctx+0x440] == 0
++ *   G2  bandobj != 0 && count == 1         G9  u8[mctx+0x440] == 1
+  *   G3  bandobj[0] == vap_add_index        G10 u8[bandobj+0xD6E] == 0
+- *   G4  u32[bandobj+0x1A00] != 0           G11 u8[bandobj+0xEC8] == 0
++ *   G4  u32[bandobj+0x1A00] != 0           G11 u8[bandobj+0xEC8] == 1
+  *   G5  u32[mctx+0x190] != 0               G13 state[0]==0 && state[1]==0 &&
+  *   G6  u32[mctx+0x4AC] != 0 (warn only)       state[4] in {0x00,0xFF}
+  *   G7  u8[mctx+4] == 2 (AP type)          G14 perlink+0x6C6 observation only
+@@ -136,7 +146,7 @@
+ #define HI5622_VAP_START_G0_MCTX_FIELD_OFF	0x12u	/* field (observation) */
+ #define HI5622_VAP_START_G0_MCTX_VAP_OFF	0x190u	/* the VAP object (G5) */
+ #define HI5622_VAP_START_G0_MCTX_VAP_P10_OFF	0x10u	/* [VAP+0x10] (R4b word) */
+-#define HI5622_VAP_START_G0_MCTX_B440_OFF	0x440u	/* band-config flag (G9) */
++#define HI5622_VAP_START_G0_MCTX_B440_OFF	0x440u	/* RF-enable/band-config flag (G9; 1 = normal) */
+ #define HI5622_VAP_START_G0_MCTX_B4AC_OFF	0x4acu	/* start-helper object (G6) */
+ #define HI5622_VAP_START_G0_MCTX_LINK_OFF	0x4b0u	/* per-link (G14) */
+ #define HI5622_VAP_START_G0_MCTX_BAND_OBJ_OFF	0x4b8u	/* band object */
+@@ -144,7 +154,7 @@
+ #define HI5622_VAP_START_G0_BANDOBJ_COUNT_OFF	0x12u	/* band VAP list count (G2) */
+ #define HI5622_VAP_START_G0_BANDOBJ_PUBLISHED_OFF 0x1a00u /* bind publish word (G4) */
+ #define HI5622_VAP_START_G0_BANDOBJ_D6E_OFF	0x0d6eu	/* band-id gate (G10) */
+-#define HI5622_VAP_START_G0_BANDOBJ_EC8_OFF	0x0ec8u	/* band-up flag (G11) */
++#define HI5622_VAP_START_G0_BANDOBJ_EC8_OFF	0x0ec8u	/* band-up flag (G11; 1 = normal) */
+ #define HI5622_VAP_START_G0_PERLINK_6C6_OFF	0x06c6u	/* per-link branch (G14) */
+ 
+ /* State field map of bandobj+0x14D0: [1] = start marker (2 = started),
+@@ -158,6 +168,11 @@
+  * can produce a value at all.  G12 requires exactly 1 (the recipe's value). */
+ #define HI5622_VAP_START_G0_MCTX_STATE_1	1u
+ 
++/* G9/G11 polarity: the firmware gates on 1 (a normal, configured band), not
++ * on 0.  See the header note and REPORT.md section 3. */
++#define HI5622_VAP_START_G0_RF_ENABLED		1u	/* u8[mctx+0x440] */
++#define HI5622_VAP_START_G0_BAND_UP		1u	/* u8[bandobj+0xEC8] */
++
+ /* Bounded read-only wait used for the asynchronous mctx[0x190] population
+  * (G5) and for the post-0x0065 G12 read.  Compiled constant: the fire recipe
+  * needs no extra knob. */
+@@ -209,9 +224,9 @@
+ 	/* G3 */	u8	entry0;		/* u8[bandobj+0] */
+ 	/* G4 */	u32	published;	/* u32[bandobj+0x1A00] */
+ 	/* G10 */	u8	d6e;		/* u8[bandobj+0xD6E] */
+-	/* G11 */	u8	ec8;		/* u8[bandobj+0xEC8] */
++	/* G11 */	u8	ec8;		/* u8[bandobj+0xEC8]; 1 = up */
+ 	/* G5 */	u32	b190;		/* u32[mctx+0x190] = the VAP object */
+-	/* G9 */	u8	b440;		/* u8[mctx+0x440] */
++	/* G9 */	u8	b440;		/* u8[mctx+0x440]; 1 = RF enabled */
+ 	/* G6 */	u32	b4ac;		/* u32[mctx+0x4AC] */
+ 	/* G14 */	u8	plink6c6;	/* u8[perlink+0x6C6] */
+ 	/* G3 expectation */ u8	expected_index;	/* vap_add_index */
+@@ -227,8 +242,10 @@
+  *             0x46470, so the frame must not be posted;
+  *  - -EPROTO  G7: create type is not AP (2);
+  *  - -EINVAL  G8: band field is not 5 GHz, or G10: band-id gate nonzero;
+- *  - -EBUSY   G9: band-config flag already set, or G13: band not fresh;
+- *  - -EALREADY G11: band already up.
++ *  - -EAGAIN  G9: the RF-enable flag mctx[0x440] is 0 (the 5 GHz RF
++ *             programme would be skipped), or G11: the band-up flag
++ *             bandobj[0xEC8] is 0 (the band is not up);
++ *  - -EBUSY   G13: band not fresh.
+  * G6 (mctx[0x4AC] == 0) and G14 (perlink+0x6C6) are not gating; see
+  * hi5622_vap_start_g0_helper_ok(). */
+ int hi5622_vap_start_g0_precheck(const struct hi5622_vap_start_g0_probe *p);

@@ -215,6 +215,18 @@ enable, 1 = normal)", the 0x0065 frame is posted/consumed, G12 shows
 P1 0x404C4220 = 0x1029, P12 stays 0x01800060/0x03E6138A (already programmed by
 the R4b ap_chan), page golden, and the ch40 beacon appears at 5200 MHz.
 
+## 6a. The host-built gate-inverted module [V*]
+
+`tools/build-gates.sh` reproduces the fired R4b source tree
+(/tmp/r4border-build), applies `patches/0001-g9-g11-rf-enable-invert.patch`,
+builds the 6.18.60 module host-side and runs the host tests. Verified build of
+2026-11-28: 382,376 B stripped, sha256
+`9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82`,
+`.text` sha256 `f9ce407d...ee550`, 65 params, 0 warnings,
+C selftest 293/0 + Python R4b-order 93/0. It is local evidence only (never
+committed) and it is NOT the fired R4b artifact (382,188 B / b9926c1c). See
+BUILD-NOTES.md and evidence/build-artifact.txt.
+
 ## 7. Residual risks / honest unknowns
 
 1. **The inverted gates are only as good as the reader decode.** CA 0x944DE

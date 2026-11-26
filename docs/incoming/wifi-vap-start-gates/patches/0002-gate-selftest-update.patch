@@ -1,0 +1,41 @@
+vap_start_g0_selftest: exercise the corrected G9/G11 (RF-enable/band-up = 1)
+
+Companion to 0001-g9-g11-rf-enable-invert.patch.  The default probe is a
+normal band-1 state (b440=1, ec8=1); the two refusal cases now test 0.
+Apply with: patch -p1 -d opensource/docs/incoming/wifi-band1-start-send-4
+
+--- a/src/vap_start_g0_selftest.c
++++ b/src/vap_start_g0_selftest.c
+@@ -78,9 +78,9 @@
+ 	p->entry0 = 0u;
+ 	p->published = 0x00000001u;
+ 	p->d6e = 0u;
+-	p->ec8 = 0u;
++	p->ec8 = 1u;		/* G11: band up (1 = normal) */
+ 	p->b190 = 0x60000030u;
+-	p->b440 = 0u;
++	p->b440 = 1u;		/* G9: RF enable (1 = normal) */
+ 	p->b4ac = 0x70000040u;
+ 	p->plink6c6 = 0u;
+ 	p->expected_index = 0u;
+@@ -298,16 +298,16 @@
+ 	CK(hi5622_vap_start_g0_precheck(&p) == -EINVAL, "G8 band");
+ 	CK(strstr(hi5622_vap_start_g0_verdict(&p), "G8") != NULL, "G8 text");
+ 
+-	probe_default(&p); p.b440 = 1u;
+-	CK(hi5622_vap_start_g0_precheck(&p) == -EBUSY, "G9 b440");
++	probe_default(&p); p.b440 = 0u;
++	CK(hi5622_vap_start_g0_precheck(&p) == -EAGAIN, "G9 b440 0");
+ 	CK(strstr(hi5622_vap_start_g0_verdict(&p), "G9") != NULL, "G9 text");
+ 
+ 	probe_default(&p); p.d6e = 1u;
+ 	CK(hi5622_vap_start_g0_precheck(&p) == -EINVAL, "G10 d6e");
+ 	CK(strstr(hi5622_vap_start_g0_verdict(&p), "G10") != NULL, "G10 text");
+ 
+-	probe_default(&p); p.ec8 = 1u;
+-	CK(hi5622_vap_start_g0_precheck(&p) == -EALREADY, "G11 ec8");
++	probe_default(&p); p.ec8 = 0u;
++	CK(hi5622_vap_start_g0_precheck(&p) == -EAGAIN, "G11 ec8 0");
+ 	CK(strstr(hi5622_vap_start_g0_verdict(&p), "G11") != NULL, "G11 text");
+ 
+ 	probe_default(&p); p.state0 = 1u;
