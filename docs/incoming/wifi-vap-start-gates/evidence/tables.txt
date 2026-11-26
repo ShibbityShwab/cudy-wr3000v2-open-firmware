@@ -1,0 +1,17 @@
+artifacts: firmware sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b (928920 B), module sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2 (3581748 B)
+objdump: /home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-objdump
+== g0-id1 table A (CA 0x10C23C, 8-B rows), rows used here
+  A[  1] key=0x0064 worker=0x449e4  0x0064 VAP add
+  A[  2] key=0x0065 worker=0x46394  0x0065 VAP start
+  A[ 76] key=0x0242 worker=0x4c524  0x0242 band start
+  A[108] key=0x0124 worker=0x841b8  0x0124 channel cfg
+
+== the 0x440 / 0xEC8 writer and reader map
+  mctx[0x440]   writer CA 0x455D0  <- bandobj[0x19A1] (band/config apply)
+  mctx[0x440..] writer CA 0x7100C  <- config block +0x30..
+  bandobj[0xEC8] writer CA 0x48D26 <- 0x01000101 (band bring-up; literal CA 0x48DFC)
+  bandobj[0xEC8] writer CA 0xB6C44 <- parsed band up/down byte
+  reader CA 0x944DE: 1 iff mctx[0x11]==1 && mctx[0x440]==1
+                        && bandobj[0xEC8]==1
+  consumers: CA 0x40684 (5 GHz RF programme), CA 0x4AE7C (band VAP resolver)
+  => 1 = RF programme enabled / band up = NORMAL; 0 = skipped silently

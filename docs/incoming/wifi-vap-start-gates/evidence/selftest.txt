@@ -1,0 +1,42 @@
+artifacts: firmware sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b (928920 B), module sha256 22fa789a3d431f49f9c52c76c402e5740d1d14118b5e47a347f2cc247532c7d2 (3581748 B)
+objdump: /home/shibbityshwab/openwrt-lab-selectorfix-img/staging_dir/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-linux-objdump
+PASS table A row 2 is key 0x0065 -> worker 0x46394: key=0x0065 ptr=0x46395
+PASS table A row 1 is key 0x0064 -> CA 0x449E4: key=0x0064 ptr=0x449e5
+PASS table A row 76 is key 0x0242 -> CA 0x4C524: key=0x0242 ptr=0x4c525
+PASS table A row 108 is key 0x0124 -> CA 0x841B8: key=0x0124 ptr=0x841b9
+PASS worker prologue at CA 0x46394: stmdb	sp!, {r4, r5, r6, r7, r8, r9, sl, fp, lr}
+PASS worker looks up the module ctx by mctx[0] (CA 0x961AE)
+PASS worker requires mctx[0x4B8] (band object) nonzero
+PASS worker stores body[2]->mctx[0x11], body[3]->mctx[0x12], body[4..7]->mctx[0x444]
+PASS worker sets mctx[0x0E]=1 on the AP branch (CA 0x46418-0x4641A)
+PASS worker dereferences mctx[0x190] for the AP branch (CA 0x46470)
+PASS worker calls the band start CA 0x971D8 and the pre-start CA 0x4C3FC
+PASS worker NEVER reads mctx[0x440] or bandobj[0xEC8]: hits=[]
+PASS CA 0x944DE reads mctx[0x11] == 1
+PASS CA 0x944DE reads mctx[0x440] and compares it to 1
+PASS CA 0x944DE returns bandobj[0xEC8] as the last gate
+PASS the 5 GHz RF branch CA 0x40684 calls CA 0x944DE
+PASS the band VAP resolver CA 0x4AE7C calls CA 0x944DE and CA 0x101890
+PASS CA 0x455D0 writes mctx[0x440]
+PASS CA 0x7100C writes mctx[0x440..] from a config block
+PASS CA 0x48D26 writes bandobj[0xEC8]
+PASS CA 0x48D26 stores the literal word 0x01000101: 0x01000101
+PASS CA 0xB6C44 writes bandobj[0xEC8] from the band up/down path
+PASS hmac_config_start_vap_event @0x15AF88 builds the key-0x0065 body
+PASS the emitter calls hmac_config_send_event
+PASS the start_vap emitter is called from hmac_start_bss_in_available_channel @0x4826C
+PASS hmac_chan_start_bss tail-calls hmac_start_bss_in_available_channel
+PASS hmac_start_all_bss_of_band calls hmac_chan_start_bss
+PASS hmac_config_set_channel sends key 0x0124 (mov r1,#292 -> hmac_config_send_event)
+PASS wal_config_set_channel calls hmac_config_set_channel
+PASS wal_cfg80211_start_ap_write_msg sends the AP config cfg-event
+PASS wal_cfg80211_start_ap_write_msg sends the AP config BEFORE wal_start_vap
+PASS wal_start_vap sends the g2 cmd 0x0065 frame (mov r3,#101)
+PASS CA 0x944DE model: (band,0x440,0xEC8) = (1,1,1) -> 1
+PASS CA 0x944DE model: any 0 -> 0 (RF programme skipped)
+PASS corrected precheck: R4b working state (b440=1, ec8=1) PASSES
+PASS corrected G9': b440==0 refused -EAGAIN (RF programme skipped)
+PASS corrected G11': ec8==0 refused -EAGAIN (band not up)
+PASS the old G9/G11 (==0) would have refused the R4b working state
+PASS the R4b fire's own refusal is exactly this contradiction
+fw_vap_start_gates_re: 39 checks, 0 failures
