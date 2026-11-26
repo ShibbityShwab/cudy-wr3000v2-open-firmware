@@ -1,0 +1,63 @@
+appie-wext2 host KAT - the vendor WEXT set_vendor_ie model
+PASS WEXT cmd is 0x8eec (= 36588)
+PASS cfg-event frame is 536 B (= 536)
+PASS IE area starts at wire+40 (= 40)
+PASS 20 mirror classes (= 20)
+PASS event is 0x0276 (= 630)
+PASS parse: valid request accepted
+PASS parse: ie_len (= 12)
+PASS parse: type (= 4)
+PASS parse: mode is 0 (path A) (= 0)
+PASS parse: IE bytes copied
+PASS parse: NULL buffer refused
+PASS parse: short header refused
+PASS parse: wrong cmd refused
+PASS parse: ie_len > 496 refused
+PASS parse: type > 19 refused
+PASS parse: truncated IE bytes refused
+PASS strip: 0x7f element removed
+PASS strip: surrounding elements preserved
+PASS strip: no 0x7f leaves the list unchanged
+PASS strip: malformed TLV list refused
+PASS mirror: class 4 save (len/cap/payload)
+PASS mirror: ie_len 0 clears the class (free/len/cap)
+PASS mirror: growth keeps the new length
+PASS mirror: type > 19 refused
+PASS mirror: ie_len > 608 refused
+PASS plan: mode > 1 refused
+PASS plan: mode 0 is the sibling direct frame (no envelope)
+PASS plan: type > 19 refused
+PASS plan: NULL ctx refused
+PASS plan: ctx1 above 0xf refused
+PASS plan: WEXT envelope plan accepted
+PASS build: short buffer refused
+PASS build: unrequested plan refused
+PASS build: 536 B frame
+PASS hdr: group 2 in the b0 low nibble (= 2)
+PASS hdr: b1 = alloc nibble (+ ctx2 high nibble 0) (= 1)
+PASS hdr: b2 = ctx1 (= 0)
+PASS hdr: b3 = ctx0 (= the VAP index) (= 4)
+PASS hdr: total 0x0218 (= 536)
+PASS hdr: msg id 0 (g2/id0) (= 0)
+PASS hdr: tag 0x5a5a (= 23130)
+PASS rec: transport cookie 0 (= 0)
+PASS rpc: tag 1 (= 1)
+PASS rpc: reserved 0 (= 0)
+PASS rpc: cfg msg len 508 (= 508)
+PASS rpc: sequence (= 287454020)
+PASS cfg: event SET_VENDOR_IE 0x0276 (= 630)
+PASS cfg: payload len 504 (= 504)
+PASS req: ie_len (= 12)
+PASS req: type (= 4)
+PASS req: mode 0 (path A) (= 0)
+PASS req: IE bytes at wire+40
+PASS req: IE area zero padded to 536 B
+PASS build: byte-exact WEXT envelope vector
+PASS build: second plan
+PASS build: only the sequence field changes
+PASS build: clear form (ie_len 0) keeps the 536 B frame
+PASS plan: NULL ctx refused (max IE)
+PASS plan: large well-formed IE list accepted
+PASS plan: ie_len > 496 refused
+PASS status line reports the port
+appie-wext2 host KAT: 61 checks, 0 failure(s)
