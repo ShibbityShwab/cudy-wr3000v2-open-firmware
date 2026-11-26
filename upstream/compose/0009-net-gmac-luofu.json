@@ -1,0 +1,17 @@
+{
+  "entry": "0009-net-gmac-luofu",
+  "message": "commit-messages/0009-net-gmac-luofu.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "009-net-gmac-luofu.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "038-net-gmac-maxframe-init.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "2e29f355ec93ea082a1c09261ed84ecea2592ccdee5fcf3b0373549af7b31b42"
+}
