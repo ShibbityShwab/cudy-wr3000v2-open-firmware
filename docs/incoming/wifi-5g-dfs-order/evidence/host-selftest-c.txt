@@ -1,0 +1,97 @@
+=== plan (fail-closed parameter contract) ===
+PASS   1  plan(valid mode on band 1) accepted
+PASS   2  plan post flag == (mode != 0)
+PASS   3  plan mode echoes the parameter
+PASS   4  plan(valid mode on band 1) accepted
+PASS   5  plan post flag == (mode != 0)
+PASS   6  plan mode echoes the parameter
+PASS   7  plan(valid mode on band 1) accepted
+PASS   8  plan post flag == (mode != 0)
+PASS   9  plan mode echoes the parameter
+PASS  10  plan(valid mode on band 1) accepted
+PASS  11  plan post flag == (mode != 0)
+PASS  12  plan mode echoes the parameter
+PASS  13  plan(mode 4) refused
+PASS  14  plan(mode 1, no beacon_static) refused
+PASS  15  plan(mode 0, no beacon_static) accepted
+PASS  16  plan(mode 0, band 1) is a clean no-post
+PASS  17  plan(mode 1, band 0) accepted
+PASS  18  plan(mode 1, band 0) is a clean no-post
+PASS  19  plan(band 2) refused
+PASS  20  plan(NULL) refused
+
+=== frame builder (the 29-B g0-id1 carrier KAT) ===
+PASS  21  arm build rc
+PASS  22  arm wire length
+PASS  23  arm frame == the firmware-decode KAT
+PASS  24  arm body byte
+PASS  25  arm key
+PASS  26  arm len
+PASS  27  arm total field
+PASS  28  arm tag
+PASS  29  arm group nibble
+PASS  30  arm id
+PASS  31  arm 0xFF tail
+PASS  32  clear build rc
+PASS  33  clear frame == the firmware-decode KAT
+PASS  34  clear body byte
+PASS  35  arm/clear differ only in the body byte
+PASS  36  build(body 2) refused
+PASS  37  build(NULL wire) refused
+PASS  38  build(NULL out_len) refused
+PASS  39  build(-ENOSPC on a short buffer)
+
+=== register pattern helpers ===
+PASS  40  regs accessor non-NULL
+PASS  41  reg 0 == 0x4010E000
+PASS  42  reg 1 == +4
+PASS  43  reg 2 == +8
+PASS  44  reg 3 == +0xA0
+PASS  45  reg 4 == +0xA4
+PASS  46  reg 5 == +0xA8
+PASS  47  pattern of an all-clear value == 0
+PASS  48  an all-clear value is NOT armed
+PASS  49  pattern of the armed state == 0x2D
+PASS  50  ARM_MASK == 0x2D
+PASS  51  the armed state is armed
+PASS  52  pattern(NULL) == 0
+
+=== precheck gates ===
+PASS  53  good probe + ARM accepted
+PASS  54  good probe + ARM_CLEAR accepted
+PASS  55  precheck(NULL) refused
+PASS  56  precheck(mode 0) refused
+PASS  57  precheck(mode 4) refused
+PASS  58  ARM refused without a module ctx
+PASS  59  ARM refused without the helper object
+PASS  60  ARM refused on a non-5GHz band
+PASS  61  ARM refused before the VAP start (state 0)
+PASS  62  ARM refused on an out-of-range state
+PASS  63  ARM refused when the band is not up
+PASS  64  ARM refused when u32[mctx+0x4A0] is set
+PASS  65  ARM refused when the CAC flag is already 1
+PASS  66  good armed probe + CLEAR accepted
+PASS  67  CLEAR refused when the CAC flag is 0
+PASS  68  CLEAR refused when the registers are not armed
+
+=== verdict strings and postchecks ===
+PASS  69  ARM verdict says the gates are open
+PASS  70  state-0 verdict names the 0x0065 requirement
+PASS  71  missing-helper verdict names u32[mctx+0x4AC]
+PASS  72  verdict(NULL) does not crash
+PASS  73  ARM postcheck accepts flag 1
+PASS  74  ARM postcheck rejects flag 0
+PASS  75  CLEAR postcheck accepts flag 0
+PASS  76  CLEAR postcheck rejects flag 1
+PASS  77  ARM_CLEAR postcheck is the ARM check
+
+=== status line ===
+PASS  78  status line returns a positive length
+PASS  79  status line names 'off'
+PASS  80  status line carries last_rc
+PASS  81  status line clamps to len-1
+PASS  82  status line(NULL) refused
+PASS  83  status line names 'arm+clear'
+PASS  84  status line names 'clear'
+
+RESULT: 84/84 checks PASS

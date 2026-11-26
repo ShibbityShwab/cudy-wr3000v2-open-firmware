@@ -1,0 +1,44 @@
+== the NEW start_ap ladder order (hi5622_scan.c block line numbers)
+128:/* lane wifi-desc-table-send (task-188), FAIL-CLOSED default 0.  The firmware
+2149:	/* lane wifi-desc-table-send (task-188): FAIL-CLOSED parameter gate for
+2433:		/* lane wifi-desc-table-send (task-188): the H2D 0x00F7
+2515:		memset(&cp, 0, sizeof(cp));
+2786:		/* lane wifi-5g-dfs-set (task-227): the H2D g0-id1 key 0x07E7
+2807:			drc = hi5622_dfs_set_plan(hi5622_dfs_set,
+2981:		/* lane wifi-dfs-mode-send (task-190), MOVED BY THE task-228 ORDER FIX:
+3006:			mrc = hi5622_dfs_mode_plan(hi5622_dfs_mode,
+3087:		/* lane wifi-band1-start-send (task-206): the H2D g0-id1 key
+3679:	/* lane wifi-desc-table-send (task-188): the 0x00F7 descriptor-table
+
+== the plan contract (hi5622_scan_logic.c) - HI5622_BEACON_STEP emission order
+12:		out[n++] = HI5622_BEACON_STEP_VAP_ADD;
+18:		out[n++] = HI5622_BEACON_STEP_DESC_TABLE;
+30:		out[n++] = HI5622_BEACON_STEP_CHAN;
+40:		out[n++] = HI5622_BEACON_STEP_SSID;
+42:		out[n++] = HI5622_BEACON_STEP_AP_CFG;
+52:		out[n++] = HI5622_BEACON_STEP_VAP_START_G0;
+63:		out[n++] = HI5622_BEACON_STEP_DFS_MODE;
+74:		out[n++] = HI5622_BEACON_STEP_BAND_START;
+76:		out[n++] = HI5622_BEACON_STEP_VAP_START;
+
+== the expected dmesg order strings in the module (strings of the stripped .ko)
+dfs_set
+dfs_mode
+dfs_mode
+cfg80211: start_ap REFUSED - dfs_mode=%u is not a valid DFS-mode parameter (0=off, 1=post; no frame sent
+cfg80211: start_ap REFUSED - dfs_mode=1 needs the beacon_static=1 vendor order (the 0x01F7 step exists only in that AP-start ladder); no frame sent
+cfg80211: start_ap REFUSED - dfs_set=%u is not a valid DFS-SET parameter (0=off, 1=arm, 2=arm+clear, 3=clear; no frame sent)
+cfg80211: start_ap REFUSED - dfs_set=%u needs the beacon_static=1 vendor order (the 0x07E7 step is placed after the 0x0065 VAP start and before the 0x01F7 dfs_mode step in that AP-start ladder); no frame sent
+cfg80211: start_ap REFUSED - dfs_set=%u is not a valid DFS-SET parameter (%d); no frame sent
+cfg80211: dfs_set pre: mctx=0x%08x band=%u state=%u ec8=%u b4a0=0x%08x b4ac=0x%08x cac=%u regs_pattern=0x%02x (%s)
+cfg80211: dfs_set REFUSED (%d): %s
+dfs_set_arm
+cfg80211: start_ap beacon_static frame 'dfs_set_arm' posted (%zu B, g0 id1 key 0x07E7, body 0x01) - after the 0x0065 VAP start and before the 0x01F7 dfs_mode / 0x0242 band start (task-228 order fix)
+cfg80211: dfs_set REFUSED: ARM_CLEAR read back pattern=0x%02x cac=%u after the ARM (expected the armed pattern + flag 1); clear NOT posted
+dfs_set_clear
+cfg80211: start_ap beacon_static frame 'dfs_set_clear' posted (%zu B, g0 id1 key 0x07E7, body 0x00)
+cfg80211: dfs_set: band %u is not band 1 - clean no-post (the 0x07E7 worker writes the band-1 SMAC sub-base)
+cfg80211: start_ap beacon_static REFUSED - dfs_mode=%u is not a valid parameter (%d); no AP frame sent
+dfs_mode
+cfg80211: start_ap beacon_static frame %u/%u 'dfs_mode' posted (%zu B, g0 id1 key 0x01F7, body mode=3) - after the 0x0065 VAP start and the 0x07E7 dfs_set step (task-228 order fix: the ARM precedes this DFS/RF mode)
+cfg80211: dfs_mode post: bandobject=0x%08x published=0x%08x attach=%u (%s)

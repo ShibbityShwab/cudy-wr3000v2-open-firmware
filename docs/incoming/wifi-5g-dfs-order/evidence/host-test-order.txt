@@ -1,0 +1,55 @@
+=== the sibling dfs_set contract is intact ===
+PASS   1  key == 0x07E7
+PASS   2  wire length 29
+PASS   3  arm body 0x01
+PASS   4  clear body 0x00
+PASS   5  arm mask 0x2d
+PASS   6  0x07E7 is NOT the 0x01F7 key
+PASS   7  arm frame == firmware-decode KAT
+PASS   8  clear frame == firmware-decode KAT
+PASS   9  builder still in hi5622_dfs_set.c
+PASS  10  Kbuild still builds hi5622_dfs_set.o
+PASS  11  fail-closed parameter still wired
+PASS  12  precheck still live
+PASS  13  postcheck still live
+
+=== hi5622_scan.c: the NEW execution order ===
+PASS  14  0x0124 channel post is before the dfs_set step
+PASS  15  0x0065 vap_start post-read is before the dfs_set step
+PASS  16  dfs_set step (0x07E7) is before the dfs_mode step (0x01F7)
+PASS  17  dfs_mode step (0x01F7) is before the band_start (0x0242)
+PASS  18  dfs_set pre-gate line is after the 0x0065 post-read
+PASS  19  dfs_set pre-gate line is before the arm post
+PASS  20  the ARM post line is before the dfs_mode post line
+PASS  21  the ARM post-read is before the dfs_mode post line
+PASS  22  dfs_set ARM body 0x01 marker present
+PASS  23  dfs_mode dmesg names the new predecessor (0x07E7 dfs_set step)
+PASS  24  dfs_set dmesg names the new successor (0x01F7 dfs_mode)
+PASS  25  old dfs_mode position text is gone
+PASS  26  old dfs_mode MODULE_PARM_DESC position text is gone
+PASS  27  dfs_mode param comment records the task-228 order fix
+PASS  28  dfs_set param comment records the ARM-before-0x01F7 rule
+PASS  29  dfs_mode block comment records the RF-programme consequence
+PASS  30  the header documents the ARM-before-0x01F7 order
+
+=== hi5622_scan_logic.c: the plan contract order ===
+PASS  31  plan desc_table before ap_chan
+PASS  32  plan ap_chan before ap_ssid
+PASS  33  plan ap_ssid before ap_cfg
+PASS  34  plan ap_cfg before vap_start_g0
+PASS  35  plan vap_start_g0 before dfs_mode (task-228 reorder)
+PASS  36  plan dfs_mode before band_start
+PASS  37  plan band_start before ap_vap_start
+PASS  38  plan comment records the task-228 rule
+PASS  39  plan comment says the 0x01F7 follows the VAP start + ARM
+PASS  40  plan 0x0124 comment records the skipped CA 0xA2FA2 gate
+PASS  41  plan band_start comment moved 0x01F7 after the VAP start
+
+=== the moved dfs_mode block is intact ===
+PASS  42  moved block still builds the 0x01F7 frame
+PASS  43  moved block still posts 'dfs_mode'
+PASS  44  moved block still has the worker-precondition dmesg
+PASS  45  moved block has no leftover band_start code
+PASS  46  moved dfs_set block is intact (plan + posts)
+
+RESULT: 46/46 checks PASS

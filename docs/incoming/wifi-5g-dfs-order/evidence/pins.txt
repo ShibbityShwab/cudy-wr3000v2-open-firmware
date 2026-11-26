@@ -1,0 +1,14 @@
+== dfs-order build pins (host-only, 2026-11-26)
+patch           : 978c3d5b5795357183398f33e1af510129d504904479c59a30cb98250d361fd8  (21461 B)
+base tree       : /tmp/dfs-set-build, module /tmp/dfs-set-artifact/hi5622_wifi.ko sha 1b47f0daff7e2e48d0ac6dcbc34b4135872f6a16088e8d20b88c71d47c684acb 391388 B
+base pins       : hi5622_scan.c 08d3aefecfac2f5e3cb93cb1632705f55e2f703ae29cfe50a19b465eee49bb98
+                  hi5622_scan_logic.c 15c50d34fa7ed0f9bd5262e5b317c13a97228207dcc599673b72788e2b9bcfea
+                  hi5622_dfs_set.h 18f951b90811b27f1e9c8e976279bee094e26656ec1581dadf39ccf99565f171
+patched pins    : hi5622_scan.c d2e894d4b24b6a6a0c4481a161eb012a5dc763455aa1e4cbc6045342fce12713
+                  hi5622_scan_logic.c 4400d546f4da045643bad1588b005ca6ad4774ba82d2d80a6d8c4b904e355f3c
+                  hi5622_dfs_set.h bb25e2faa4c962f55b0b79673029f267f00c3c3ee76efa3f866643b24be139c0
+module (stripped): /tmp/dfs-order-artifact/hi5622_wifi.ko 391408 B sha256 a5ec150cfc7d7b8df1b87bd59f5847f0e720b772e69524c76f2d26620babdb7e
+unstripped      : 23604c182729f399e731b8511f40bb5349d6f4fe2d7fa3d248943d0c0a9b387f (1444260 B)
+.text           : 832802cc212d23ea9c71066d435fddad40a3233a82e38b31e5bc1de1293e5249 (159160 B)
+params          : 66 (R5 65 + dfs_set; order patch adds none)
+host tests      : 84/84 C contract (evidence/host-selftest-c.txt), 46/46 Python ORDER (evidence/host-test-order.txt)

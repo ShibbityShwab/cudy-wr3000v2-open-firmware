@@ -1,0 +1,417 @@
+diff -ruN a/hi5622_dfs_set.h b/hi5622_dfs_set.h
+--- a/hi5622_dfs_set.h	2026-11-26 12:29:29.565882334 +0700
++++ b/hi5622_dfs_set.h	2026-11-26 12:44:19.929335339 +0700
+@@ -34,13 +34,21 @@
+  * mode): 0x01F7 writes the band object's RF mode byte +0xF04 and the RF
+  * register image; 0x07E7 writes the SMAC sub-base radar-detect bits and the
+  * CAC-active flag.  The two frames share only the g0-id1 carrier geometry.
++ * ORDER (task-228): the 0x07E7 ARM must be posted BEFORE the 0x01F7 mode
++ * step (the mode activation starts the firmware CAC; see the module
++ * parameter table below).
+  *
+  * fail-closed module parameter (owned by hi5622_scan.c):
+  *   dfs_set=0 (default)  no 0x07E7 frame at all - current behaviour;
+  *   dfs_set=1            ARM: post body {01} on a band-1 AP start AFTER
+  *                        the 0x0065 VAP start (the only ladder step that
+  *                        sets mctx[0x0E] in our ladder, i.e. passes the
+- *                        0xA4C0E gate) and BEFORE the 0x0242 band start;
++ *                        0xA4C0E gate) and BEFORE the 0x01F7 dfs_mode
++ *                        step and the 0x0242 band start (task-228 order
++ *                        fix: the ARM must precede the 0x01F7, because
++ *                        the 0x01F7 mode activation makes the firmware
++ *                        CAC go active and the ARM gate mctx+0x4A0
++ *                        then refuses);
+  *   dfs_set=2            ARM then CLEAR back-to-back (both frames); the
+  *                        post-read must see the CAC flag 1 then 0;
+  *   dfs_set=3            CLEAR only (requires the armed state + pattern);
+diff -ruN a/hi5622_scan.c b/hi5622_scan.c
+--- a/hi5622_scan.c	2026-11-26 12:29:29.566027349 +0700
++++ b/hi5622_scan.c	2026-11-26 12:43:56.109631148 +0700
+@@ -148,28 +148,37 @@
+ static unsigned int hi5622_desc_table_posts;
+ static unsigned int hi5622_desc_table_refusals;
+ 
+-/* lane wifi-dfs-mode-send (task-190), FAIL-CLOSED default 0.  The 5 GHz RF
+- * programme CA 0xA2FA2 (called from the band-1 branch CA 0x40684) returns
+- * silently unless the band object's RF mode byte P+0xF04 equals 3.  That
+- * byte has exactly one writer in the image: the H2D group-0/id-1
+- * config-event worker CA 0xB5B9C for key 0x01F7 (firmware table A row 93).
+- * The stock host trigger is the WAL command "set_country_for_dfs"
+- * (hmac_config_set_country_for_dfs, wifi.ko .text+0x5762C -> MOVW
+- * r1,#0x01F7 -> hmac_config_send_event), which builds the same g0-id1
+- * carrier as the 0x00F7 desc-table frame with body {mode}.  Posting
+- * key 0x01F7, len 1, body {0x03} before the 0x0124 channel post is the F1
+- * fix:
+- *   0 (default) = no 0x01F7 frame at all - current behaviour, byte-identical
+- *                 to the bench-fired ladder;
++/* lane wifi-dfs-mode-send (task-190), FAIL-CLOSED default 0, ORDER FIXED by
++ * the task-228 dfs-order lane.  The 5 GHz RF programme CA 0xA2FA2 (called
++ * from the band-1 branch CA 0x40684) returns silently unless the band
++ * object's RF mode byte P+0xF04 equals 3.  That byte has exactly one writer
++ * in the image: the H2D group-0/id-1 config-event worker CA 0xB5B9C for key
++ * 0x01F7 (firmware table A row 93).  The stock host trigger is the WAL
++ * command "set_country_for_dfs" (hmac_config_set_country_for_dfs, wifi.ko
++ * .text+0x5762C -> MOVW r1,#0x01F7 -> hmac_config_send_event), which builds
++ * the same g0-id1 carrier as the 0x00F7 desc-table frame with body {mode}.
++ * Posting key 0x01F7, len 1, body {0x03} is the F1 fix.  ORDER (task-228):
++ * the 2026-11-26 23:00 bench proved this step must come AFTER the 0x07E7
++ * DFS-SET ARM - with 0x01F7 first, the firmware CAC-active words
++ * mctx+0x49C..+0x4A8 are already nonzero (the stock's clean pre-state is
++ * all zero) and the 0x07E7 worker's ARM gate u32[mctx+0x4A0] == 0 refuses;
++ * the 0x07E7 worker's started-module gate needs the 0x0065 VAP start, so
++ * the proven slot is 0x0065 -> 0x07E7 -> 0x01F7.  This step therefore runs
++ * after the 0x0124 channel post (whose CA 0xA2FA2 RF programme it can no
++ * longer arm at channel-post time - the 0x01F7 worker still writes
++ * P+0xF04 = 3 and the R+0x3A8..R+0x418 image itself).
++ *   0 (default) = no 0x01F7 frame at all - byte-identical to the fired R5
++ *                 ladder;
+  *   1           = post the 29-byte mode frame on a BAND-1 AP start, AFTER
+- *                 the 0x00F7 descriptor-table step and BEFORE the 0x0124
+- *                 channel post, and only with beacon_static vendor order;
++ *                 the 0x0065 VAP start and the 0x07E7 DFS-SET step, and
++ *                 BEFORE the 0x0242 band start, only with the
++ *                 beacon_static vendor order;
+  *   >1          = refused at use time BEFORE any frame (fail closed, never
+  *                 guessed).  One meaning per module load; read-only. */
+ static unsigned int hi5622_dfs_mode;
+ module_param_named(dfs_mode, hi5622_dfs_mode, uint, 0444);
+ MODULE_PARM_DESC(dfs_mode,
+-		 "5GHz AP start: H2D key 0x01F7 DFS/RF mode send (0=off default = current behaviour, 1=post the 29-byte mode-3 frame after the 0x00F7 table and before the 0x0124 channel config on a band-1 beacon_static AP, >1 refused)");
++		 "5GHz AP start: H2D key 0x01F7 DFS/RF mode send (0=off default = current behaviour, 1=post the 29-byte mode-3 frame after the 0x0065 VAP start and the 0x07E7 DFS-SET step and before the 0x0242 band start on a band-1 beacon_static AP - task-228 order fix: the 0x07E7 ARM must precede this mode step, >1 refused)");
+ /* Read-only outcome for the sysfs status line (never a wire input). */
+ static int hi5622_dfs_mode_last_rc = -ENODATA;	/* never attempted */
+ static unsigned int hi5622_dfs_mode_posts;
+@@ -189,7 +198,11 @@
+  * context (its CA 0xA4C0E scan needs >= 1 ctx with state 1..3), and in our
+  * ladder only the 0x0065 VAP start sets it: the step is posted AFTER the
+  * 0x0065 and BEFORE the 0x0242 band start (the vendor's "CAC armed before
+- * the MAC/BSS start" order).
++ * the MAC/BSS start" order), and - task-228 order fix - BEFORE the
++ * 0x01F7 dfs_mode step: the bench proved the 0x01F7 DFS/RF mode
++ * activation is what makes the firmware CAC go active (the mctx
++ * +0x49C..+0x4A8 words), and the ARM gate u32[mctx+0x4A0] == 0
++ * requires those words to still be zero at ARM time.
+  *   dfs_set=0 (default) = no frame at all - current behaviour;
+  *   dfs_set=1           = ARM: post body {01} after the 0x0065 VAP start
+  *                         and before the 0x0242 band start, only with the
+@@ -202,7 +215,7 @@
+ static unsigned int hi5622_dfs_set;
+ module_param_named(dfs_set, hi5622_dfs_set, uint, 0444);
+ MODULE_PARM_DESC(dfs_set,
+-		 "5GHz AP start: H2D key 0x07E7 DFS SET / band-1 SMAC sub-base writer (0=off default, 1=arm body{01} after the 0x0065 VAP start and before the 0x0242 band start, 2=arm+clear, 3=clear only, >3 refused)");
++		 "5GHz AP start: H2D key 0x07E7 DFS SET / band-1 SMAC sub-base writer (0=off default, 1=arm body{01} after the 0x0065 VAP start and before the 0x01F7 dfs_mode and 0x0242 band start (task-228), 2=arm+clear, 3=clear only, >3 refused)");
+ /* Read-only outcome for the sysfs status line (never a wire input). */
+ static int hi5622_dfs_set_last_rc = -ENODATA;	/* never attempted */
+ static unsigned int hi5622_dfs_set_posts;
+@@ -2191,7 +2204,7 @@
+ 	if (hi5622_dfs_set != HI5622_DFS_SET_MODE_OFF &&
+ 	    !hi5622_beacon_static) {
+ 		dev_warn(wdev_dev,
+-			 "cfg80211: start_ap REFUSED - dfs_set=%u needs the beacon_static=1 vendor order (the 0x07E7 step is placed after the 0x0065 VAP start in that AP-start ladder); no frame sent\n",
++			 "cfg80211: start_ap REFUSED - dfs_set=%u needs the beacon_static=1 vendor order (the 0x07E7 step is placed after the 0x0065 VAP start and before the 0x01F7 dfs_mode step in that AP-start ladder); no frame sent\n",
+ 			 hi5622_dfs_set);
+ 		hi5622_dfs_set_refusals++;
+ 		rc = -EINVAL;
+@@ -2499,104 +2512,6 @@
+ 				}
+ 			}
+ 		}
+-		/* lane wifi-dfs-mode-send (task-190): the H2D g0-id1 key 0x01F7
+-		 * DFS/RF mode event (stock WAL "set_country_for_dfs"; the stock
+-		 * order is country/regdomain init -> 0x00F7 table -> 0x01F7
+-		 * mode -> 0x0124 channel).  Placement contract (sibling
+-		 * wifi-fw-rf-descriptor F1): AFTER the 0x00F7 descriptor-table
+-		 * step and BEFORE the 0x0124 channel post, whose band-1 RF
+-		 * programme (CA 0xA2FA2, invoked from CA 0x40684) returns
+-		 * silently unless the band object's mode byte P+0xF04 == 3.
+-		 * The 0x01F7 worker CA 0xB5B9C writes that byte from body[0] and
+-		 * programs the mode's RF register image R+0x3A8..R+0x418.  The
+-		 * gate is the fail-closed dfs_mode parameter; the frame is
+-		 * refused before the wire if the model says no. */
+-		{
+-			struct hi5622_dfs_mode_plan dmp;
+-			u32 dm_out0 = 0;
+-			int mrc;
+-
+-			mrc = hi5622_dfs_mode_plan(hi5622_dfs_mode,
+-						   hi5622_beacon_static,
+-						   p->band, &dmp);
+-			if (mrc) {
+-				dev_warn(wdev_dev,
+-					 "cfg80211: start_ap beacon_static REFUSED - dfs_mode=%u is not a valid parameter (%d); no AP frame sent\n",
+-					 hi5622_dfs_mode, mrc);
+-				hi5622_dfs_mode_refusals++;
+-				rc = mrc;
+-				goto out;
+-			}
+-			if (dmp.post) {
+-				len = 0;
+-				mrc = hi5622_dfs_mode_build(
+-					wire, HI5622_FRAME_MAX_TOTAL, &len, &dmp);
+-				if (mrc) {
+-					dev_warn(wdev_dev,
+-						 "cfg80211: start_ap beacon_static: DFS-mode builder refused (%d) - sequence aborted, no frame sent\n",
+-						 mrc);
+-					hi5622_dfs_mode_refusals++;
+-					rc = mrc;
+-					goto out;
+-				}
+-				mrc = hi5622_frame_post(c->ctx, wire, len,
+-							"dfs_mode", &dm_out0);
+-				hi5622_dfs_mode_last_rc = mrc;
+-				if (mrc) {
+-					dev_warn(wdev_dev,
+-						 "cfg80211: start_ap beacon_static: DFS-mode frame (g0 id1 key 0x01F7) not posted (%d) - sequence aborted\n",
+-						 mrc);
+-					rc = mrc;
+-					goto out;
+-				}
+-				hi5622_dfs_mode_posts++;
+-				posted++;
+-				dev_info(wdev_dev,
+-					 "cfg80211: start_ap beacon_static frame %u/%u 'dfs_mode' posted (%zu B, g0 id1 key 0x01F7, body mode=3) - after the 0x00F7 table and before the 0x0124 channel post\n",
+-					 posted, plan_n, len);
+-				/* Read-only evidence for the Lead: the 0x01F7
+-				 * worker CA 0xB5B9C requires the published
+-				 * per-link u32(bandobj+0x1A00) != 0 (else log
+-				 * 1442) and the band attach flag
+-				 * u8(bandobj+0xD70) == 1 (else log 1448); when
+-				 * absent the mode byte is not written.  These
+-				 * are live reads of the band object, no probe. */
+-				{
+-					u32 dm_slot0, dm_base, dm_mctx, dm_bandobj;
+-					u32 dm_published = 0;
+-					u8 dm_attach = 0;
+-					int dm_pre;
+-
+-					dm_slot0 = hi5622_fw_ram_read(c->ctx,
+-						HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
+-					dm_base = hi5622_fw_ram_read(c->ctx,
+-						HI5622_STAB_MODULE_TABLE_BASE_CPU);
+-					dm_mctx = hi5622_beacon5g_mctx_ca(dm_slot0,
+-									 dm_base);
+-					dm_bandobj = dm_mctx ?
+-						hi5622_fw_ram_read(c->ctx,
+-							dm_mctx +
+-							HI5622_BEACON5G_MCTX_BAND_OBJ_OFF) : 0u;
+-					if (dm_bandobj) {
+-						dm_published = hi5622_fw_ram_read(c->ctx,
+-							dm_bandobj +
+-							HI5622_DFS_MODE_BANDOBJ_PUBLISHED_OFF);
+-						dm_attach = (u8)hi5622_fw_ram_read(c->ctx,
+-							dm_bandobj +
+-							HI5622_DFS_MODE_BANDOBJ_ATTACH_OFF);
+-					}
+-					dm_pre = hi5622_dfs_mode_precheck(dm_published,
+-									 dm_attach);
+-					dev_info(wdev_dev,
+-						 "cfg80211: dfs_mode post: bandobject=0x%08x published=0x%08x attach=%u (%s)\n",
+-						 dm_bandobj, dm_published,
+-						 (unsigned)dm_attach,
+-						 dm_pre ?
+-						 "ZERO/absent - the 0x01F7 worker will log 1442/1448 and the mode byte stays 0" :
+-						 "the 0x01F7 worker's mode-write preconditions are met");
+-				}
+-			}
+-		}
+ 		memset(&cp, 0, sizeof(cp));
+ 		cp.band = p->band;
+ 		cp.channel = (u8)p->channel;
+@@ -2953,7 +2868,7 @@
+ 					}
+ 					hi5622_dfs_set_posts++;
+ 					dev_info(wdev_dev,
+-						 "cfg80211: start_ap beacon_static frame 'dfs_set_arm' posted (%zu B, g0 id1 key 0x07E7, body 0x01) - after the 0x0065 VAP start and before the 0x0242 band start\n",
++						 "cfg80211: start_ap beacon_static frame 'dfs_set_arm' posted (%zu B, g0 id1 key 0x07E7, body 0x01) - after the 0x0065 VAP start and before the 0x01F7 dfs_mode / 0x0242 band start (task-228 order fix)\n",
+ 						 len);
+ 					hi5622_scan_dfs_set_probe(c->ctx,
+ 								  &dsprobe);
+@@ -3063,6 +2978,112 @@
+ 					 (unsigned)p->band);
+ 			}
+ 		}
++		/* lane wifi-dfs-mode-send (task-190), MOVED BY THE task-228 ORDER FIX:
++		 * the H2D g0-id1 key 0x01F7 DFS/RF mode event.  Placement contract
++		 * (sibling wifi-fw-rf-descriptor F1 + the 2026-11-26 bench): the
++		 * 0x01F7 worker CA 0xB5B9C writes the band object mode byte P+0xF04
++		 * from body[0] and programs the mode's RF register image
++		 * R+0x3A8..R+0x418.  The old placement (after 0x00F7, before the
++		 * 0x0124 channel post) let the 0x0124 band-1 RF programme CA 0xA2FA2
++		 * run, but it also made the firmware CAC go active (mctx
++		 * +0x49C..+0x4A8 nonzero on our boot; the stock's clean pre-state is
++		 * all zero), which tripped the 0x07E7 DFS-SET ARM gate
++		 * u32[mctx+0x4A0] == 0.  The 0x07E7 worker's started-module gate
++		 * needs the 0x0065 VAP start, so the proven order is
++		 * 0x0065 -> 0x07E7 (ARM) -> 0x01F7: this step now runs AFTER the
++		 * dfs_set step and BEFORE the 0x0242 band start.  Consequence: the
++		 * 0x0124 channel post no longer sees P+0xF04 == 3, so CA 0xA2FA2
++		 * returns silently on this pass; the 0x01F7 worker itself still
++		 * writes the mode byte and the RF image (the fire's D11 probes the
++		 * mode byte, the R image and the R+0x410 latch).  The gate is the
++		 * fail-closed dfs_mode parameter; the frame is refused before the
++		 * wire if the model says no. */
++		{
++			struct hi5622_dfs_mode_plan dmp;
++			u32 dm_out0 = 0;
++			int mrc;
++
++			mrc = hi5622_dfs_mode_plan(hi5622_dfs_mode,
++						   hi5622_beacon_static,
++						   p->band, &dmp);
++			if (mrc) {
++				dev_warn(wdev_dev,
++					 "cfg80211: start_ap beacon_static REFUSED - dfs_mode=%u is not a valid parameter (%d); no AP frame sent\n",
++					 hi5622_dfs_mode, mrc);
++				hi5622_dfs_mode_refusals++;
++				rc = mrc;
++				goto out;
++			}
++			if (dmp.post) {
++				len = 0;
++				mrc = hi5622_dfs_mode_build(
++					wire, HI5622_FRAME_MAX_TOTAL, &len, &dmp);
++				if (mrc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: start_ap beacon_static: DFS-mode builder refused (%d) - sequence aborted, no frame sent\n",
++						 mrc);
++					hi5622_dfs_mode_refusals++;
++					rc = mrc;
++					goto out;
++				}
++				mrc = hi5622_frame_post(c->ctx, wire, len,
++							"dfs_mode", &dm_out0);
++				hi5622_dfs_mode_last_rc = mrc;
++				if (mrc) {
++					dev_warn(wdev_dev,
++						 "cfg80211: start_ap beacon_static: DFS-mode frame (g0 id1 key 0x01F7) not posted (%d) - sequence aborted\n",
++						 mrc);
++					rc = mrc;
++					goto out;
++				}
++				hi5622_dfs_mode_posts++;
++				posted++;
++				dev_info(wdev_dev,
++					 "cfg80211: start_ap beacon_static frame %u/%u 'dfs_mode' posted (%zu B, g0 id1 key 0x01F7, body mode=3) - after the 0x0065 VAP start and the 0x07E7 dfs_set step (task-228 order fix: the ARM precedes this DFS/RF mode)\n",
++					 posted, plan_n, len);
++				/* Read-only evidence for the Lead: the 0x01F7
++				 * worker CA 0xB5B9C requires the published
++				 * per-link u32(bandobj+0x1A00) != 0 (else log
++				 * 1442) and the band attach flag
++				 * u8(bandobj+0xD70) == 1 (else log 1448); when
++				 * absent the mode byte is not written.  These
++				 * are live reads of the band object, no probe. */
++				{
++					u32 dm_slot0, dm_base, dm_mctx, dm_bandobj;
++					u32 dm_published = 0;
++					u8 dm_attach = 0;
++					int dm_pre;
++
++					dm_slot0 = hi5622_fw_ram_read(c->ctx,
++						HI5622_STAB_MODULE_TABLE_SLOT0_CPU);
++					dm_base = hi5622_fw_ram_read(c->ctx,
++						HI5622_STAB_MODULE_TABLE_BASE_CPU);
++					dm_mctx = hi5622_beacon5g_mctx_ca(dm_slot0,
++									 dm_base);
++					dm_bandobj = dm_mctx ?
++						hi5622_fw_ram_read(c->ctx,
++							dm_mctx +
++							HI5622_BEACON5G_MCTX_BAND_OBJ_OFF) : 0u;
++					if (dm_bandobj) {
++						dm_published = hi5622_fw_ram_read(c->ctx,
++							dm_bandobj +
++							HI5622_DFS_MODE_BANDOBJ_PUBLISHED_OFF);
++						dm_attach = (u8)hi5622_fw_ram_read(c->ctx,
++							dm_bandobj +
++							HI5622_DFS_MODE_BANDOBJ_ATTACH_OFF);
++					}
++					dm_pre = hi5622_dfs_mode_precheck(dm_published,
++									 dm_attach);
++					dev_info(wdev_dev,
++						 "cfg80211: dfs_mode post: bandobject=0x%08x published=0x%08x attach=%u (%s)\n",
++						 dm_bandobj, dm_published,
++						 (unsigned)dm_attach,
++						 dm_pre ?
++						 "ZERO/absent - the 0x01F7 worker will log 1442/1448 and the mode byte stays 0" :
++						 "the 0x01F7 worker's mode-write preconditions are met");
++				}
++			}
++		}
+ 		/* lane wifi-band1-start-send (task-206): the H2D g0-id1 key
+ 		 * 0x0242 band-start event (the stock WAL "set_green_ap").
+ 		 * Placement contract (sibling wifi-band1-start T2/T5; the R4b
+diff -ruN a/hi5622_scan_logic.c b/hi5622_scan_logic.c
+--- a/hi5622_scan_logic.c	2026-11-26 11:55:17.985047109 +0700
++++ b/hi5622_scan_logic.c	2026-11-26 12:44:38.387387423 +0700
+@@ -723,7 +723,11 @@
+  * R4b reorder by wifi-band1-start-send-4, task-211: the 0x0124 channel
+  * post now precedes the 0x0065 and 0x0242 steps;
+  * R5 reorder by wifi-band1-start-send-5, task-213: the AP config frames
+- * (ap_ssid/ap_cfg) now precede the 0x0065 and 0x0242 steps)
++ * (ap_ssid/ap_cfg) now precede the 0x0065 and 0x0242 steps;
++ * dfs-order reorder by wifi-5g-dfs-order, task-228: the 0x01F7 mode
++ * step now follows the 0x0065 VAP start and the 0x07E7 DFS-SET ARM
++ * step, because the 0x01F7 makes the firmware CAC go active and the
++ * 0x07E7 ARM gate u32[mctx+0x4A0] == 0 must see the clean pre-state)
+  * ===================================================================*/
+ unsigned int hi5622_beacon_plan(unsigned int enabled, unsigned int vap_start,
+ 				unsigned int vap_start_g0,
+@@ -743,20 +747,16 @@
+ 	 * post time.  Only the fail-closed value 1 enables the step. */
+ 	if (desc_table == 1u && n < max)
+ 		out[n++] = HI5622_BEACON_STEP_DESC_TABLE;
+-	/* The H2D 0x01F7 mode event (stock WAL "set_country_for_dfs") must
+-	 * follow the 0x00F7 table (the country/regdomain init precedes the
+-	 * DFS mode in the vendor path) and still precede the 0x0124 channel
+-	 * post: its worker writes the mode byte P+0xF04 = 3 that the 0x0124
+-	 * band-1 RF programme tests.  Only the fail-closed value 1 enables
+-	 * the step. */
+-	if (dfs_mode == 1u && n < max)
+-		out[n++] = HI5622_BEACON_STEP_DFS_MODE;
+ 	/* The 0x0124 channel post (R4b, wifi-band1-start-send-4) is not
+ 	 * optional: its worker stores the channel/band bytes mctx[0x10..0x13]
+ 	 * that key 0x0065's G8 gate and the 0x0242 pre-start
+ 	 * [mctx+0x190]+0x10 word read (R4 fire: G8 refused with mctx[0x11]=0
+-	 * when the 0x0065 ran first).  It also runs the band-1 RF programme
+-	 * record the 0x00F7/0x01F7 steps armed. */
++	 * when the 0x0065 ran first).  Task-228: the 0x01F7 mode step now
++	 * runs AFTER this post, so the CA 0xA2FA2 programme's mode gate
++	 * (P+0xF04 == 3) is not yet open and the programme takes its silent
++	 * return; the 0x00F7 step's record is
++	 * still evaluated and latched.  The 0x01F7 worker writes the mode
++	 * byte and the R image itself later in the ladder. */
+ 	if (n < max)
+ 		out[n++] = HI5622_BEACON_STEP_CHAN;
+ 	/* R5 (lane wifi-band1-start-send-5, task-213): the AP config frames -
+@@ -776,14 +776,28 @@
+ 	 * (the worker's AP branch sets mctx[0x0E] = 1 on the module context
+ 	 * the add created/bound) and the AP config frames (R5: the firmware
+ 	 * has the beacon template before the band is armed), and precede the
+-	 * 0x0242 step: the band-start resolver CA 0x4AE7C requires
++	 * 0x01F7 mode step (task-228) and the 0x0242 step: the band-start
++	 * resolver CA 0x4AE7C requires
+ 	 * mctx[0x0E] in {1,2,3}.  Only the fail-closed value 1 enables it. */
+ 	if (vap_start_g0 == 1u && n < max)
+ 		out[n++] = HI5622_BEACON_STEP_VAP_START_G0;
++	/* The H2D 0x01F7 mode event (stock WAL "set_country_for_dfs") must
++	 * follow the 0x0065 VAP start and the 0x07E7 DFS-SET ARM step
++	 * (task-228 order fix: the 0x01F7 mode activation is what makes the
++	 * firmware CAC go active - mctx+0x49C..+0x4A8 nonzero - and the 0x07E7
++	 * ARM gate u32[mctx+0x4A0] == 0 requires the clean pre-state; the
++	 * 0x07E7 started-module gate in turn needs the 0x0065 VAP start).
++	 * The step still precedes the 0x0242 band start: its worker writes
++	 * the mode byte P+0xF04 = 3 and the mode's RF register image
++	 * R+0x3A8..R+0x418.  Only the fail-closed value 1 enables the step. */
++	if (dfs_mode == 1u && n < max)
++		out[n++] = HI5622_BEACON_STEP_DFS_MODE;
+ 	/* The H2D 0x0242 band-start event (the stock WAL "set_green_ap") must
+-	 * follow the 0x01F7 mode event, the 0x0124 channel post, the AP config
+-	 * frames and the key-0x0065 VAP start (G12): its worker CA 0x4C524
+-	 * calls the per-band MAC start CA 0x4AF0C directly and arms the band-1
++	 * follow the 0x0124 channel post, the AP config frames, the key-0x0065
++	 * VAP start (G12) and then the 0x07E7 DFS-SET ARM and 0x01F7 mode
++	 * steps (task-228: the mode step moved after the VAP start): its
++	 * worker CA 0x4C524 calls the per-band MAC start CA 0x4AF0C directly
++	 * and arms the band-1
+ 	 * 0x1029 bits in 0x4010C220, which the 0x0124 band-1 RF programme path
+ 	 * depends on.  Only the fail-closed value 1 enables the step; the
+ 	 * optional fallback rungs run inside the same step (band_start_fallback). */
