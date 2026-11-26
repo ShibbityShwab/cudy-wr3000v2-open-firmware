@@ -263,6 +263,21 @@ CHAIN = [
      "G8: frame_len+0x3C <= 0x680 else band+0xCC5++; G7: dest==0 -> drop (log 0x49F); "
      "build group1/id13/total=frame_len+0x3C; hdr[1]hi = u8[dest+2], hdr[2]=u8[dest+1], "
      "hdr[3]=u8[dest]; copy MPDU (0x4BDCE) then post 0x102760"),
+    ("descriptor-stage counter band+0xCC1", 0xBA240, [
+        ("ldrb.w", "r3, [sl, #0xcc1]"), ("adds", "r3, #1"),
+        ("strb.w", "r3, [sl, #0xcc1]"), ("bl", "#0xd1a6c")],
+     "0xBA1C8 increments band+0xCC1 once per RX descriptor it starts processing "
+     "(descriptor fields [desc+0x28] and u8[desc+0x27]>>4 must be non-zero); this is the "
+     "\"did the consumer reach the per-frame stage\" counter (new probe P24)"),
+    ("forwarding-failure counter band+0xCCC", 0xBA3FC, [
+        ("ldrb.w", "r3, [sl, #0xccc]"), ("adds", "r3, #1"),
+        ("strb.w", "r3, [sl, #0xccc]")],
+     "0xB2C5C (descriptor forwarding prep) failed -> band+0xCCC++ and the descriptor is "
+     "rescheduled via 0xB83DC"),
+    ("report-alloc-failure counter band+0xCCD", 0xBA41E, [
+        ("ldrb.w", "r3, [sl, #0xccd]"), ("adds", "r3, #1"),
+        ("strb.w", "r3, [sl, #0xccd]")],
+     "the g2/id2 report-class message alloc (0x102822, 0x14 B) failed -> band+0xCCD++"),
     ("fwd/dest resolver 0xBC524", 0xBC524, [
         ("push", "{r3, r4, r5, lr}"), ("mov", "r5, r0"), ("movs", "r0, #0"),
         ("bl", "#0xfe558"), ("cmp", "r5, #0x12"), ("ldr", "r3, [pc, #0x18]"),
@@ -490,6 +505,18 @@ def probes(fw):
         ("P22", "fwd/dest table: base u16 + 0x13 u32 entries",
          ram(DEST_TABLE_BASE), "2+0x4C", "dest_i = base + entry_i; u8[dest_i+2]&0xF"),
         ("P23", "chip0 band index byte +0xD70", ram(CHIP_BASE + 0xD70), "1", "0/1"),
+        ("P24a", "band0 producer entries +0xCC0", ram(BAND0 + 0xCC0), "1",
+         "moves = ISR reached the completion dequeue (prior P5)"),
+        ("P24b", "band0 descriptor stage +0xCC1", ram(BAND0 + 0xCC1), "1",
+         "moves = 0xBA1C8 started a descriptor (crosses C5/C8)"),
+        ("P24c", "band0 forwarding-prep fail +0xCCC", ram(BAND0 + 0xCCC), "1",
+         "moves = 0xB2C5C failed (0xBA3FC)"),
+        ("P24d", "band0 report-alloc fail +0xCCD", ram(BAND0 + 0xCCD), "1",
+         "moves = 0x102822 could not allocate (0xBA41E)"),
+        ("P24e", "band0 CRX cap drops +0xCC5", ram(BAND0 + 0xCC5), "1",
+         "moves = builder G8 length cap dropped (0xBA12E)"),
+        ("P24f", "band0 g2id3 post fail +0xCCE", ram(BAND0 + 0xCCE), "1",
+         "moves = producer 0x102760 rejected the g2 id3 (0xB5442)"),
     ]
     for p, what, where, width, expect in rows:
         print("  %-4s %-52s %-40s %-6s %s" % (p, what, where, width, expect))

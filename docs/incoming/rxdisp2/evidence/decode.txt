@@ -251,6 +251,49 @@ phys(firmware RAM) = 0x40000000 + 0x6B8000 + CA
   00BA0BE: mov r0, r7
    C6/C7: frame_len = u16[rxinfo+0x11]; fwd idx = u8[rxinfo+6]; dest = 0xBC524(idx); G8: frame_len+0x3C <= 0x680 else band+0xCC5++; G7: dest==0 -> drop (log 0x49F); build group1/id13/total=frame_len+0x3C; hdr[1]hi = u8[dest+2], hdr[2]=u8[dest+1], hdr[3]=u8[dest]; copy MPDU (0x4BDCE) then post 0x102760
 
+== descriptor-stage counter band+0xCC1  CA 0x000BA240
+  00BA240: ldrb.w r3, [sl, #0xcc1]
+  00BA244: add r1, sp, #0x44
+  00BA246: adds r3, #1
+  00BA248: strb.w r3, [sl, #0xcc1]
+  00BA24C: add.w r3, sl, #0x3e8
+  00BA250: mov r0, r3
+  00BA252: str r3, [sp, #0x18]
+  00BA254: bl #0xd1a6c
+  00BA258: ldrh.w r3, [sp, #0x44]
+  00BA25C: mov r8, r0
+  00BA25E: cmp r3, #0
+   0xBA1C8 increments band+0xCC1 once per RX descriptor it starts processing (descriptor fields [desc+0x28] and u8[desc+0x27]>>4 must be non-zero); this is the "did the consumer reach the per-frame stage" counter (new probe P24)
+
+== forwarding-failure counter band+0xCCC  CA 0x000BA3FC
+  00BA3FC: ldrb.w r3, [sl, #0xccc]
+  00BA400: adds r3, #1
+  00BA402: strb.w r3, [sl, #0xccc]
+  00BA406: b #0xba332
+  00BA408: movs r1, #6
+  00BA40A: movs r0, #0x14
+  00BA40C: bl #0x102822
+  00BA410: str r0, [sp, #0x28]
+  00BA412: cbnz r0, #0xba444
+  00BA414: mov.w r1, #0x748
+  00BA418: ldr r0, [pc, #0x88]   ; =0x10380CF8
+   0xB2C5C (descriptor forwarding prep) failed -> band+0xCCC++ and the descriptor is rescheduled via 0xB83DC
+
+== report-alloc-failure counter band+0xCCD  CA 0x000BA41E
+  00BA41E: ldrb.w r3, [sl, #0xccd]
+  00BA422: mov r1, r7
+  00BA424: adds r3, #1
+  00BA426: strb.w r3, [sl, #0xccd]
+  00BA42A: mov r0, sl
+  00BA42C: bl #0xb83dc
+  00BA430: ldr r3, [r6]
+  00BA432: ldr r2, [sp, #0x20]
+  00BA434: cmp r3, r2
+  00BA436: bne.w #0xba332
+  00BA43A: ldr r3, [sp, #0x1c]
+  00BA43C: cmp r5, r3
+   the g2/id2 report-class message alloc (0x102822, 0x14 B) failed -> band+0xCCD++
+
 == fwd/dest resolver 0xBC524  CA 0x000BC524
   00BC524: push {r3, r4, r5, lr}
   00BC526: mov r5, r0

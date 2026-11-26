@@ -17,6 +17,9 @@ PASS decode CRX builder 0xB9780 head (G1/G2) @0x000B9780 push.w {r4, r5, r6, r7,
 PASS decode CRX builder 0xB9780 per-frame select @0x000B980E ldr.w r5, [sl, #0xc] -> ldr r4, [r5, #-0x4] -> bl #0x40cce
 PASS decode CRX builder class-nibble gate @0x000B9864 cmp r4, #3 -> cbz r4 -> movw r1, #0xa6a
 PASS decode CRX build+post loop @0x000BA0A0 movs r1, #6 -> ldrb.w r0, [r6, #0xd6d] -> bl #0x4c9b4
+PASS decode descriptor-stage counter band+0xCC1 @0x000BA240 ldrb.w r3, [sl, #0xcc1] -> adds r3, #1 -> strb.w r3, [sl, #0xcc1]
+PASS decode forwarding-failure counter band+0xCCC @0x000BA3FC ldrb.w r3, [sl, #0xccc] -> adds r3, #1 -> strb.w r3, [sl, #0xccc]
+PASS decode report-alloc-failure counter band+0xCCD @0x000BA41E ldrb.w r3, [sl, #0xccd] -> adds r3, #1 -> strb.w r3, [sl, #0xccd]
 PASS decode fwd/dest resolver 0xBC524 @0x000BC524 push {r3, r4, r5, lr} -> mov r5, r0 -> movs r0, #0
 PASS decode chip ctx resolver 0xA4FC8 @0x000A4FC8 push {r3, lr} -> mov r2, r0 -> mov r3, r1
 PASS decode chip+0x1A00 installer @0x00048A68 add.w r3, r4, #0x1a00 -> str.w sl, [r3] -> ldrb.w r3, [sl, #1]
@@ -72,4 +75,4 @@ PASS worker round limit u16[cfg+4]
 PASS worker list splice 
 PASS worker dispatch resolver 
 
-73/73 PASS
+76/76 PASS

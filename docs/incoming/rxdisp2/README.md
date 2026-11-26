@@ -4,7 +4,7 @@
 firmware (`rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin`, 928,920 B, sha256
 `7fc87e20...c3ef311b`, **CA = file offset + 0x40000**). No device contact, no writes, no
 vendor bytes tracked. Tool: [tools/fw_rxdisp2_re.py](tools/fw_rxdisp2_re.py) `--selftest`
-**73/73 PASS**; every CA/field/expected value below is asserted there.
+**76/76 PASS**; every CA/field/expected value below is asserted there.
 
 **One-line result.** The C5/C6/C7 split is now decoded instead of inferred:
 (1) the local queue-1 notifier and the customer worker are installed **unconditionally by the
@@ -12,16 +12,19 @@ same per-destination init body that creates the HCC RX thread** - the thread tha
 every H2D message this bench already uses - so a *NULL* q1 notifier is not a state our boot can
 be in; (2) the transport queue q0 (C7) is proven live by the g1 id3 config replies the host
 receives; (3) the only gates left are the CRX builder's **per-frame RX-descriptor gates** inside
-`0xB9780` (chip RX-ctx `[chip+0x1A00]`, class nibble, forward/dest resolution, len cap), i.e.
-properties of the received frame, not of the firmware's queue wiring.
+`0xB9780` (chip RX-ctx `[chip+0x1A00]`, class nibble, forward/dest resolution, len cap), or the
+stage just before it: a **new six-counter ladder** (band+0xCC0/0xCC1/0xCCC/0xCCD/+0xCC5/+0xCCE)
+splits "builder drops the frames" from "no descriptor ever reaches the builder" (C8, the
+SMAC/hardware RX side) in a single read-only pass. Properties of the received frame, not of the
+firmware's queue wiring.
 
 ## Contents
 
 | file | what |
 | --- | --- |
-| [REPORT.md](REPORT.md) | the decode, the re-ranking of C5/C6/C7, the fix candidates |
+| [REPORT.md](REPORT.md) | the decode, the re-ranking of C5/C6/C7/C8, the fix candidates |
 | [TABLES.md](TABLES.md) | instruction/data tables and the dest0 runtime-wiring map |
-| [PROBES.md](PROBES.md) | read-only probe pack P0/P12-P19 (prior) + P20-P23 (new expected values) |
+| [PROBES.md](PROBES.md) | read-only probe pack P0/P12-P19 (prior) + P20-P24 (expected values + counter ladder) |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | the attended read-only pass and the decision matrix |
 | [tools/](tools/) | `fw_rxdisp2_re.py` - the re-derivation/selftest tool |
 | [evidence/](evidence/) | selftest/decode/tables/probes output (regenerable) |

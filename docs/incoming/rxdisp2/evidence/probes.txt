@@ -9,3 +9,9 @@
   P21  chip0 RX ctx [chip+0x1A00]                           CA 0x0015E408 phys 0x40816408            4      !=0
   P22  fwd/dest table: base u16 + 0x13 u32 entries          CA 0x00171504 phys 0x40829504            2+0x4C dest_i = base + entry_i; u8[dest_i+2]&0xF
   P23  chip0 band index byte +0xD70                         CA 0x0015D778 phys 0x40815778            1      0/1
+  P24a band0 producer entries +0xCC0                        CA 0x001758B0 phys 0x4082D8B0            1      moves = ISR reached the completion dequeue (prior P5)
+  P24b band0 descriptor stage +0xCC1                        CA 0x001758B1 phys 0x4082D8B1            1      moves = 0xBA1C8 started a descriptor (crosses C5/C8)
+  P24c band0 forwarding-prep fail +0xCCC                    CA 0x001758BC phys 0x4082D8BC            1      moves = 0xB2C5C failed (0xBA3FC)
+  P24d band0 report-alloc fail +0xCCD                       CA 0x001758BD phys 0x4082D8BD            1      moves = 0x102822 could not allocate (0xBA41E)
+  P24e band0 CRX cap drops +0xCC5                           CA 0x001758B5 phys 0x4082D8B5            1      moves = builder G8 length cap dropped (0xBA12E)
+  P24f band0 g2id3 post fail +0xCCE                         CA 0x001758BE phys 0x4082D8BE            1      moves = producer 0x102760 rejected the g2 id3 (0xB5442)
