@@ -1,0 +1,7 @@
+run-host-tests: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-ba-tx-impl
+ba_tx_selftest: Hi5622V100 TX-direction BA core (lane wifi-ba-tx-impl)
+ba_tx_selftest: 211 checks, 0 failures
+ba_tx_selftest: Hi5622V100 TX-direction BA core (lane wifi-ba-tx-impl)
+ba_tx_selftest: 225 checks, 0 failures
+run-host-tests: PASS (211 standalone + 225 with the driver H2D gate)
+exit=0
