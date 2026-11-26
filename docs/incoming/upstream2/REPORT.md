@@ -30,7 +30,7 @@ checks that were not committed before.
 
 ## 2. The target directory
 
-Installed by [`../../upstream-dts/tools/assemble-target.sh`](../../upstream-dts/tools/assemble-target.sh)
+Installed by [`../upstream-dts/tools/assemble-target.sh`](../upstream-dts/tools/assemble-target.sh)
 (mapping: target-skeleton/README.md section 4). Manifest breakdown
 ([validation/assembly/target-manifest.tsv](validation/assembly/target-manifest.tsv),
 86 lines = header + 85 files):
@@ -117,7 +117,7 @@ base DT (local, gitignored `dumps/router-20261108/kernelb/kernelb.dtb`,
 facts were transcribed into our own clean-room DTS (the one above) and into
 [`../../TARGET-DESIGN.md`](../../TARGET-DESIGN.md)/HARDWARE-IDENTITY.md; the
 vendor-vs-ours node/compatible diff and the remaining DTS review gaps are in
-[`../../upstream-dts/DTS-COVERAGE.md`](../../upstream-dts/DTS-COVERAGE.md)
+[`../upstream-dts/DTS-COVERAGE.md`](../upstream-dts/DTS-COVERAGE.md)
 sections 4 and 6.
 
 ## 4. The image recipe
@@ -248,8 +248,8 @@ checklist is [`../../upstream/SUBMISSION-STATUS.md`](../../upstream/SUBMISSION-S
 
 # 1. assemble the target into an OpenWrt main tree (single sources -> tree;
 #    the script resolves the single source itself; --verify checks an existing tree)
-../../upstream-dts/tools/assemble-target.sh --verify /path/to/openwrt
-../../upstream-dts/tools/assemble-target.sh --apply  /path/to/openwrt
+../upstream-dts/tools/assemble-target.sh --verify /path/to/openwrt
+../upstream-dts/tools/assemble-target.sh --apply  /path/to/openwrt
 
 # 2. select the device and build (host-only; no device contact)
 cd /path/to/openwrt

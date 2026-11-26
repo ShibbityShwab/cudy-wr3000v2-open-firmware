@@ -9,7 +9,7 @@ The definitive per-item checklist remains
 split). This page reduces it to the gates specific to the **target + DTS + image
 recipe** work of this lane, so the next lane does not have to re-derive them.
 Everything below was checked against the files at
-[`../../target-skeleton/`](../../target-skeleton) on 2026-11-27; nothing here is
+[`../../../target-skeleton/`](../../../target-skeleton) on 2026-11-27; nothing here is
 invented.
 
 ## 1. What PR-1 ("add HiSilicon luofu target + board DTS") would carry
@@ -53,7 +53,7 @@ invented.
    `dtbs_check` against submission-time mainline (the `wifi-pcie-hog` child
    needs the post-v6.18 `snps,dw-apb-gpio` hog pattern; expected warning if
    checked against the v6.18 tag). See DTS review notes in
-   [`../../upstream-dts/DTS-COVERAGE.md`](../../upstream-dts/DTS-COVERAGE.md)
+   [`../upstream-dts/DTS-COVERAGE.md`](../upstream-dts/DTS-COVERAGE.md)
    section 6.
 7. **MAINTAINERS + DCO.** The target needs a MAINTAINERS entry and real
    `Signed-off-by` identities; both are blocked on the owner decisions
