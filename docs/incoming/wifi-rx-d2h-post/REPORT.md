@@ -40,9 +40,11 @@ D2H frames actually delivered to the host (`g1 id3`, `g4 id4`; earlier catalogue
    no id filter, the ETE node has no per-type/source field, and the doorbell mask is constant:
    none of those can be the reason g2 id3 is missing. [Q1 per-type answer: ruled out.]**
 3. **The discriminator is the per-group queue selection at `0x102760` step 4 [V + I].** The
-   host-visible classes are all built with destination nibble **0** (heartbeat: `0xC6BDA`
-   `bfc r3,#4,#4`; ready pair: host-side `src core=hdr[1]>>4==0` check [V\*]); the g2 id3
-   copies `u8[band_obj]` into that nibble (`0xB5472`). Independently, the firmware registers
+   host-direction classes are groups 1/3/4 (the host's own post tables; bench-observed:
+   g1 id3 and g4 id4). The one class we decoded end-to-end, the heartbeat (g4 id4), is built
+   with destination nibble **0** (`0xC6BDA` `bfc r3,#4,#4`) and the ready pair is checked by
+   the host as `hdr[1]>>4 == 0` [V\*]; the g2 id3 copies `u8[band_obj]` into that nibble
+   (`0xB5472`) [V]. Independently, the firmware registers
    **local handler tables only for groups 0 and 2** (`0x102866` calls: boot task `0x48338`
    g2/19 ids at table `0x10CC18`, `0x48342` g0/40 ids at `0x10CCFC`; hcc init `0x47BC8`
    g0/1 id at `0x10CBEC`) [V]: groups 1/3/4 are not locally consumed. The g2 id3 handler
