@@ -426,7 +426,7 @@ def print_tables(img):
     for band, rows in (("2.4G", IRQ_BAND0), ("5G", IRQ_BAND1)):
         for _, _, irq, flags, w in rows:
             print("  %-4s %-6d %-8d 0x%06X 0x%06X" % (band, irq, flags, w,
-                                                      body_of.get(w, 0)))
+                                                      body_of.get(w & ~1, 0)))
     print()
     print("=== T5. the beacon TX gate words and their firmware writers ===")
     print("  GATE_EN  0x%X : bit0=5 GHz bit1=2.4 GHz (MAC start CA 0x%X)"

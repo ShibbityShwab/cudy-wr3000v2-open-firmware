@@ -94,22 +94,22 @@
 
 === T4. per-band IRQ registration (boot init CA 0xD1B68) ===
   band irq    flags    wrapper  shared body
-  2.4G 47     5        0x0AEC95 0x000000
-  2.4G 49     5        0x0B54C9 0x000000
-  2.4G 50     5        0x0B0D51 0x000000
-  2.4G 51     5        0x0AEC69 0x000000
-  2.4G 52     5        0x0AEB75 0x000000
-  2.4G 82     14       0x0AE48D 0x000000
-  2.4G 83     5        0x0B0D51 0x000000
-  2.4G 59     5        0x0B0C45 0x000000
-  5G   53     5        0x0AEC89 0x000000
-  5G   55     5        0x0B54BD 0x000000
-  5G   56     5        0x0B0D45 0x000000
-  5G   57     5        0x0AEC5D 0x000000
-  5G   58     5        0x0AEB69 0x000000
-  5G   84     14       0x0AE481 0x000000
-  5G   85     5        0x0B0D45 0x000000
-  5G   60     5        0x0B0C39 0x000000
+  2.4G 47     5        0x0AEC95 0x0AEC74
+  2.4G 49     5        0x0B54C9 0x0B53A4
+  2.4G 50     5        0x0B0D51 0x0B0CE0
+  2.4G 51     5        0x0AEC69 0x0AEB80
+  2.4G 52     5        0x0AEB75 0x0AEA9C
+  2.4G 82     14       0x0AE48D 0x0AE45C
+  2.4G 83     5        0x0B0D51 0x0B0CE0
+  2.4G 59     5        0x0B0C45 0x0B0AB8
+  5G   53     5        0x0AEC89 0x0AEC74
+  5G   55     5        0x0B54BD 0x0B53A4
+  5G   56     5        0x0B0D45 0x0B0CE0
+  5G   57     5        0x0AEC5D 0x0AEB80
+  5G   58     5        0x0AEB69 0x0AEA9C
+  5G   84     14       0x0AE481 0x0AE45C
+  5G   85     5        0x0B0D45 0x0B0CE0
+  5G   60     5        0x0B0C39 0x0B0AB8
 
 === T5. the beacon TX gate words and their firmware writers ===
   GATE_EN  0x40101220 : bit0=5 GHz bit1=2.4 GHz (MAC start CA 0x4AF0C)
