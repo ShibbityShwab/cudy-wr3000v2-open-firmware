@@ -27,7 +27,7 @@ device read.  This lane **corrects** one claim of
    The call at 0x48314 is preceded by a bounded wait (11 x 50-tick sleeps on
    `u32[0x18179C]`/`[ptr+0x50]`) and is **unconditional once the earlier init
    steps of that body returned 0**. **[V] structure, [I] runtime order.**
-3. **Preconditions:** gate `u8[0x17FCA8+0xB68]` = u8[0x180810]` must be **exactly 1**
+3. **Preconditions:** gate `u8[0x17FCA8+0xB68]` = u8[0x180810] must be **exactly 1**
    (0 = skip silently, >1 = error 0x65); the per-device array 0x174BE0 (2
    devices) and the device count `u8[0x174BEE]=2` are written by 0xD1B68 itself;
    the object is `0x174BF0 + 0xE28*band` (getter CA 0xF4F48, bands 0..1 only).
