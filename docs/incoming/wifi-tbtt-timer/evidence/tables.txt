@@ -1,0 +1,47 @@
+=== TABLES ===
+
+[1] per-band SMAC ISR registration (call 0xC6DA2(irq,prio,handler))
+| band | IRQ | prio | wrapper | common body |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 (2.4G) | 47 | 5 | 0x0AEC94 | 0x0AEC74 |
+| 0 (2.4G) | 49 | 5 | 0x0B54C8 | 0x0B53A4 |
+| 0 (2.4G) | 50 | 5 | 0x0B0D50 | 0x0B0CE0 |
+| 0 (2.4G) | 51 | 5 | 0x0AEC68 | 0x0AEB80 |
+| 0 (2.4G) | 52 | 5 | 0x0AEB74 | 0x0AEA9C |
+| 0 (2.4G) | 82 | 14 | 0x0AE48C | 0x0AE45C |
+| 0 (2.4G) | 83 | 5 | 0x0B0D50 | 0x0B0CE0 |
+| 0 (2.4G) | 59 | 5 | 0x0B0C44 | 0x0B0AB8 |
+| 1 (5G) | 53 | 5 | 0x0AEC88 | 0x0AEC74 |
+| 1 (5G) | 55 | 5 | 0x0B54BC | 0x0B53A4 |
+| 1 (5G) | 56 | 5 | 0x0B0D44 | 0x0B0CE0 |
+| 1 (5G) | 57 | 5 | 0x0AEC5C | 0x0AEB80 |
+| 1 (5G) | 58 | 5 | 0x0AEB68 | 0x0AEA9C |
+| 1 (5G) | 84 | 14 | 0x0AE480 | 0x0AE45C |
+| 1 (5G) | 85 | 5 | 0x0B0D44 | 0x0B0CE0 |
+| 1 (5G) | 60 | 5 | 0x0B0C38 | 0x0B0AB8 |
+
+[2] common ISR bodies
+| 0x0AE45C | mask-ack (enable-mask literal) |
+| 0x0AEA9C | completion msg (status bit 8) |
+| 0x0AEB80 | 16-bit ring walk (status bit 7) |
+| 0x0AEC74 | deferred task event (status bit 0) |
+| 0x0B0AB8 | error bits 0/1/2 + 0xB0930 |
+| 0x0B0CE0 | IRQ-disable dispatch (50|83, 56|85) |
+| 0x0B53A4 | ring dequeue + msg (status bit 2) |
+
+[3] key facts (table A/B)
+| 0x0064 | A row 1 | 0x0449E4 |
+| 0x0065 | A row 2 | 0x046394 |
+| 0x0067 | A row 4 | 0x045F74 |
+| 0x00D8 | A row 41 | 0x081038 |
+| 0x0124 | A row 108 | 0x0841B8 |
+| 0x0127 | A row 110 | 0x084DA4 |
+| 0x01F7 | A row 93 | 0x0B5B9C |
+| 0x0242 | A row 76 | 0x04C524 |
+| 0x0243 | A row 77 | 0x08419C |
+
+[4] timer candidates
+| CA | width | evidence |
+| ---: | ---: | --- |
+| 0x401015CC | 4 | start=1/clear=0/count writes; the SMAC common latch |
+| 0x400024B0 | 2 | literal 100 written by both per-band init paths |

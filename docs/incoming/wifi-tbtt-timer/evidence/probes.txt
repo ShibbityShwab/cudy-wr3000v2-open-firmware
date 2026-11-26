@@ -1,0 +1,52 @@
+=== PROBES (read-only) ===
+host IO rule: BAR0 offset = CA + 0x3B8000 - 0x40000000, phys = CA+0x3B8000
+firmware RAM rule: BAR0 offset = CA + 0x6B8000, phys = 0x40000000+BAR0
+
+[A] device IO (region-3, host-readable)
+| object | CA | width | BAR0 | phys |
+| --- | ---: | ---: | ---: | ---: |
+| MAC start band0 | 0x4011080C | 4 | 0x004C880C | 0x404C880C |
+| MAC start band1 | 0x4011480C | 4 | 0x004CC80C | 0x404CC80C |
+| SMAC IRQ enable band1 | 0x4010C220 | 4 | 0x004C4220 | 0x404C4220 |
+| SMAC IRQ enable band0 | 0x40108214 | 4 | 0x004C0214 | 0x404C0214 |
+| SMAC IRQ status band1 | 0x4010C200 | 4 | 0x004C4200 | 0x404C4200 |
+| SMAC TRX0 band0 | 0x4010820C | 4 | 0x004C020C | 0x404C020C |
+| SMAC TRX band1 | 0x4010E150 | 4 | 0x004C6150 | 0x404C6150 |
+| SMAC TRX band1 +4 | 0x4010E154 | 4 | 0x004C6154 | 0x404C6154 |
+| SMAC TRX band1 +8 | 0x4010E158 | 4 | 0x004C6158 | 0x404C6158 |
+| global run bits | 0x40101220 | 4 | 0x004B9220 | 0x404B9220 |
+| global gate flags | 0x40101208 | 4 | 0x004B9208 | 0x404B9208 |
+| SMAC timer latch/control | 0x401015CC | 4 | 0x004B95CC | 0x404B95CC |
+| SMAC 16-bit timer word | 0x400024B0 | 2 | 0x003BA4B0 | 0x403BA4B0 |
+| band0 MAC +0x500 | 0x40110500 | 4 | 0x004C8500 | 0x404C8500 |
+| band0 MAC +0x51C | 0x4011051C | 4 | 0x004C851C | 0x404C851C |
+| band0 MAC +0x520 | 0x40110520 | 4 | 0x004C8520 | 0x404C8520 |
+| band0 MAC +0x548 | 0x40110548 | 4 | 0x004C8548 | 0x404C8548 |
+| band0 MAC +0x54C | 0x4011054C | 4 | 0x004C854C | 0x404C854C |
+| band0 MAC +0x5BC | 0x401105BC | 4 | 0x004C85BC | 0x404C85BC |
+| band1 MAC +0x500 | 0x40114500 | 4 | 0x004CC500 | 0x404CC500 |
+| band1 MAC +0x51C | 0x4011451C | 4 | 0x004CC51C | 0x404CC51C |
+| band1 MAC +0x520 | 0x40114520 | 4 | 0x004CC520 | 0x404CC520 |
+| band1 MAC +0x548 | 0x40114548 | 4 | 0x004CC548 | 0x404CC548 |
+| band1 MAC +0x54C | 0x4011454C | 4 | 0x004CC54C | 0x404CC54C |
+| band1 MAC +0x5AC | 0x401145AC | 4 | 0x004CC5AC | 0x404CC5AC |
+| band1 MAC +0x5BC | 0x401145BC | 4 | 0x004CC5BC | 0x404CC5BC |
+
+[B] firmware pointers (two-step: read pointer, then the field)
+| object | CA | width | BAR0 | phys |
+| --- | ---: | ---: | ---: | ---: |
+| band dispatch word | 0x00180814 | 4 | 0x00838814 | 0x40838814 |
+| G head | 0x001747C4 | 4 | 0x0082C7C4 | 0x4082C7C4 |
+| G+0x370 MAC-start hook | 0x00174B34 | 4 | 0x0082CB34 | 0x4082CB34 |
+| G+0x374 beacon hook | 0x00174B38 | 4 | 0x0082CB38 | 0x4082CB38 |
+| band smac object ptr +0x8 | 0x0018081C | 4 | 0x0083881C | 0x4083881C |
+| band smac object ptr +0x1C | 0x00180830 | 4 | 0x00838830 | 0x40838830 |
+
+[C] per-band SMAC status/mask (two-step: read [obj+672], then +228/+232)
+| field | offset | width |
+| --- | ---: | ---: |
+| mask/ack word | +228 | 4 |
+| status word | +232 | 4 |
+
+Interpretation: compare band0 (working 2.4G AP) with band1
+(silent 5G AP) in the same boot; band0 is the reference.

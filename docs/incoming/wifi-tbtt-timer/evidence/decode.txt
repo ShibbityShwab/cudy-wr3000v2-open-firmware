@@ -1,0 +1,64 @@
+=== 5 GHz TBTT/beacon-timer arm - decode ===
+
+[A] host messages: the g0-id1 dispatch is an exact u16 key lookup
+    dispatch CA 0x43D58; table A CA 0x10C23C x217; table B CA 0x103BF8 x88
+    key 0x0127 set_beacon -> worker 0x084DA4 (beacon template only)
+    key 0x0242 green_ap  -> worker 0x04C524 (MAC start subcommands)
+    key 0x0243 cfg-recently-changed -> worker 0x08419C
+    NO table A/B key maps to a beacon/TBTT/ISR worker.
+    stock capture: 25 distinct g0-id1 keys; 0x0127 present, 0x0242/0x0243 absent
+
+[B] MAC start CA 0x4AF0C: ARM-only, no timer programming
+      site 0x04B00C -> 0x40101220
+      site 0x04B0C4 -> 0x40108214
+      site 0x04AFAE -> 0x4010C220
+      site 0x04B07C -> 0x40110500
+      site 0x04B0A2 -> 0x4011051C
+      site 0x04B0B2 -> 0x40110520
+      site 0x04AFE0 -> 0x4011080C
+      site 0x04AF6A -> 0x40114500
+      site 0x04AF90 -> 0x4011451C
+      site 0x04B06C -> 0x40114520
+    -> reset/status words, SMAC IRQ enables, MAC-start bit,
+       0x40101220 run bit only; timer word not referenced.
+
+[C] band start CA 0x971D8: no device IO literal at all
+    calls G+0x370 (NULL) then G+0x374 = 0x057638
+    the hook 0x57638 has no device IO literal either -> the
+    beacon arm is deferred to firmware task/timer context.
+
+[D] per-band SMAC ISR registration (new):
+    band0 IRQ 47 prio  5 -> wrapper 0x0AEC94
+    band0 IRQ 49 prio  5 -> wrapper 0x0B54C8
+    band0 IRQ 50 prio  5 -> wrapper 0x0B0D50
+    band0 IRQ 51 prio  5 -> wrapper 0x0AEC68
+    band0 IRQ 52 prio  5 -> wrapper 0x0AEB74
+    band0 IRQ 82 prio 14 -> wrapper 0x0AE48C
+    band0 IRQ 83 prio  5 -> wrapper 0x0B0D50
+    band0 IRQ 59 prio  5 -> wrapper 0x0B0C44
+    band1 IRQ 53 prio  5 -> wrapper 0x0AEC88
+    band1 IRQ 55 prio  5 -> wrapper 0x0B54BC
+    band1 IRQ 56 prio  5 -> wrapper 0x0B0D44
+    band1 IRQ 57 prio  5 -> wrapper 0x0AEC5C
+    band1 IRQ 58 prio  5 -> wrapper 0x0AEB68
+    band1 IRQ 84 prio 14 -> wrapper 0x0AE480
+    band1 IRQ 85 prio  5 -> wrapper 0x0B0D44
+    band1 IRQ 60 prio  5 -> wrapper 0x0B0C38
+    dispatch word 0x180814: +8 band0 object, +0x1C band1 object
+    common body 0x0AE45C  mask-ack (enable-mask literal)
+    common body 0x0AEA9C  completion msg (status bit 8)
+    common body 0x0AEB80  16-bit ring walk (status bit 7)
+    common body 0x0AEC74  deferred task event (status bit 0)
+    common body 0x0B0AB8  error bits 0/1/2 + 0xB0930
+    common body 0x0B0CE0  IRQ-disable dispatch (50|83, 56|85)
+    common body 0x0B53A4  ring dequeue + msg (status bit 2)
+
+[E] INTC plumbing (CA 0x4016xxxx, outside the host window):
+    pending 0x4016010C -> handler [0x17D430+4*irq] -> ack 0x40160110
+    enable bits 0x40161180 / 0x40161280
+    host-readable proxies: the SMAC IRQ enable/status words and
+    the per-band SMAC objects.
+
+[F] timer candidates [U]:
+    0x401015CC SMAC common latch/control (start=1, clear=0, count)
+    0x400024B0 16-bit word written 100 by both per-band init paths

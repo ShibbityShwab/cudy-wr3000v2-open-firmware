@@ -1,0 +1,255 @@
+=== selftest: image identity ===
+PASS   1  firmware length == 928920
+PASS   2  firmware sha256 == 7fc87e20...311b
+
+=== A. g0-id1 dispatch and key tables ===
+PASS   3  dispatch loads table A base
+PASS   4  table A base literal == 0x10C23C
+PASS   5  dispatch loads table B base
+PASS   6  table B base literal == 0x103BF8
+PASS   7  key read = u16 hdr+20
+PASS   8  row key compare
+PASS   9  handler loaded from row+4
+PASS  10  handler called with body
+PASS  11  body = hdr+24
+PASS  12  indirect call
+PASS  13  table A has 217 rows
+PASS  14  table B has 88 rows
+PASS  15  nine known keys map to the documented workers
+PASS  16  no table A/B worker is a SMAC ISR/common body
+PASS  17  no table A/B worker is the beacon callback 0x57638
+PASS  18  no table A/B worker is the band start 0x971D8
+PASS  19  no table A/B worker is the MAC start 0x4AF0C
+PASS  20  stock capture keys parsed from the committed evidence
+PASS  21  stock capture contains set_beacon 0x0127
+PASS  22  stock capture does NOT contain the band start 0x0242
+PASS  23  stock capture does NOT contain the config notify 0x0243
+PASS  24  no captured key resolves to a SMAC ISR/common body
+
+=== B. MAC start 0x4AF0C: no timer programming ===
+PASS  25  MAC start IO literal set is the documented start set
+PASS  26  MAC start never references SMAC timer 0x401015CC
+PASS  27  MAC start never references timer word 0x400024B0
+PASS  28  band1 reset pulse value 0x55
+PASS  29  band1 reset write
+PASS  30  band1 release value 0xFF
+PASS  31  SMAC IRQ enable OR bit0
+PASS  32  SMAC IRQ enable OR bit3
+PASS  33  SMAC IRQ enable OR bit5
+PASS  34  SMAC IRQ enable OR bit12
+PASS  35  band1 SMAC enable literal == 0x4010C220
+PASS  36  band0 SMAC enable r2, r2, #1
+PASS  37  band0 SMAC enable r2, r2, #2
+PASS  38  band0 SMAC enable r2, r2, #4
+PASS  39  band0 SMAC enable r2, r2, #8
+PASS  40  band0 SMAC enable literal == 0x40108214
+PASS  41  MAC start bit0 set
+PASS  42  MAC start bit0 write
+PASS  43  MAC start reg literal == 0x4011080C
+PASS  44  run bit write
+PASS  45  run bits literal == 0x40101220
+PASS  46  start state = 2
+PASS  47  start counter increment
+PASS  48  start counter store
+
+=== C. band start 0x971D8 and the beacon hook ===
+PASS  49  band start contains no device IO literal
+PASS  50  band start loads G table literal
+PASS  51  band start reads G+0x370
+PASS  52  band start calls G+0x370
+PASS  53  band start reads G+0x374
+PASS  54  band start calls G+0x374
+PASS  55  static hook word 0x00057639 at CA 0x5D280
+PASS  56  hook installer loads the static word
+PASS  57  hook installed at G+0x374
+PASS  58  beacon hook 0x57638 contains no device IO literal
+PASS  59  beacon hook operates on a list
+
+=== D. per-band SMAC ISR registration (new) ===
+PASS  60  band0 IRQ 47 registered via 0xC6DA2
+PASS  61  band0 IRQ 47 priority 5
+PASS  62  band0 IRQ 47 number
+PASS  63  band0 IRQ 47 handler literal == 0x0AEC94
+PASS  64  band0 IRQ 49 registered via 0xC6DA2
+PASS  65  band0 IRQ 49 priority 5
+PASS  66  band0 IRQ 49 number
+PASS  67  band0 IRQ 49 handler literal == 0x0B54C8
+PASS  68  band0 IRQ 50 registered via 0xC6DA2
+PASS  69  band0 IRQ 50 priority 5
+PASS  70  band0 IRQ 50 number
+PASS  71  band0 IRQ 50 handler literal == 0x0B0D50
+PASS  72  band0 IRQ 51 registered via 0xC6DA2
+PASS  73  band0 IRQ 51 priority 5
+PASS  74  band0 IRQ 51 number
+PASS  75  band0 IRQ 51 handler literal == 0x0AEC68
+PASS  76  band0 IRQ 52 registered via 0xC6DA2
+PASS  77  band0 IRQ 52 priority 5
+PASS  78  band0 IRQ 52 number
+PASS  79  band0 IRQ 52 handler literal == 0x0AEB74
+PASS  80  band0 IRQ 82 registered via 0xC6DA2
+PASS  81  band0 IRQ 82 priority 14
+PASS  82  band0 IRQ 82 number
+PASS  83  band0 IRQ 82 handler literal == 0x0AE48C
+PASS  84  band0 IRQ 83 registered via 0xC6DA2
+PASS  85  band0 IRQ 83 priority 5
+PASS  86  band0 IRQ 83 number
+PASS  87  band0 IRQ 83 handler literal == 0x0B0D50
+PASS  88  band0 IRQ 59 registered via 0xC6DA2
+PASS  89  band0 IRQ 59 priority 5
+PASS  90  band0 IRQ 59 number
+PASS  91  band0 IRQ 59 handler literal == 0x0B0C44
+PASS  92  band1 IRQ 53 registered via 0xC6DA2
+PASS  93  band1 IRQ 53 priority 5
+PASS  94  band1 IRQ 53 number
+PASS  95  band1 IRQ 53 handler literal == 0x0AEC88
+PASS  96  band1 IRQ 55 registered via 0xC6DA2
+PASS  97  band1 IRQ 55 priority 5
+PASS  98  band1 IRQ 55 number
+PASS  99  band1 IRQ 55 handler literal == 0x0B54BC
+PASS 100  band1 IRQ 56 registered via 0xC6DA2
+PASS 101  band1 IRQ 56 priority 5
+PASS 102  band1 IRQ 56 number
+PASS 103  band1 IRQ 56 handler literal == 0x0B0D44
+PASS 104  band1 IRQ 57 registered via 0xC6DA2
+PASS 105  band1 IRQ 57 priority 5
+PASS 106  band1 IRQ 57 number
+PASS 107  band1 IRQ 57 handler literal == 0x0AEC5C
+PASS 108  band1 IRQ 58 registered via 0xC6DA2
+PASS 109  band1 IRQ 58 priority 5
+PASS 110  band1 IRQ 58 number
+PASS 111  band1 IRQ 58 handler literal == 0x0AEB68
+PASS 112  band1 IRQ 84 registered via 0xC6DA2
+PASS 113  band1 IRQ 84 priority 14
+PASS 114  band1 IRQ 84 number
+PASS 115  band1 IRQ 84 handler literal == 0x0AE480
+PASS 116  band1 IRQ 85 registered via 0xC6DA2
+PASS 117  band1 IRQ 85 priority 5
+PASS 118  band1 IRQ 85 number
+PASS 119  band1 IRQ 85 handler literal == 0x0B0D44
+PASS 120  band1 IRQ 60 registered via 0xC6DA2
+PASS 121  band1 IRQ 60 priority 5
+PASS 122  band1 IRQ 60 number
+PASS 123  band1 IRQ 60 handler literal == 0x0B0C38
+PASS 124  band0 common-body set == band1 common-body set
+PASS 125  50|83 share one handler
+PASS 126  56|85 share one handler
+PASS 127  wrapper 0AEC94 band0 loads dispatch var
+PASS 128  wrapper 0AEC94 band0 literal == 0x180814
+PASS 129  wrapper 0AEC94 band0 offset +8
+PASS 130  wrapper 0AEC94 jumps to common 0AEC74
+PASS 131  wrapper 0AE48C band0 loads dispatch var
+PASS 132  wrapper 0AE48C band0 literal == 0x180814
+PASS 133  wrapper 0AE48C band0 offset +8
+PASS 134  wrapper 0AE48C jumps to common 0AE45C
+PASS 135  wrapper 0AEB74 band0 loads dispatch var
+PASS 136  wrapper 0AEB74 band0 literal == 0x180814
+PASS 137  wrapper 0AEB74 band0 offset +8
+PASS 138  wrapper 0AEB74 jumps to common 0AEA9C
+PASS 139  wrapper 0AEC68 band0 loads dispatch var
+PASS 140  wrapper 0AEC68 band0 literal == 0x180814
+PASS 141  wrapper 0AEC68 band0 offset +8
+PASS 142  wrapper 0AEC68 jumps to common 0AEB80
+PASS 143  wrapper 0B54C8 band0 loads dispatch var
+PASS 144  wrapper 0B54C8 band0 literal == 0x180814
+PASS 145  wrapper 0B54C8 band0 offset +8
+PASS 146  wrapper 0B54C8 jumps to common 0B53A4
+PASS 147  wrapper 0B0D50 band0 loads dispatch var
+PASS 148  wrapper 0B0D50 band0 literal == 0x180814
+PASS 149  wrapper 0B0D50 band0 offset +8
+PASS 150  wrapper 0B0D50 jumps to common 0B0CE0
+PASS 151  wrapper 0B0C44 band0 loads dispatch var
+PASS 152  wrapper 0B0C44 band0 literal == 0x180814
+PASS 153  wrapper 0B0C44 band0 offset +8
+PASS 154  wrapper 0B0C44 jumps to common 0B0AB8
+PASS 155  wrapper 0AEC88 band1 loads dispatch var
+PASS 156  wrapper 0AEC88 band1 literal == 0x180814
+PASS 157  wrapper 0AEC88 band1 offset +0x1C
+PASS 158  wrapper 0AEC88 jumps to common 0AEC74
+PASS 159  wrapper 0AE480 band1 loads dispatch var
+PASS 160  wrapper 0AE480 band1 literal == 0x180814
+PASS 161  wrapper 0AE480 band1 offset +0x1C
+PASS 162  wrapper 0AE480 jumps to common 0AE45C
+PASS 163  wrapper 0AEB68 band1 loads dispatch var
+PASS 164  wrapper 0AEB68 band1 literal == 0x180814
+PASS 165  wrapper 0AEB68 band1 offset +0x1C
+PASS 166  wrapper 0AEB68 jumps to common 0AEA9C
+PASS 167  wrapper 0AEC5C band1 loads dispatch var
+PASS 168  wrapper 0AEC5C band1 literal == 0x180814
+PASS 169  wrapper 0AEC5C band1 offset +0x1C
+PASS 170  wrapper 0AEC5C jumps to common 0AEB80
+PASS 171  wrapper 0B54BC band1 loads dispatch var
+PASS 172  wrapper 0B54BC band1 literal == 0x180814
+PASS 173  wrapper 0B54BC band1 offset +0x1C
+PASS 174  wrapper 0B54BC jumps to common 0B53A4
+PASS 175  wrapper 0B0D44 band1 loads dispatch var
+PASS 176  wrapper 0B0D44 band1 literal == 0x180814
+PASS 177  wrapper 0B0D44 band1 offset +0x1C
+PASS 178  wrapper 0B0D44 jumps to common 0B0CE0
+PASS 179  wrapper 0B0C38 band1 loads dispatch var
+PASS 180  wrapper 0B0C38 band1 literal == 0x180814
+PASS 181  wrapper 0B0C38 band1 offset +0x1C
+PASS 182  wrapper 0B0C38 jumps to common 0B0AB8
+
+=== E. ISR dispatch/registration plumbing (host-invisible INTC) ===
+PASS 183  dispatch pending literal == 0x4016010C
+PASS 184  dispatch ack literal == 0x40160110
+PASS 185  dispatch reads pending id
+PASS 186  dispatch masks id
+PASS 187  dispatch bounds-check 95
+PASS 188  dispatch handler table = +152
+PASS 189  dispatch calls handler
+PASS 190  IRQ table base literal == 0x17D398
+PASS 191  registration table write
+PASS 192  registration base add
+PASS 193  enable API set literal == 0x40161180
+PASS 194  enable API clears/enables +0x100
+PASS 195  handler table base == table+152
+PASS 196  handler slots 96 (384 B)
+
+=== F. timer candidates ===
+PASS 197  per-band init loads 0x401015CC
+PASS 198  per-band init loads 0x400024B0
+PASS 199  per-band init uses literal 100
+PASS 200  per-band init stores 100 to 0x400024B0
+PASS 201  timer sync path loads 0x401015CC
+PASS 202  timer sync writes 1 to the latch
+PASS 203  timer sync latch store
+PASS 204  timer sync subtract hi
+PASS 205  timer sync subtract lo
+PASS 206  computed 16-bit timer word == 0x400024B0
+PASS 207  timer sync writes literal 100
+PASS 208  timer sync stores 100
+PASS 209  the arm paths use exactly the literal 100
+
+=== G. probe pack ===
+PASS 210  IO probe host-readable: MAC start band0
+PASS 211  IO probe host-readable: MAC start band1
+PASS 212  IO probe host-readable: SMAC IRQ enable band1
+PASS 213  IO probe host-readable: SMAC IRQ enable band0
+PASS 214  IO probe host-readable: SMAC IRQ status band1
+PASS 215  IO probe host-readable: SMAC TRX0 band0
+PASS 216  IO probe host-readable: SMAC TRX band1
+PASS 217  IO probe host-readable: SMAC TRX band1 +4
+PASS 218  IO probe host-readable: SMAC TRX band1 +8
+PASS 219  IO probe host-readable: global run bits
+PASS 220  IO probe host-readable: global gate flags
+PASS 221  IO probe host-readable: SMAC timer latch/control
+PASS 222  IO probe host-readable: SMAC 16-bit timer word
+PASS 223  IO probe host-readable: band0 MAC +0x500
+PASS 224  IO probe host-readable: band0 MAC +0x51C
+PASS 225  IO probe host-readable: band0 MAC +0x520
+PASS 226  IO probe host-readable: band0 MAC +0x548
+PASS 227  IO probe host-readable: band0 MAC +0x54C
+PASS 228  IO probe host-readable: band0 MAC +0x5BC
+PASS 229  IO probe host-readable: band1 MAC +0x500
+PASS 230  IO probe host-readable: band1 MAC +0x51C
+PASS 231  IO probe host-readable: band1 MAC +0x520
+PASS 232  IO probe host-readable: band1 MAC +0x548
+PASS 233  IO probe host-readable: band1 MAC +0x54C
+PASS 234  IO probe host-readable: band1 MAC +0x5AC
+PASS 235  IO probe host-readable: band1 MAC +0x5BC
+PASS 236  timer word probe is inside region-3
+PASS 237  INTC is outside region-3 (not host-readable)
+PASS 238  no probe touches the forbidden RC misc window
+
+=== summary: 238 assertions, 0 FAIL ===
