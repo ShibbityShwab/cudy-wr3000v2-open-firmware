@@ -1,0 +1,52 @@
+# board DTS build + contract evidence - upstream2 lane, 2026-11-27
+
+Single source (no copy is committed here):
+
+source  : opensource/target-skeleton/dts/luofu-r116.dts
+          (installed at <openwrt>/target/linux/hisilicon/dts/luofu-r116.dts by
+          ../../upstream-dts/tools/assemble-target.sh; verified byte-identical)
+lines   : 715
+sha256  : 6774221ef49b10888bfb277f2c7620858a798a3cf228b1660cb483df50e6b062
+overlay : opensource/target-skeleton/dts/luofu-r116-overlay.dtso, 90 lines
+
+Compile (host-only; kernel-side dt-bindings come from the patched target kernel
+prepared in the assembled OpenWrt tree, i.e. target patch 004's
+dt-bindings/clock/hisilicon,luofu-crg.h):
+
+  cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp \
+      -I<openwrt>/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/linux-6.18.60/include \
+      -I<...>/linux-6.18.60/arch/arm/boot/dts \
+      -I<...>/linux-6.18.60/scripts/dtc/include-prefixes \
+      dts/luofu-r116.dts -o luofu-r116.pre.dts
+  dtc -I dts -O dtb -o luofu-r116.dtb luofu-r116.pre.dts
+  dtc -I dtb -O dts -o luofu-r116.decompiled.dts luofu-r116.dtb
+
+toolchain: cpp (GCC) 16.2.1 20260810; dtc DTC v1.8.1
+kernel   : linux-6.18.60 prepared in /home/shibbityshwab/openwrt-lab-upstream-target
+           (OpenWrt main tree; the exact tree the image build below uses)
+
+result   : CPP-RC=0, DTC-RC=0, DECOMP-RC=0
+           cpp-warnings.log / dtc-warnings.log / dtc-decompile-warnings.log = 0 lines
+           DTB 12,848 bytes  sha256 1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8
+           pre-DTS sha256 183ff0a13a9ebc27c70c847e4c51ec9fb8b15d19fb2a28935f3decd2f9f1ea56
+           decompiled tree 687 lines
+
+Contract: 24/24 PASS, 0 FAIL (validation/dts/dts-check.log), run on the compiled
+DTB (not on source text) with the extracted vendor base DT as the optional
+comparison input:
+
+  dumps/router-20261108/kernelb/kernelb.dtb  13,880 B  sha256 ffe7bcc4...
+  (parent repo, local/gitignored; provenance: ../../upstream-dts/validation/dts/vendor-base-provenance.txt)
+
+  groups PASS: identity (R1/R2), CPU/SMP (C1/C2), memory (M1/M2), UART
+  (U1/U2/U3), NAND/partitions (N1/N2), power/reset (P1/P2), GIC/timers (I1),
+  GPIO/keys/LEDs (G1/G2), PCIe (E1/E2), network (D1/D2/S1/S2), pinctrl/thermal
+  (T1), clocks (K1).
+
+Reproduces the task-238 run byte-for-byte: identical source sha256, DTB sha256,
+pre-DTS sha256 and decompiled line count.
+
+The compiled DTB/pre-DTS are NOT committed (host artifacts); regenerate with the
+command above. The DTB is also produced by the stock OpenWrt Image/BuildDTB rule
+during the full image build (validation/image-build/) and padded by scripts/pad-dtb.py
+before the FIP slice assembly.

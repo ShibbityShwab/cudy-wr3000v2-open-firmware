@@ -1,0 +1,6 @@
+# build result (captured 2569-11-26T08:57:31Z)
+CLEAN-RC=0
+WORLD-CLEAN-RC=0
+# final image
+-rw-r--r-- 1 shibbityshwab shibbityshwab 6267199 พ.ย.  26 15:57 /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+b991f4c4c4b8aefacfd8abf6de075887ee16d04a4c24fc041c1028ada1438c48  /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin

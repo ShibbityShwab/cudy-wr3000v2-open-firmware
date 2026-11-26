@@ -1,0 +1,13 @@
+FIP slice check: PASS (measurable constraints only)
+  file:            /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/cudy_wr3000-v2-kernel.bin
+  slice size:      3370590 B (kernel slot limit 8650752 B)
+  uImage:          magic ok, name='Linux-6.18.60', ih_size=3357384 (0x333ac8)
+  uImage load/ep:  0x80608000 / 0x80608000
+  uImage CRCs:     header ok, data ok (not verified by bootfip)
+  trailer:         13142 B
+  base DTB:        totalsize 12848 B
+  descriptor:      64 B (32-byte header + 1 x 32-byte entries), container total 294 B
+    overlay 0      size 230 B, offset 64 B (trailer+0x3270)
+  gate:            magic 0xd7b7ab1e at 0x336d38
+
+This proves the measured layout and gate magic only. It does NOT prove the stock loader accepts the slice: that needs one attended boot on a recovered unit (TARGET-DESIGN.md 5.2, 9).

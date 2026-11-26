@@ -1,0 +1,8 @@
+check-container: PASS (independent read-back of the built bytes)
+  file:            /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin (6267199 B)
+  board dir:       sysupgrade-cudy_wr3000-v2/
+  control:         BOARD=cudy_wr3000-v2 TARGET=hisilicon/luofu VERSION=r0-27663a0
+  kernel slice:    3370590 B, load/ep 0x80608000/0x80608000, gate 0xd7b7ab1e at 0x336d38
+  rootfs UBI:      2883584 B, volume 'squashfs' (static) used_ebs 20; volume 'rootfs_data' (dynamic, empty, autoresize) reserved_pebs 9
+  slot budgets:    kernel <= 8650752, rootfs <= 24313856
+  install status:  NOT FLASHABLE-UNTIL-INSTALLED marker present

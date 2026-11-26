@@ -1,0 +1,172 @@
+board DTB: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/upstream2/validation/dts/luofu-r116.dtb
+R1   PASS root model names the board
+R2   PASS root compatible carries cudy + hisilicon board ids
+C1   PASS cpus node selects the luofu SMP enable-method
+C2   PASS exactly two Cortex-A9 CPUs
+M1   PASS 128 MiB DDR3 usable window at 0x80500000
+M2   PASS flashinfo reserved region (loader hand-off info)
+U1   PASS console UART1 present/okay at 0x1010f000
+U2   PASS chosen stdout-path + serial0 console alias
+U3   PASS second UART present (uart0, disabled)
+N1   PASS FMC SPI-NAND controller + spi-nand child
+N2   PASS 17 fixed partitions incl. the A/B kernel/rootfs slots
+P1   PASS CRG syscon with clock/reset cells + watchdog child
+P2   PASS sysctrl + reboot + boot-selector nodes
+I1   PASS GIC + SCU + PL310 + TWD + SP804 timer blocks
+G1   PASS two DW GPIO banks with ports
+G2   PASS gpio-keys (reset/wps) + gpio-leds (6 LEDs)
+E1   PASS PCIe RC0: hisilicon,luofu-pcie, domain 0, dma-ranges, EP reset lines
+E2   PASS PCIe RC1: hisilicon,luofu-pcie, domain 1, enabled
+D1   PASS MDIO bus + four PHYs
+D2   PASS five GEMAC nodes present
+S1   PASS LSW switch node (okay) with four user ports
+S2   PASS PIE packet engine node (okay); WOE node present (disabled)
+T1   PASS pinctrl node (driver draft) + thermal sensor and zones
+K1   PASS clock tree: fixed clocks + TWD clock + CRG clock wiring
+
+SUMMARY: 24 checks, 24 PASS, 0 FAIL
+
+== vendor device-tree comparison ==
+vendor DTB: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/dumps/router-20261108/kernelb/kernelb.dtb (92 nodes)
+board  DTB: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/upstream2/validation/dts/luofu-r116.dtb (92 nodes)
+vendor-only nodes: 58
+  V /fixed-clock@20000000
+  V /ahb_clk
+  V /apb_clk
+  V /fixed-clock@1000000000
+  V /twd_clk
+  V /crg@14880000
+  V /crg@14880000/clk-gate-sfc_clk
+  V /crg@14880000/clk-gate-gpio0_clk
+  V /crg@14880000/clk-gate-gpio1_clk
+  V /crg@14880000/clk-gate-i2c0_clk
+  V /crg@14880000/clk-gate-pcie0_clk
+  V /crg@14880000/clk-gate-pcie1_clk
+  V /crg@14880000/clk-gate-gemac_clk0
+  V /crg@14880000/clk-gate-led_pwm
+  V /crg@14880000/clk-gate-lsw_dp_clk0
+  V /crg@14880000/clk-gate-lsw_pfe_clk0
+  V /crg@14880000/clk-gate-mdio_clk0
+  V /crg@14880000/clk-gate-gemac_clk1
+  V /crg@14880000/clk-gate-gemac_clk2
+  V /crg@14880000/clk-gate-gemac_clk3
+  V /crg@14880000/clk-gate-gemac_clk4
+  V /crg@14880000/clk-gate-pie_clk0
+  V /crg@14880000/clk-pll-cpu
+  V /crg@14880000/clk-pll-lsw
+  V /crg@14880000/clk-mux-cpu
+  V /crg@14880000/clk-mux-efuse
+  V /watchdog
+  V /l2-cache
+  V /tvsensor@14900500
+  V /thermal-zones/cls0
+  V /thermal-zones/cls0/trips
+  V /thermal-zones/cls0/trips/trip-point@0
+  V /thermal-zones/cls0/trips/trip-point@1
+  V /pinctrl@14900100/spi-default-state
+  V /pinctrl@14900100/spi-default-state/spi-pmux
+  V /pinctrl@14900100/spi-sleep-state
+  V /pinctrl@14900100/spi-sleep-state/spi-sleep-pmux
+  V /spi-nand@10a20000
+  V /spi-nand@10a20000/partitions
+  V /spi-nand@10a20000/partitions/partition@0
+  V /spi-nand@10a20000/partitions/partition@40000
+  V /spi-nand@10a20000/partitions/partition@140000
+  V /spi-nand@10a20000/partitions/partition@240000
+  V /spi-nand@10a20000/partitions/partition@280000
+  V /spi-nand@10a20000/partitions/partition@2c0000
+  V /spi-nand@10a20000/partitions/partition@4c0000
+  V /spi-nand@10a20000/partitions/partition@500000
+  V /spi-nand@10a20000/partitions/partition@700000
+  V /spi-nand@10a20000/partitions/partition@900000
+  V /spi-nand@10a20000/partitions/partition@d40000
+  V /spi-nand@10a20000/partitions/partition@d80000
+  V /spi-nand@10a20000/partitions/partition@15c0000
+  V /spi-nand@10a20000/partitions/partition@1e00000
+  V /spi-nand@10a20000/partitions/partition@3540000
+  V /spi-nand@10a20000/partitions/partition@4c80000
+  V /spi-nand@10a20000/partitions/partition@6280000
+  V /ethernet-switch@87b00000
+  V /ethernet-switch@12100000
+board-only nodes: 58
+  B /reserved-memory
+  B /reserved-memory/flashinfo@80600000
+  B /fixed-clock-osc
+  B /fixed-clock-ahb
+  B /fixed-clock-apb
+  B /fixed-clock-gemacn
+  B /fixed-clock-lsw-dp
+  B /fixed-clock-lsw-pfe
+  B /fixed-clock-efuse-ring
+  B /fixed-clock-corrector
+  B /twd-clock
+  B /system-controller@10100000
+  B /reboot
+  B /boot-selector
+  B /system-controller@14880000
+  B /system-controller@14880000/watchdog
+  B /l2-cache@7f000000
+  B /gpio-keys-polled
+  B /gpio-keys-polled/reset
+  B /gpio-keys-polled/wps
+  B /gpio-leds
+  B /gpio-leds/led-status
+  B /gpio-leds/led-wan
+  B /gpio-leds/led-lan
+  B /gpio-leds/led-internet
+  B /gpio-leds/led-wifi2
+  B /gpio-leds/led-wifi5
+  B /spi@10a20000
+  B /spi@10a20000/flash@1
+  B /spi@10a20000/flash@1/partitions
+  B /spi@10a20000/flash@1/partitions/partition@0
+  B /spi@10a20000/flash@1/partitions/partition@40000
+  B /spi@10a20000/flash@1/partitions/partition@140000
+  B /spi@10a20000/flash@1/partitions/partition@240000
+  B /spi@10a20000/flash@1/partitions/partition@280000
+  B /spi@10a20000/flash@1/partitions/partition@2c0000
+  B /spi@10a20000/flash@1/partitions/partition@4c0000
+  B /spi@10a20000/flash@1/partitions/partition@500000
+  B /spi@10a20000/flash@1/partitions/partition@700000
+  B /spi@10a20000/flash@1/partitions/partition@900000
+  B /spi@10a20000/flash@1/partitions/partition@d40000
+  B /spi@10a20000/flash@1/partitions/partition@d80000
+  B /spi@10a20000/flash@1/partitions/partition@15c0000
+  B /spi@10a20000/flash@1/partitions/partition@1e00000
+  B /spi@10a20000/flash@1/partitions/partition@3540000
+  B /spi@10a20000/flash@1/partitions/partition@4c80000
+  B /spi@10a20000/flash@1/partitions/partition@6280000
+  B /ethernet-switch@11000000
+  B /ethernet-switch@11000000/ethernet-ports
+  B /ethernet-switch@11000000/ethernet-ports/ethernet-port@0
+  B /ethernet-switch@11000000/ethernet-ports/ethernet-port@1
+  B /ethernet-switch@11000000/ethernet-ports/ethernet-port@2
+  B /ethernet-switch@11000000/ethernet-ports/ethernet-port@3
+  B /thermal-sensor@14900500
+  B /thermal-zones/cls0-thermal
+  B /thermal-zones/cls0-thermal/trips
+  B /thermal-zones/cls0-thermal/trips/trip-point0
+  B /thermal-zones/cls0-thermal/trips/trip-point1
+
+== compatible-string comparison ==
+vendor-only compatible sets: 8
+  V hisilicon,luofu-clk-mux
+  V hisilicon,luofu-clk-pll
+  V hisilicon,luofu-dp
+  V hisilicon,luofu-pfe
+  V hisilicon,luofu-r116,hisilicon,luofu
+  V hsan,clk-gate
+  V hsan,crg
+  V hsan,luofu-peri-pinctrl
+board-only compatible sets: 11
+  B cudy,wr3000-v2,hisilicon,luofu-r116,hisilicon,luofu
+  B gpio-keys-polled
+  B gpio-leds
+  B hisilicon,luofu-boot-selector
+  B hisilicon,luofu-crg,syscon,simple-mfd
+  B hisilicon,luofu-flashinfo,hsan,flashinfo_reserved
+  B hisilicon,luofu-pinctrl
+  B hisilicon,luofu-reboot
+  B hisilicon,luofu-switch
+  B hisilicon,luofu-sysctrl,syscon
+  B spi-nand

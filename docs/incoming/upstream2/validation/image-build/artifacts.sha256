@@ -1,0 +1,11 @@
+# image artifacts - upstream2 lane, captured by capture.sh
+# tree: /home/shibbityshwab/openwrt-lab-upstream-target
+b991f4c4c4b8aefacfd8abf6de075887ee16d04a4c24fc041c1028ada1438c48  /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2-squashfs-sysupgrade.bin
+4f6c157d2d224b94e83a6cc7b15462307b0db32dc6c00c9fcaf9e01923d1e177  /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/cudy_wr3000-v2-kernel.bin
+cb27f649550c79025db1fad92f73fa0669bc0fb65670af94ec1b3a70d636e84e  /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/cudy_wr3000-v2-rootfs.ubi
+18c142caf3eba11336a3ce80871fa8177b56d5e89020b193aa496f31ab53a511  /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/cudy_wr3000-v2-fip-manifest.txt
+1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8  /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/image-luofu-r116.dtb
+8e4ab83b575dc14d9f3131dc01d1cbdccc63b38f8f8c4fa774da0d1f200b23b6  /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/image-luofu-r116-overlay.dtbo
+49117a09e712a97a54d702f529a60ea24d839c77d1d511f2d75ddffb79715f7c  /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/config.buildinfo
+a40c776af9d4fdaca9930fe330528d98a0a7a293c6cbdb3b7f934157265b6ebc  /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/profiles.json
+eb312e4ec0c7840251f130d63fe612bd10abfd8c9f39099c1053d8561d246245  /home/shibbityshwab/openwrt-lab-upstream-target/bin/targets/hisilicon/luofu/openwrt-hisilicon-luofu-cudy_wr3000-v2.manifest

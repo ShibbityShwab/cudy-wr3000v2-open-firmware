@@ -1,0 +1,72 @@
+# build provenance - upstream2 lane, 2026-11-27 (host-only, NOT flashed)
+
+## Tree
+
+OpenWrt main checkout : /home/shibbityshwab/openwrt-lab-upstream-target
+OpenWrt revision      : 27663a017ad8ac6883e11a81015db0c0fc341a9e
+                        ("airoha: an7583: add PCIe PHY and controllers support")
+target                : target/linux/hisilicon/  (85 files installed by
+                        ../../upstream-dts/tools/assemble-target.sh --apply)
+DTS                   : target/linux/hisilicon/dts/luofu-r116.dts (715 lines,
+                        sha256 6774221e...), overlay .dtso (90 lines)
+kernel                : linux-6.18.60 (KERNEL_PATCHVER:=6.18), 66 target patches
+toolchain             : OpenWrt GCC 14.4.0 (arm_cortex-a9 musl eabi)
+build system          : GNU make, -j16
+
+Tree caveat: the checkout is a long-lived lab build tree (built many times
+since 2026-11-18), not a fresh clone. Local modifications at build time:
+  M  target/linux/generic/config-6.18   (pre-existing kernel-config state from
+                                         earlier 6.18 lab builds, not part of the
+                                         luofu target; untouched by this lane)
+  ?? build/ logs (host-only build logs)
+  target/linux/hisilicon/** is the assembled target (verified byte-identical to
+  the single sources; see validation/assembly/).
+A pristine-clone rebuild is a packaging step that remains on the PR checklist;
+it is not claimed here.
+
+Host clock note: this workstation runs a Thai (Buddhist) calendar locale
+(`date` prints year 2569 for 2026), so the capture timestamp in
+build-result.txt is correct but looks one year ahead of the project dates.
+
+## Selected configuration
+
+  CONFIG_TARGET_hisilicon=y
+  CONFIG_TARGET_hisilicon_luofu=y
+  CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y
+  CONFIG_TARGET_BOARD="hisilicon"
+  CONFIG_TARGET_SUBTARGET="luofu"
+  CONFIG_TARGET_PROFILE="DEVICE_cudy_wr3000-v2"
+  CONFIG_TARGET_ROOTFS_SQUASHFS=y
+  CONFIG_TARGET_ROOTFS_UBIFS=y
+  CONFIG_KERNEL_DEVMEM=y        <- bench config, see PR-READINESS.md 2.4
+
+bin/targets/hisilicon/luofu/config.buildinfo sha256 is recorded in
+artifacts.sha256.
+
+## Build sequence in this lane
+
+1. assembly re-verified (validation/assembly/): sources OK, manifest
+   byte-identical to the task-238 committed manifest, --verify OK against this
+   tree.
+2. first `make -j16 world`: FAILED in the copied lab staging tree (host apk
+   build: stale absolute -I paths from another checkout's staging_dir in
+   staging_dir/host/lib/pkgconfig/*.pc - a tree-copy artifact, not a target
+   defect). Repair: retargeted the 172 stale paths in staging_dir to this tree
+   (same-length path replacement); host apk rebuilt. This is a LAB TREE issue,
+   not something a clean OpenWrt checkout would have.
+3. second `make -j16 world`: WORLD-RC=0; image built from a warm kernel tree
+   (kernel build products dated earlier in the same assembled tree); full
+   package set + image stages executed. Log: warm-world.log.
+4. clean rebuild: `make target/linux/clean` (CLEAN-RC=0) followed by
+   `make -j16 world` (WORLD-CLEAN-RC=0) so the kernel, DTB, FIP slice, rootfs
+   UBI and image are all rebuilt from the assembled target sources in one run.
+   Logs: clean.log + clean-world.log. This run produced the identical image
+   sha256 as step 3 (6,267,199 B, sha256 b991f4c4...) - the recipe is
+   deterministic with its SOURCE_DATE_EPOCH.
+5. post-build validation re-run on the final artifacts: fip-slice.py check,
+   luofu-image.py check-container, container payload hash comparison, and the
+   image-built DTB sha256 cross-check against the host cpp+dtc compile.
+
+The build tree's package/staging caches survive between the runs; the
+kernel/DTB/image chain is rebuilt from source by the clean run. The image
+itself remains NOT FLASHABLE (install path never executed on a device).

@@ -1,0 +1,6 @@
+drwxr-xr-x 0/0               0 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/
+-rw-r--r-- 0/0              63 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/CONTROL
+-rw-r--r-- 0/0            2212 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/INSTALL-STATUS.txt
+-rw-r--r-- 0/0             945 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/fip-manifest.txt
+-rw-r--r-- 0/0         3370590 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/kernel
+-rw-r--r-- 0/0         2883584 2026-11-18 03:20 sysupgrade-cudy_wr3000-v2/root

@@ -26,7 +26,7 @@ This lane completes that hand-off without creating a fifth copy of anything:
 | summary | [SUMMARY.md](SUMMARY.md) | the one-page result |
 | assembly re-verification | [validation/assembly/](validation/assembly/) | fresh `assemble-target.sh --check` / `--manifest` / `--verify` logs; the regenerated manifest is byte-identical to the committed task-238 manifest |
 | DTS evidence | [validation/dts/](validation/dts/) | the board DTB compiled from the assembled target tree, the 24-check board contract re-run, provenance |
-| build evidence | [validation/build/](validation/build/) | the full `make world` reconstruction of the device image, the artifacts and their hashes, and the image-chain inspection |
+| build evidence | [validation/image-build/](validation/image-build/) | the full `make world` reconstruction of the device image, the artifacts and their hashes, and the image-chain inspection |
 | PR gap list | [PR-READINESS.md](PR-READINESS.md) | what separates this build-verified target from an upstream submission (bindings, DTS review deltas, install path, dependency set) |
 
 ## Single-source rule

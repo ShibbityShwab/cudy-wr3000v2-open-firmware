@@ -1,0 +1,3 @@
+# container payload hashes (extracted from the built sysupgrade tar)
+4f6c157d2d224b94e83a6cc7b15462307b0db32dc6c00c9fcaf9e01923d1e177  kernel
+cb27f649550c79025db1fad92f73fa0669bc0fb65670af94ec1b3a70d636e84e  root

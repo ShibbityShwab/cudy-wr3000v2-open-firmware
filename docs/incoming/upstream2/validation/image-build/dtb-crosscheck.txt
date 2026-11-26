@@ -1,0 +1,6 @@
+# board DTB built by the OpenWrt image recipe
+path   : /home/shibbityshwab/openwrt-lab-upstream-target/build_dir/target-arm_cortex-a9_musl_eabi/linux-hisilicon_luofu/image-luofu-r116.dtb
+size   : 12848 bytes
+sha256 : 1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8
+# host cpp+dtc reference (validation/dts/build-evidence.txt):
+#   size 12848, sha256 1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8

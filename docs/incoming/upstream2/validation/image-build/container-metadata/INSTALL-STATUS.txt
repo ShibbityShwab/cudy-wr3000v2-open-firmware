@@ -1,0 +1,39 @@
+hisilicon/luofu image container - STATUS: BOOT-VERIFIED RECIPE / NOT FLASHABLE-UNTIL-INSTALLED
+====================================================================================
+
+board:  cudy_wr3000-v2
+target: hisilicon/luofu
+built:  by luofu-image.py 0.2-overlay (host-only)
+
+BOOT EVIDENCE (this board; earlier dated builds of this recipe)
+  - 2026-11-19 attended bring-up: this image chain booted to
+    userspace (UP, 1 CPU; no rootfs_data volume at that time; the
+    then-current board.d had the board_detect warning, fixed since).
+  - 2026-11-21 2-CPU baseline (image 974e6ca6): booted from pair b
+    with this A/B + rootfs_data layout: 2 CPUs, SSH, persistent
+    ubifs overlay across reboot, 15-minute soak with 0 failures.
+    The 7f270b8c board-feature image and the 6e9c54d0 DTS baseline
+    also booted.
+  - 2026-11-24 GP1 line: the patch-013a endpoint reset pulse boots
+    the unit and the Wi-Fi transport/HCC bench runs on that line.
+  THIS EXACT REBUILD has NOT been flashed and NOT been booted: the
+  2026-11-24 checkpoint rebuild changed only comments, the committed
+  013a GP1 patch and the base-files recorder/selector (host-tested).
+
+Structural validation of THIS file (host-side, from its own bytes):
+  kernel slice: legacy uImage + generated FIP trailer + gate magic;
+  rootfs: static UBI volume 'squashfs' plus the empty dynamic volume
+  'rootfs_data' with vol_flags=autoresize. fstools mount_root finds the
+  overlay volume by name and the kernel's first read-write UBIFS
+  mount formats it (fs/ubifs/sb.c create_default_filesystem); the
+  kernel autoresize grows it to the free PEBs of the slot. That
+  path is read from the sources, not measured on this board.
+
+NOT FLASHABLE-UNTIL-INSTALLED: do not flash this file as a stock
+sysupgrade and do not add a factory/install stanza for it. The
+platform_do_upgrade / first-install path has never run end to end on
+a device (bench installs were manual pair-B writes), there is no
+factory image, and the baked command line pins ubi.mtd=rootfsb (pair
+B only). The A/B selector handover and the SMP second-CPU bring-up
+are hardware-verified on the bench, but not through this API. See
+TARGET-DESIGN.md 3.4, 5.2-5.5, 9 and the target README.

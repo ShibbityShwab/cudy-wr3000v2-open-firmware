@@ -1,0 +1,6 @@
+make[2]: Entering directory '/home/shibbityshwab/openwrt-lab-upstream-target/scripts/config'
+make[2]: 'conf' is up to date.
+make[2]: Leaving directory '/home/shibbityshwab/openwrt-lab-upstream-target/scripts/config'
+ make[1] target/linux/clean
+ make[2] -C target/linux clean
+CLEAN-RC=0

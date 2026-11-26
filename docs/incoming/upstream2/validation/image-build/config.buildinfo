@@ -1,0 +1,4 @@
+CONFIG_TARGET_hisilicon=y
+CONFIG_TARGET_hisilicon_luofu=y
+CONFIG_TARGET_hisilicon_luofu_DEVICE_cudy_wr3000-v2=y
+CONFIG_KERNEL_DEVMEM=y

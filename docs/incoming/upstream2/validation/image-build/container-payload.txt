@@ -1,0 +1,2 @@
+kernel payload == build product
+root payload == build product

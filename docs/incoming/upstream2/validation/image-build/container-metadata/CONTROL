@@ -1,0 +1,3 @@
+BOARD=cudy_wr3000-v2
+TARGET=hisilicon/luofu
+VERSION=r0-27663a0
