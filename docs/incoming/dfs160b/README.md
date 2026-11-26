@@ -43,8 +43,8 @@ facts and does not carry vendor bytes:
 | --- | --- |
 | lane opened, sources pinned | DONE |
 | portable model + host selftest | DONE: src/hi5622_dfsb.{h,c} + src/dfs160b_selftest.c, 269 checks / 0 failures, evidence/HOST-TESTS.txt |
-| driver integration patch + build | IN PROGRESS (next) |
-| fire recipe + report/tables | PENDING |
+| driver integration patch + build | DONE: patches/0001-dfs160b.patch (14 files), reproducible host build, installed 383020 B sha256 006a94cf..., .text 164980 B sha256 5e14008f..., 68 params, 0 warnings (evidence/BUILD.txt) |
+| fire recipe + report/tables | IN PROGRESS (next) |
 
 ## Standing rules
 

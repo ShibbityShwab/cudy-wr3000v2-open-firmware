@@ -12,7 +12,11 @@
  */
 #include "hi5622_dfsb.h"
 
+#ifdef __KERNEL__
+#include <linux/string.h>
+#else
 #include <string.h>
+#endif
 
 /* ---- the vendor band-1 channel table (29 entries, TABLES T3) [V] ----- */
 struct dfsb_chan {
