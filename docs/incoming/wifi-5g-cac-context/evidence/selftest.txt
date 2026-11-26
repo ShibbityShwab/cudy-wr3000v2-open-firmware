@@ -1,0 +1,90 @@
+decoded 342693 Thumb instructions
+=== A. identity + table A rows ===
+PASS   1  firmware length == 928920 B
+PASS   2  firmware sha256 is the pinned 7fc87e20...311b
+PASS   3  row 2 key 0x0065 -> worker CA 0x46394
+PASS   4  row 4 key 0x0067 -> worker CA 0x45F74
+PASS   5  row 94 key 0x07E7 -> worker CA 0xB58FC
+
+=== B. the 0x0065 worker CAC-prep chain (the producer) ===
+PASS   6  owner resolve CA 0x961AE
+PASS   7  band object CA 0x4B8
+PASS   8  AP type read CA 0x4
+PASS   9  mctx[0x0E] = 1 (the gate-3 state)
+PASS  10  CA 0xF593C call (radar bitmap)
+PASS  11  u32[mctx+0x4A0] read
+PASS  12  CA 0x5E95C call when the ctx exists
+PASS  13  CA 0x5F450 call (the four-word writer)
+PASS  14  success continuation CA 0x4C3FC
+PASS  15  the 0x5E95C/0x5F450 calls sit after the AP branch
+
+=== C. CA 0x5F450: the four-word writer ===
+PASS  16  site 0x05f458
+PASS  17  site 0x05f462
+PASS  18  site 0x05f466
+PASS  19  site 0x05f4e2
+PASS  20  site 0x05f4f0
+PASS  21  site 0x05f518
+PASS  22  site 0x05f51c
+PASS  23  site 0x05f4ac
+PASS  24  site 0x05f4b0
+PASS  25  site 0x05f4b6
+PASS  26  site 0x05f54a
+PASS  27  site 0x05f54e
+PASS  28  site 0x05f552
+PASS  29  site 0x05f582
+PASS  30  +0x49C store before the return
+PASS  31  +0x4A0 store before the return
+PASS  32  +0x4A6 store before the return
+PASS  33  the write pair is only reachable from CA 0x5F450 (callers below)
+
+=== D. CA 0x5E95C: the clear half ===
+PASS  34  site 0x05e95e
+PASS  35  site 0x05e97c
+PASS  36  site 0x05e980
+PASS  37  site 0x05e972
+
+=== E. the 0x07E7 worker: gates + the silent-success branch ===
+PASS  38  site 0x0b5900
+PASS  39  site 0x0b5904
+PASS  40  site 0x0b5914
+PASS  41  site 0x0b5936
+PASS  42  site 0x0b592e
+PASS  43  site 0x0b5b04
+PASS  44  site 0x0b5b0c
+PASS  45  site 0x0b590c
+PASS  46  site 0x0b5b10
+PASS  47  site 0x0b5b20
+PASS  48  site 0x0b5b26
+PASS  49  site 0x0b5b3c
+PASS  50  site 0x0b5b48
+PASS  51  site 0x0b5b52
+PASS  52  site 0x0b5b62
+PASS  53  site 0x0b5b42
+PASS  54  the +0x4A0!=0 branch target is movs r0,#0 (success)
+PASS  55  the six ARM sub-base writes are BEFORE the +0x4A0 gate
+PASS  56  the six ARM writes are before the clear branch
+PASS  57  the six ARM write sites are six distinct stores
+
+=== F. CA 0xA4C0E: the started-module scan (gate 3) ===
+PASS  58  site 0x0a4c1c
+PASS  59  site 0x0a4c2c
+PASS  60  site 0x0a4c42
+PASS  61  site 0x0a4c44
+PASS  62  site 0x0a4c46
+PASS  63  site 0x0a4c4a
+
+=== G. helper call-site closure ===
+PASS  64  CA 0x5F450 has exactly 2 callers (0x0065 + the 0x07E7 ARM)
+PASS  65  CA 0x5E95C has exactly 3 callers (0x0067 + 0x0065 + 0x07E7)
+PASS  66  CA 0xF593C has exactly 3 callers
+PASS  67  CA 0xF58D8 has exactly 3 callers
+
+=== H. the flag and the [U] +0x4A8 ===
+PASS  68  u8[mctx+0x4A5] stores only at 0xB5B3C (set) / 0xB5B42 (clear)
+PASS  69  no store with immediate 1192 in 0x5E000..0x5F700
+PASS  70  [U] recorded: mctx+0x4A8 has no direct writer in this image
+
+70/70 checks passed
+
+SELFTEST PASS

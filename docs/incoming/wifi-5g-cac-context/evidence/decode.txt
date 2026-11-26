@@ -1,0 +1,103 @@
+decoded 342693 Thumb instructions
+# fw_cac_ctx_re.py --decode
+image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B, sha256 7fc87e2051e8...)
+CA = file offset + 0x40000; table A at CA 0x10c23c
+  key 0x0065 -> worker CA 0x46394 (pinned)
+  key 0x0067 -> worker CA 0x45f74 (pinned)
+  key 0x07e7 -> worker CA 0xb58fc (pinned)
+
+## the 0x0065 worker CA 0x46394: the CAC-prep chain
+   0x0463ae  bl       0x961ae
+   0x0463d4  ldr.w    sl, [r4, #1208]
+   0x046408  ldrb     r3, [r4, #4]
+   0x04641a  strb     r3, [r4, #14]
+   0x04643c  bl       0xf593c
+   0x04648e  ldr.w    r3, [r8, #1184]
+   0x0464a8  bl       0x5e95c
+   0x0464b6  bl       0x5f450
+   0x04674a  bl       0x4c3fc
+
+## CA 0x5F450: the four-word producer
+   0x05f458  ldr.w    r3, [r0, #1200]
+   0x05f462  ldr.w    r5, [r0, #1184]
+   0x05f466  ldr.w    r6, [r0, #1180]
+   0x05f4e2  mov.w    r3, #1200
+   0x05f4f0  bl       0xbf128
+   0x05f518  bl       0xc1e0c
+   0x05f51c  add.w    r6, r5, #280
+   0x05f4ac  bl       0x5eae0
+   0x05f4b0  ldrh.w   r2, [sp, #6]
+   0x05f4b6  cmp.w    r2, #920
+   0x05f54a  strh.w   r2, [r4, #1190]
+   0x05f54e  str.w    r5, [r4, #1184]
+   0x05f552  str.w    r6, [r4, #1180]
+   0x05f582  movs     r0, #0
+   => +0x4A0 = the 1200-B block; +0x49C = block+0x118;
+      u16[+0x4A6] = the CA 0x5EAE0 config length (<= 920);
+      the bench word +0x4A4 = 0x00A30000 is this u16 at +0x4A6 = 0xA3.
+
+## CA 0x5E95C: the clear pair
+   0x05e95e  ldr.w    r1, [r0, #1184]
+   0x05e97c  str.w    r2, [r4, #1180]
+   0x05e980  str.w    r2, [r4, #1184]
+   0x05e972  bl       0xf4fd8
+
+## CA 0xB58FC: the 0x07E7 worker
+   0x0b5900  ldrb     r3, [r0, #17]
+   0x0b5904  cmp      r3, #1
+   0x0b5914  ldr.w    r3, [r0, #1200]
+   0x0b5936  bl       0xa4c0e
+   0x0b592e  movs     r0, #100
+   0x0b5b04  ldr.w    r3, [r5, #1184]
+   0x0b5b0c  bne.w    0xb590c
+   0x0b590c  movs     r0, #0
+   0x0b5b10  ldrb.w   r4, [r5, #1189]
+   0x0b5b20  bl       0xf593c
+   0x0b5b26  bl       0x5f450
+   0x0b5b3c  strb.w   r3, [r5, #1189]
+   0x0b5b48  cmp      r3, #0
+   0x0b5b52  cmp      r3, #1
+   0x0b5b62  bl       0x5e95c
+   0x0b5b42  strb.w   r4, [r5, #1189]
+   ARM body sub-base writes (all BEFORE the +0x4A0 gate):
+   0x0b59c6  strh.w   r3, [sl]
+   0x0b59d6  strh.w   r3, [r9]
+   0x0b59e8  strh     r3, [r2, #0]
+   0x0b59fa  strh.w   r3, [r8]
+   0x0b5a08  strh     r3, [r7, #0]
+   0x0b5a18  strh     r3, [r6, #0]
+   => +0x4A0 != 0 -> 0xB590C = movs r0,#0 = SILENT SUCCESS:
+      the six writes + return 0 still happen; only CA 0xF593C,
+      CA 0x5F450 and u8[mctx+0x4A5]=1 are skipped.
+
+## CA 0xA4C0E: the started-module scan (the 0x07E7 gate 3)
+   0x0a4c1c  ldrb     r3, [r7, #18]
+   0x0a4c2c  bl       0xbc524
+   0x0a4c42  ldrb     r3, [r0, #14]
+   0x0a4c44  subs     r3, #1
+   0x0a4c46  cmp      r3, #2
+   0x0a4c4a  addls    r4, #1
+   => count u8[list+18]; resolve each id (CA 0xBC524); count ctxs
+      with u8[ctx+0x0E] in 1..3; gate 3 = count != 0.
+
+## helper call-site closure
+   0x5F450 callers: 0x0464b6, 0x0b5b26 (pinned)
+   0x5E95C callers: 0x046030, 0x0464a8, 0x0b5b62 (pinned)
+   0xF593C callers: 0x04643c, 0x064844, 0x0b5b20 (pinned)
+   0xF58D8 callers: 0x045ffa, 0x0b5b5c, 0x0f598c (pinned)
+
+## u8[mctx+0x4A5] flag stores in 0xB5800..0xB5C00:
+   0x0b5b3c, 0x0b5b42
+## [U] mctx+0x4A8: stores with immediate 1192 anywhere:
+   0x05b446, 0x097ada, 0x098554, 0x0e8bdc, 0x0ea7d2
+   none is in 0x5E000..0x5F700 and none uses the module ctx =>
+   the bench +0x4A8 = 0x1 has NO writer in this decode; keep it [U].
+
+The four-word phase model (mctx = the per-VAP module context):
+  phase                         +0x49C      +0x4A0      +0x4A4          +0x4A8
+  fresh mctx (after vap_add)    0           0           0               0
+  after ap_chan/dfs_mode only   0           0           0               0
+  after the 0x0065 AP branch    block+0x118 block       0x00A30000-cls  [U]
+  after the 0x07E7 ARM w/ ctx   unchanged - six SMAC regs + return 0
+  after a 0x07E7 CLEAR (flag 1) 0           0           flag -> 0       [U]
+  after the 0x0067 VAP stop     0           0           0               [U]
