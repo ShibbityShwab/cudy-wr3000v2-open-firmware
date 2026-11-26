@@ -35,5 +35,8 @@ PASS I3 module-context array base literal CA 0x49330 == 0x119758 (ctx id 0)  0x1
 PASS I4 19 contexts, stride 0xB40: manager+0x630 table, loop bound 0xD5C0/0xB40 == 19  19 04f2c767
 PASS I5 probe formula object (ctx id 0) 0x119758 != init object 0x174BF0
 PASS I6 the probed +0x67C (0x119DD4) is not the PPDU-list field (0x17526C)  0x119dd4 vs 0x17526c
+PASS J1 band-select literals: 0xD20F4 = 0x40042000 (band0), 0xD20F8 = 0x40062000 (band1)  0x40042000 / 0x40062000
+PASS J2 device-base chain: str.w r3,[r4,#0x260] then +0x2000 steps (0xD2046/0xD204A)  c4f8603203f50053
+PASS J3 instance select: ldrb [r4,#0xdd]; cmp 0 -> band0 path; cmp 1 -> band1 path  002b00f05481012b00f07981
 
-selftest: 36/36 PASS
+selftest: 39/39 PASS

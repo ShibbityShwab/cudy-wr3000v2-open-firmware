@@ -178,6 +178,17 @@ def selftest(img):
     chk("I6 the probed +0x67C (0x119DD4) is not the PPDU-list field (0x17526C)",
         0x119758 + 0x67C != 0x174BF0 + 0x67C,
         hex(0x119758 + 0x67C) + " vs " + hex(0x174BF0 + 0x67C))
+    # -- J. the per-band device-base chain (independently measured by task-215)
+    chk("J1 band-select literals: 0xD20F4 = 0x40042000 (band0), 0xD20F8 = 0x40062000 (band1)",
+        img.u32(0xD20F4) == 0x40042000 and img.u32(0xD20F8) == 0x40062000,
+        hex(img.u32(0xD20F4)) + " / " + hex(img.u32(0xD20F8)))
+    chk("J2 device-base chain: str.w r3,[r4,#0x260] then +0x2000 steps (0xD2046/0xD204A)",
+        img.u32(0xD2046) == 0x3260F8C4 and img.u32(0xD204A) == 0x5300F503,
+        img.d[img.off(0xD2046):img.off(0xD2046)+8].hex())
+    chk("J3 instance select: ldrb [r4,#0xdd]; cmp 0 -> band0 path; cmp 1 -> band1 path",
+        img.u16(0xD1D96) == 0x2B00 and img.u32(0xD1D98) == 0x8154F000 and
+        img.u16(0xD1D9C) == 0x2B01 and img.u32(0xD1D9E) == 0x8179F000,
+        img.d[img.off(0xD1D96):img.off(0xD1D96)+12].hex())
     print()
     print("selftest: %d/%d PASS" % (ok[0], ok[0] + fail[0]))
     return 0 if fail[0] == 0 else 1

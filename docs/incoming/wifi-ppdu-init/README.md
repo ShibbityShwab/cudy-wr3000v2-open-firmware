@@ -5,7 +5,7 @@ pinned local firmware image in place; no device contact, no flash, no fire.
 Companions: [REPORT.md](REPORT.md) (the decode), [PROBES.md](PROBES.md) (corrected
 read-only probe pack), [FIRE-RECIPE.md](FIRE-RECIPE.md) (re-probe / stock-control
 recipe), [tools/fw_ppdu_init_re.py](tools/fw_ppdu_init_re.py) (stdlib
-re-derivation tool, `--selftest` **36/36 PASS**), [evidence/](evidence/).
+re-derivation tool, `--selftest` **39/39 PASS**), [evidence/](evidence/).
 
 Grades: **[V]** re-derived here by the committed tool from the pinned image
 (sha256 `7fc87e20...c3ef311b`, 928,920 B; CA = file offset + 0x40000);
@@ -62,7 +62,7 @@ device read.  This lane **corrects** one claim of
 | [REPORT.md](REPORT.md) | the chain decode, the init decode, preconditions, the object correction, limits |
 | [PROBES.md](PROBES.md) | P1-P8 corrected read-only probe pack (firmware-RAM phys addresses) |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | re-probe first, stock control second, firmware-internal escalation third |
-| [tools/fw_ppdu_init_re.py](tools/fw_ppdu_init_re.py) | `--selftest` / `--chain` / `--probes`; 36/36 PASS |
+| [tools/fw_ppdu_init_re.py](tools/fw_ppdu_init_re.py) | `--selftest` / `--chain` / `--probes`; 39/39 PASS |
 | [evidence/selftest.txt](evidence/selftest.txt), [chain.txt](evidence/chain.txt), [probes.txt](evidence/probes.txt) | tool output (regeneration) |
 
 ## Status / next

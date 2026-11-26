@@ -3,7 +3,7 @@
 **Lane:** `wifi-ppdu-init` (task-219).  HOST-ONLY static decode of the pinned
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`; CA = file
 offset + 0x40000).  Grades: **[V]** re-derived by
-[tools/fw_ppdu_init_re.py](tools/fw_ppdu_init_re.py) (`--selftest` 36/36 PASS);
+[tools/fw_ppdu_init_re.py](tools/fw_ppdu_init_re.py) (`--selftest` 39/39 PASS);
 **[V*]** committed earlier lane / dock dump; **[I]** inference; **[U]** needs a
 device read.  Everything below is read-only; nothing here authorises a write.
 
@@ -78,7 +78,7 @@ device read.  Everything below is read-only; nothing here authorises a write.
   re-derived by the committed stdlib tool (near-range Thumb-2 BL decoder,
   PC-relative literal resolver, fixed word reads).  A recursive-descent walker
   over the image's function starts was used to locate containing functions;
-  the tool only asserts the final facts (36 checks).
+  the tool only asserts the final facts (39 checks).
 
 ## 2. The call chain (all **[V]**)
 
@@ -180,9 +180,14 @@ decoded the same 0xD1B68 (same single caller 0x48314, region 0x174BE0, stride
 0xE28, per-band object 0x174BF0+0xE28*band) and quotes the band-1 object as
 **0x175A18**, which is exactly `get_device(1)` from CA 0xF4F48 - so the
 band-object arithmetic this lane uses is the same one the bench SMAC
-differential already exercised.  Its measured band-0/band-1 +672 values
-(0x114F18 vs 0x40062000) are written by this same loop, i.e. the boot body ran
-on our boot; the descriptor-list init is in that loop.
+differential already exercised.  This lane re-derived the per-band device-base
+chain it measured (selftest J1-J3): 0xD1D96/0xD1D9C select the instance from
+`u8[device+0xDD]`; 0xD2044 loads **0x40042000** (band 0) and 0xD2094 loads
+**0x40062000** (band 1); 0xD2046 stores that chain at `[r4+0x260]` stepping
+0x2000 (r4 = device+0x40).  Task-215's measured band-0 0x114F18 / band-1
+0x40062000 are therefore fields this same loop writes, i.e. the boot body ran on
+our boot and the 0xC016C call inside the loop should have run too.  **[V] here
+for the code, [V*] for the bench measurement.**
 
 ## 6. Why it does not run on our host-only boot - candidates
 
