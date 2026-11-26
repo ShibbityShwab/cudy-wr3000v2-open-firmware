@@ -1,0 +1,40 @@
+image: rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin  928920 B  sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+CA = file offset + 0x40000
+
+A. the RX delivery chain (all addresses CA, Thumb unless noted)
+  MAC RX HW -> firmware        [U]                    the SMAC RX interrupt/completion entry was not located in this image
+  HAL RX message intake        0xBA48A                bl 0xB9780 - one call per received frame in the descriptor handler (0xBA1C8 body)
+  queue intake (pop/free)      0xBA0C0 / 0xBA0E2      bl 0x1024EA pop / bl 0x1024E6 free - frames arrive as HCC message nodes
+  per-chip RX ctx gate         0xB97EE                ldr.w r8,[r6+0x1a00]; NULL -> drop (log 0xA4E)
+  CRX builder                  0xB9780                pops frames, builds group 1 / id 13 D2H, posts it
+  CRX wire constants           0xBA14A..0xBA17A       group=1 bfi, id=13, total=frame+60<=0x680, fwd flag info[+6]
+  deposit primitive            0x102760               hcc_msg_tx: routes by hdr[1]>>4 destination nibble
+  ETE node fill                0xC192A                8-byte D2H node {devva, (len<<16)|0x6d2b}
+  D2H notify                   0xC6170                id<=10, pending mask -> hcc object out word, doorbell bit0
+  ready/heartbeat/config producers 0x102760 callers       same primitive: heartbeat 0xC6C0A, config replies + ready pair
+
+B. D2H source selection (why the firmware's own frames deliver and client frames do not)
+  The D2H ring is a single firmware->host HCC message channel.  Every firmware-originated
+  message that reaches the host (ready pair g4 id1/id2, config replies g1 id3, HEARTBEAT
+  g4 id4) and the management-RX event (g1 id13) all deposit through the SAME primitive
+  (hcc_msg_tx 0x102760 -> ETE node 0xC192A -> notify 0xC6170).  There is no per-id ring
+  and no host-side gate that could selectively hide g1 id13.
+  => the bench fact 'the firmware's own frames deliver' proves only that the deposit,
+     notify and host-consume paths work.  It does NOT prove the MAC-RX intake ran.
+
+C. the intake that is missing
+  Client frames must become an HCC message node consumed by the RX descriptor handler
+  (pop at 0xBA0C0 -> bl 0xB9780 at 0xBA48A).  The producer of those nodes is the SMAC RX
+  completion path (MAC PPDU -> firmware RX descriptor -> node).  That producer entry is
+  [U] in this image (the ISR names table is not code-referenced; see TABLES T7).
+  The demand-side state that the consumer itself reads is the per-chip RX ctx at
+  chip+0x1a00 (0xB97EE); a NULL there drops the frame with log 0xA4E after intake.
+
+D. PPDU descriptor pool (the per-band device object)
+  device(band) = 0x174BF0 + 0xE28*band  (getter 0xF4F48; literal 0xF4F60)
+    band 0 obj CA 0x174BF0  list next +0x66C=0x17525C  prev +0x670=0x175260  count +0x674=0x175264
+             name +0x67C=0x17526C (expect 0x1060F7)  phys 0x4082D26C
+    band 1 obj CA 0x175A18  list next +0x66C=0x176084  prev +0x670=0x176088  count +0x674=0x17608C
+             name +0x67C=0x176094 (expect 0x1060F7)  phys 0x4082E094
+  descriptor reserve: 0xB52F0(dev, pool, buf) links a 0x198-B descriptor into dev+0x66C;
+  boot init 0xC016C pre-allocates 0x1A0-B descriptors via 0xBF128 (cross-lane decode).

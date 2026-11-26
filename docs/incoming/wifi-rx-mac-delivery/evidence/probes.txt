@@ -1,0 +1,25 @@
+READ-ONLY probe pack (Lead fires; conversions committed in ppdu-init PROBES)
+firmware RAM phys = CA + 0x406B8000; device IO phys = CA + 0x3B8000
+
+  P1   device obj band0 name ptr    CA 0x17526C     phys 0x4082D26C w=4  0x001060F7 = device init + PPDU list init ran
+  P2   device obj band0 list next   CA 0x17525C     phys 0x4082D25C w=4  self ptr 0x17525C when list is empty/initialised
+  P3   device obj band0 list count  CA 0x175264     phys 0x4082D264 w=4  preallocated descriptor count
+  P4   device obj band0 name ptr b1 CA 0x176094     phys 0x4082E094 w=4  0x001060F7 if band 1 object also inited
+  P5   RX-path counter cc5          CA 0x1758B5     phys 0x4082D8B5 w=1  u8 bumped when a received frame is over the 0x680 cap (0xBA12E)
+  P6   RX-path counter 1ada         CA 0x1766CA     phys 0x4082E6CA w=1  u8 bumped in the descriptor handler when a negative frame status is seen (0xBAF2A)
+  P7   RX-path counter 1ad4         CA 0x1766C4     phys 0x4082E6C4 w=1  u8 flag compared with 1 before a per-frame field write (0xBAF38)
+  P8   device obj band1 counter 1ad4 CA 0x1774EC     phys 0x4082F4EC w=1  band-1 mirror of P7
+  P9   MAC live bank status         CA -            phys 0x40408000 w=4  read via the bench's committed iATU map (CA 0x40050000 -> phys 0x40408000): bit10 = rx_ppdu_desc class
+  P10  MAC config mask              CA -            phys 0x403F8048 w=4  CA 0x40040048 -> phys 0x403F8048: 0xfffffcc1 stock/vendor value (bit10 masked)
+
+D2H liveness (host consumer, no device read):
+  rd_catalog / direct D2H reader: ready pair g4 id1/id2 + HEARTBEAT g4 id4 arrive;
+  g1 id13 count == 0. P9 bit10 is stock-latched (benign); require completion-producer
+  movement or a g1 id13 frame, never 'bit10 clear', as the success criterion.
+
+Decision table (one pass during the laptop auth burst):
+  P5/P6/P7 move + P9 bit10 transitions + no g1 id13 -> intake produced frames; the drop
+     is inside the CRX path after the queue pop (re-read the builder's gate logs 0x49F/0x497/0xA4E)
+  counters still + no g1 id13 -> consumer ran, builder dropped (find the log code in dmesg)
+  counters do not move -> intake dry: the SMAC RX completion producer never posted a node
+  P1 != 0x1060F7 -> the object/address is wrong for this boot; do not interpret P5-P8
