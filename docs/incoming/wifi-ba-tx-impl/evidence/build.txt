@@ -1,0 +1,15 @@
+run-host-tests: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/wifi-ba-tx-impl
+ba_tx_selftest: Hi5622V100 TX-direction BA core (lane wifi-ba-tx-impl)
+ba_tx_selftest: 211 checks, 0 failures
+ba_tx_selftest: Hi5622V100 TX-direction BA core (lane wifi-ba-tx-impl)
+ba_tx_selftest: 225 checks, 0 failures
+run-host-tests: PASS (211 standalone + 225 with the driver H2D gate)
+build-ba-tx: base tree        /tmp/r5-build
+build-ba-tx: patched tree     /tmp/ba-tx-build
+build-ba-tx: artefact         /tmp/batx-artifact/hi5622_wifi.ko
+build-ba-tx: stripped         406168 B sha256 234b3d4b961037e1a5465cc4cc38ab4603b2c71c451d06ac5ba7212b0104d841
+build-ba-tx: unstripped       1515740 B sha256 658a5887a17cbf69e12824bedff40222f9f6909eeda707f9bd13f715afeb8ddf
+build-ba-tx: .text            sha256 702591233a117f0ccf7db2c6ce75ea0ee81c1e4307c10769bda4b7e2d20ec8fc
+build-ba-tx: params           66 (ba_enable included)
+build-ba-tx: PASS
+exit=0

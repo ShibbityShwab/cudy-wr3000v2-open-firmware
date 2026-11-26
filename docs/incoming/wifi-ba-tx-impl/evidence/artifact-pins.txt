@@ -1,0 +1,29 @@
+artifact pins (lane wifi-ba-tx-impl, task-217; HOST-ONLY, not committed)
+build-ba-tx: base tree        /tmp/r5-build
+build-ba-tx: patched tree     /tmp/ba-tx-build
+build-ba-tx: stripped         406168 B sha256 234b3d4b961037e1a5465cc4cc38ab4603b2c71c451d06ac5ba7212b0104d841
+build-ba-tx: unstripped       1515740 B sha256 658a5887a17cbf69e12824bedff40222f9f6909eeda707f9bd13f715afeb8ddf
+build-ba-tx: .text            sha256 702591233a117f0ccf7db2c6ce75ea0ee81c1e4307c10769bda4b7e2d20ec8fc
+build-ba-tx: params           66 (ba_enable included)
+--- patch
+0964fbf77d53e9bde6b19216f43d268b0f0c7a19356d567a43e5678cdd6401ac  patches/0001-ba-tx-impl.patch
+2258 patches/0001-ba-tx-impl.patch
+--- base lineage (the F2/R5 merged-module base)
+86d6c57ecc98d80906af1eeee1e5d6641c21a7ed5c1b2b53c70b85236b5b9373  hi5622_scan.c
+15c50d34fa7ed0f9bd5262e5b317c13a97228207dcc599673b72788e2b9bcfea  hi5622_scan_logic.c
+6af774ef76b730c8f45d621bf338d12b041b96a3792be985df59ac5092a603e8  hi5622_scan_logic.h
+81533d9ce2e1c984486d6ad8e44a4a09dc33ba97830a94861651f805dee70330  hi5622_vap_start_g0.h
+1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d  Kbuild
+bd18897af88f58d550be31acf430e08af2b82f54e0fcdc780c8f1464e7f94df7  cfg80211-provider.symvers
+--- wired symbol references (the core is no longer the inert skeleton)
+00021ff4 T hi5622_ba_d2h
+000231c0 T hi5622_ba_glue_ap_up
+00022da0 T hi5622_ba_glue_d2h
+00022ebc T hi5622_ba_glue_mgmt_rx
+00022f88 T hi5622_ba_glue_tx_data
+00021fcc T hi5622_ba_mgmt_rx
+0002164c t hi5622_ba_mgmt_rx.part.0
+00021ea4 T hi5622_ba_tx_data
+00021c80 T hi5622_ba_tx_mpdu
+00021e7c T hi5622_ba_tx_start
+0002144c t hi5622_ba_tx_start.part.0

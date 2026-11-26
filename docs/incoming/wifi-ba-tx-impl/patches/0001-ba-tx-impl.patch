@@ -1,0 +1,2258 @@
+diff --git a/Kbuild b/Kbuild
+index 9b4009c..7e349b8 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -36,6 +36,7 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
+ 		 hi5622_desc_table.o hi5622_band_start.o hi5622_dfs_mode.o \
+ 		 hi5622_vap_start_g0.o \
++		 hi5622_ba.o hi5622_ba_glue.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+diff --git a/hcc.c b/hcc.c
+index fa0d2f3..5e6beac 100644
+--- a/hcc.c
++++ b/hcc.c
+@@ -36,6 +36,7 @@
+ #include "hi5622_hcc.h"
+ #include "hi5622_scan.h"
+ #include "hi5622_mgmt.h"
++#include "hi5622_ba_glue.h"
+ 
+ /* Stability/perf hardening (wifi-stability lane): gate the hot-path hcc-core
+  * event traces.  Default 0 = quiet steady state (the bench console census
+@@ -106,6 +107,10 @@ int hi5622_hcc_deliver(struct hi5622_pci *ctx, enum hcc_src src,
+ 	/* wifi-ap-mgmt lane: D2H management-frame events (group1 id13) decode
+ 	 * to cfg80211_rx_mgmt behind mgmt_rx=1; default counts only. */
+ 	hi5622_mgmt_deliver(ctx, hdr, payload, payload_avail, wire_len);
++	/* lane wifi-ba-tx-impl (task-217): the D2H BA events (ids 2/3/0x0F/
++	 * 0x1D on the event group) are filtered cheaply here and handled in
++	 * the BA workqueue; inert unless ba_enable=1. */
++	hi5622_ba_glue_d2h(ctx, hdr, payload, payload_avail, wire_len);
+ 	return hcc_core_deliver_hdr(&ctx->hcc->hcc.core, src, hdr, payload,
+ 				    payload_avail, wire_len,
+ 				    hcc_kernel_now_ms());
+diff --git a/hi5622_ba.c b/hi5622_ba.c
+new file mode 100644
+index 0000000..25d5ba5
+--- /dev/null
++++ b/hi5622_ba.c
+@@ -0,0 +1,1090 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_ba.c - fail-closed TX-direction block-ack core for the Hi5622V100
++ * clean-room Wi-Fi driver (lane wifi-ba-tx-impl, shared task-217).
++ *
++ * Ported from ../wifi-ba-agg/src/hi5622_ba.c (task-178) and extended with
++ * the TX-direction cut (see hi5622_ba.h).  The core owns no device access:
++ * every wire goes through the two callbacks (post_h2d / tx_action), so the
++ * same file is unit-tested on the host with -DHI5622_BA_HOST_TEST.
++ */
++#include "hi5622_ba.h"
++
++#ifdef HI5622_BA_HOST_TEST
++#include <stdio.h>
++#include <string.h>
++#define ba_memset	memset
++#define ba_memcmp	memcmp
++#else
++#include <linux/module.h>
++#include <linux/moduleparam.h>
++#include <linux/printk.h>
++#include <linux/string.h>
++#define ba_memset	memset
++#define ba_memcmp	memcmp
++#endif
++
++unsigned int hi5622_ba_enable;
++#ifndef HI5622_BA_HOST_TEST
++module_param_named(ba_enable, hi5622_ba_enable, uint, 0444);
++MODULE_PARM_DESC(ba_enable,
++	"fail-closed TX-direction block-ack: 0=off (default; no frame, no H2D message, no state), 1=armed (in-kernel ADDBA originator + g0 0x0A/0x0B/0x1C), >1=invalid");
++#endif
++
++/* fail-closed gate: 0 ok, -EOPNOTSUPP off, -EINVAL invalid value */
++int hi5622_ba_check_enabled(void)
++{
++	if (hi5622_ba_enable == 1)
++		return HI5622_BA_OK;
++	if (hi5622_ba_enable == 0)
++		return HI5622_BA_EOPNOTSUPP;
++	return HI5622_BA_EINVAL;
++}
++
++/* ---- small helpers ----------------------------------------------------- */
++
++static void ba_put_le16(u8 *p, u16 v)
++{
++	p[0] = (u8)(v & 0xff);
++	p[1] = (u8)(v >> 8);
++}
++
++static u16 ba_get_le16(const u8 *p)
++{
++	return (u16)(p[0] | ((u16)p[1] << 8));
++}
++
++static void ba_copy_addr(u8 *dst, const u8 *src)
++{
++	int i;
++
++	if (!src) {
++		ba_memset(dst, 0, 6);
++		return;
++	}
++	for (i = 0; i < 6; i++)
++		dst[i] = src[i];
++}
++
++static u16 ba_clamp_baw(u16 baw)
++{
++	if (baw > HI5622_BA_BAW_MAX)
++		return HI5622_BA_BAW_MAX;
++	if (baw < HI5622_BA_BAW_MIN)
++		return HI5622_BA_BAW_MIN;
++	return baw;
++}
++
++/* BA parameter set: | baw[9:0] << 6 | policy<<1 | amsdu | tid<<2 | */
++static u16 ba_param_set(const struct hi5622_ba_params *p)
++{
++	u16 v = 0;
++
++	v |= (u16)((p->baw & 0x3ff) << 6);
++	v |= (u16)((p->policy & 1) << 1);
++	v |= (u16)(p->amsdu & 1);
++	v |= (u16)((p->tid & 0xf) << 2);
++	return v;
++}
++
++/* 24-byte 802.11 mgmt header for the three action frames */
++static void ba_fill_hdr(u8 *frame, const u8 *da, const u8 *sa,
++			const u8 *bssid)
++{
++	frame[0] = 0xd0;	/* FC: mgmt, action */
++	frame[1] = 0x00;
++	frame[2] = 0x00;	/* duration */
++	frame[3] = 0x00;
++	ba_copy_addr(frame + 4, da);
++	ba_copy_addr(frame + 10, sa);
++	ba_copy_addr(frame + 16, bssid);
++	/* frame[22..23] sequence control = 0 */
++}
++
++/* ---- complete HCC wire ------------------------------------------------ */
++
++/* 12-byte HCC header, verified this lane from the pinned vendor module:
++ *   [0] group nibble, [1] high nibble = dst (== [9]), low nibble = alloc 1,
++ *   [4..5] total length, [6..7] id, [10..11] tag 0x5A5A.  The vendor BA
++ *   builders take the hmac-dev triple bytes at [1].high/[2]/[3]; for the
++ *   single chip / single AP VAP bench these are 0 (chip id 0 both bands,
++ *   TABLES T3), so only the alloc nibble is set here. */
++void hi5622_ba_wrap_h2d(u8 *wire, size_t payload_len, u8 group, u8 id)
++{
++	if (!wire)
++		return;
++	ba_memset(wire, 0, HI5622_BA_HDR_LEN + payload_len);
++	wire[0] = (u8)(group & 0x0fu);
++	wire[1] = (u8)HI5622_BA_ALLOC_NIBBLE;
++	wire[2] = 0;
++	wire[3] = 0;
++	ba_put_le16(wire + 4, (u16)(HI5622_BA_HDR_LEN + payload_len));
++	ba_put_le16(wire + 6, (u16)id);
++	wire[8] = 0;
++	wire[9] = 0;
++	ba_put_le16(wire + 10, (u16)HI5622_BA_HCC_TAG);
++}
++
++static size_t ba_wire_compose(u8 *wire, size_t cap, u8 group, u8 id,
++			      const u8 *payload, size_t payload_len)
++{
++	size_t total = HI5622_BA_HDR_LEN + payload_len;
++	size_t i;
++
++	if (!wire || !payload || cap < total)
++		return 0;
++	hi5622_ba_wrap_h2d(wire, payload_len, group, id);
++	for (i = 0; i < payload_len; i++)
++		wire[HI5622_BA_HDR_LEN + i] = payload[i];
++	return total;
++}
++
++/* ---- byte-exact action-frame builders ---------------------------------- */
++
++size_t hi5622_ba_build_addba_req(u8 *frame, size_t cap,
++				 const struct hi5622_ba_params *p,
++				 const u8 *da, const u8 *sa, const u8 *bssid)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!frame || !p || !da || cap < HI5622_BA_FRAME_ADDBA_REQ_LEN)
++		return 0;
++	if (p->tid >= HI5622_BA_MAX_TID)
++		return 0;
++	if (p->baw < HI5622_BA_BAW_MIN || p->baw > HI5622_BA_BAW_MAX)
++		return 0;
++	ba_memset(frame, 0, HI5622_BA_FRAME_ADDBA_REQ_LEN);
++	ba_fill_hdr(frame, da, sa, bssid);
++	frame[24] = HI5622_BA_CATEGORY;
++	frame[25] = HI5622_BA_ACTION_ADDBA_REQ;
++	frame[26] = p->dialog;
++	ba_put_le16(frame + 27, ba_param_set(p));
++	ba_put_le16(frame + 29, p->timeout_tu);
++	ba_put_le16(frame + 31, p->start_seq);
++	return HI5622_BA_FRAME_ADDBA_REQ_LEN;
++}
++
++size_t hi5622_ba_build_addba_rsp(u8 *frame, size_t cap,
++				 const struct hi5622_ba_params *p,
++				 const u8 *da, const u8 *sa, const u8 *bssid)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!frame || !p || !da || cap < HI5622_BA_FRAME_ADDBA_RSP_LEN)
++		return 0;
++	if (p->tid >= HI5622_BA_MAX_TID)
++		return 0;
++	if (p->baw < HI5622_BA_BAW_MIN || p->baw > HI5622_BA_BAW_MAX)
++		return 0;
++	ba_memset(frame, 0, HI5622_BA_FRAME_ADDBA_RSP_LEN);
++	ba_fill_hdr(frame, da, sa, bssid);
++	frame[24] = HI5622_BA_CATEGORY;
++	frame[25] = HI5622_BA_ACTION_ADDBA_RSP;
++	frame[26] = p->dialog;
++	ba_put_le16(frame + 27, p->status);	/* status code */
++	ba_put_le16(frame + 29, ba_param_set(p));
++	/* vendor parity: the response builder leaves the BA timeout 0 */
++	ba_put_le16(frame + 31, 0);
++	return HI5622_BA_FRAME_ADDBA_RSP_LEN;
++}
++
++size_t hi5622_ba_build_delba(u8 *frame, size_t cap, u8 tid, u8 initiator,
++			     u16 reason, const u8 *da, const u8 *sa,
++			     const u8 *bssid)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!frame || !da || cap < HI5622_BA_FRAME_DELBA_LEN)
++		return 0;
++	if (tid >= HI5622_BA_MAX_TID)
++		return 0;
++	ba_memset(frame, 0, HI5622_BA_FRAME_DELBA_LEN);
++	ba_fill_hdr(frame, da, sa, bssid);
++	frame[24] = HI5622_BA_CATEGORY;
++	frame[25] = HI5622_BA_ACTION_DELBA;
++	/* DELBA parameter: | tid<<12 | initiator<<11 | aid[10:0]=0 */
++	frame[27] = (u8)(((tid & 0xf) << 4) | ((initiator & 1) << 3));
++	ba_put_le16(frame + 28, reason);
++	return HI5622_BA_FRAME_DELBA_LEN;
++}
++
++/* ---- byte-exact payload builders (vendor shapes T3-T5) ----------------- */
++
++size_t hi5622_ba_build_relay_addba_rsp(u8 *payload, size_t cap, u16 uid,
++				       const struct hi5622_ba_params *p)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!payload || !p || cap < HI5622_BA_RELAY_PAYLOAD_LEN)
++		return 0;
++	if (p->tid >= HI5622_BA_MAX_TID)
++		return 0;
++	/* zero the WHOLE payload: the fw reads fields we do not set */
++	ba_memset(payload, 0, HI5622_BA_RELAY_PAYLOAD_LEN);
++	payload[0] = HI5622_BA_RELAY_TYPE;	/* 3 */
++	payload[1] = HI5622_BA_RELAY_ADDBA_RSP;	/* 1 */
++	ba_put_le16(payload + 2, uid);		/* user index (obj key) */
++	payload[7] = p->tid;
++	payload[9] = (u8)(p->status & 0xff);	/* ADDBA status, 0 = success */
++	ba_put_le16(payload + 0x0c, ba_clamp_baw(p->baw));
++	ba_put_le16(payload + 0x10, p->timeout_tu);
++	payload[0x12] = (u8)(p->amsdu & 1);
++	payload[0x14] = p->dialog;
++	payload[0x15] = (u8)(p->policy & 1);
++	return HI5622_BA_RELAY_PAYLOAD_LEN;
++}
++
++size_t hi5622_ba_build_relay_delba(u8 *payload, size_t cap, u16 uid, u8 tid,
++				   u8 initiator)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!payload || cap < HI5622_BA_RELAY_PAYLOAD_LEN)
++		return 0;
++	if (tid >= HI5622_BA_MAX_TID)
++		return 0;
++	ba_memset(payload, 0, HI5622_BA_RELAY_PAYLOAD_LEN);
++	payload[0] = HI5622_BA_RELAY_TYPE;
++	payload[1] = HI5622_BA_RELAY_DELBA;	/* 2 */
++	ba_put_le16(payload + 2, uid);
++	payload[7] = tid;
++	payload[8] = (u8)(initiator & 1);
++	payload[0x14] = 0;			/* clear flag, explicit */
++	return HI5622_BA_RELAY_PAYLOAD_LEN;
++}
++
++size_t hi5622_ba_build_ampdu_start(u8 *payload, size_t cap, u8 tid, u16 seq,
++				   u16 uid, u8 flag)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!payload || cap < HI5622_BA_AMPDU_PAYLOAD_LEN)
++		return 0;
++	if (tid >= HI5622_BA_MAX_TID)
++		return 0;
++	ba_memset(payload, 0, HI5622_BA_AMPDU_PAYLOAD_LEN);
++	payload[0] = 0;			/* start */
++	payload[1] = tid;
++	ba_put_le16(payload + 2, seq);
++	ba_put_le16(payload + 4, uid);
++	payload[6] = flag;
++	return HI5622_BA_AMPDU_PAYLOAD_LEN;
++}
++
++size_t hi5622_ba_build_ampdu_end(u8 *payload, size_t cap, u8 tid, u16 uid)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!payload || cap < HI5622_BA_AMPDU_PAYLOAD_LEN)
++		return 0;
++	if (tid >= HI5622_BA_MAX_TID)
++		return 0;
++	ba_memset(payload, 0, HI5622_BA_AMPDU_PAYLOAD_LEN);
++	payload[0] = 1;			/* end */
++	payload[1] = tid;
++	ba_put_le16(payload + 4, uid);
++	return HI5622_BA_AMPDU_PAYLOAD_LEN;
++}
++
++size_t hi5622_ba_build_tx_notify(u8 *payload, size_t cap, u16 uid, u8 tid,
++				 u8 value)
++{
++	if (hi5622_ba_check_enabled())
++		return 0;
++	if (!payload || cap < HI5622_BA_NOTIFY_PAYLOAD_LEN)
++		return 0;
++	if (tid >= HI5622_BA_MAX_TID)
++		return 0;
++	ba_memset(payload, 0, HI5622_BA_NOTIFY_PAYLOAD_LEN);
++	ba_put_le16(payload, uid);
++	payload[2] = tid;
++	payload[3] = value;
++	return HI5622_BA_NOTIFY_PAYLOAD_LEN;
++}
++
++/* ---- complete wire builders ------------------------------------------- */
++
++size_t hi5622_ba_wire_relay_addba_rsp(u8 *wire, size_t cap, u16 uid,
++				      const struct hi5622_ba_params *p)
++{
++	u8 payload[HI5622_BA_RELAY_PAYLOAD_LEN];
++
++	if (hi5622_ba_build_relay_addba_rsp(payload, sizeof(payload), uid, p) !=
++	    HI5622_BA_RELAY_PAYLOAD_LEN)
++		return 0;
++	return ba_wire_compose(wire, cap, HI5622_BA_H2D_GROUP_RELAY,
++			       HI5622_BA_H2D_BA_RELAY, payload,
++			       sizeof(payload));
++}
++
++size_t hi5622_ba_wire_relay_delba(u8 *wire, size_t cap, u16 uid, u8 tid,
++				  u8 initiator)
++{
++	u8 payload[HI5622_BA_RELAY_PAYLOAD_LEN];
++
++	if (hi5622_ba_build_relay_delba(payload, sizeof(payload), uid, tid,
++					initiator) !=
++	    HI5622_BA_RELAY_PAYLOAD_LEN)
++		return 0;
++	return ba_wire_compose(wire, cap, HI5622_BA_H2D_GROUP_RELAY,
++			       HI5622_BA_H2D_BA_RELAY, payload,
++			       sizeof(payload));
++}
++
++size_t hi5622_ba_wire_ampdu_start(u8 *wire, size_t cap, u8 tid, u16 seq,
++				  u16 uid, u8 flag)
++{
++	u8 payload[HI5622_BA_AMPDU_PAYLOAD_LEN];
++
++	if (hi5622_ba_build_ampdu_start(payload, sizeof(payload), tid, seq, uid,
++					flag) != HI5622_BA_AMPDU_PAYLOAD_LEN)
++		return 0;
++	return ba_wire_compose(wire, cap, HI5622_BA_H2D_GROUP_AMPDU,
++			       HI5622_BA_H2D_AMPDU_TX, payload,
++			       sizeof(payload));
++}
++
++size_t hi5622_ba_wire_ampdu_end(u8 *wire, size_t cap, u8 tid, u16 uid)
++{
++	u8 payload[HI5622_BA_AMPDU_PAYLOAD_LEN];
++
++	if (hi5622_ba_build_ampdu_end(payload, sizeof(payload), tid, uid) !=
++	    HI5622_BA_AMPDU_PAYLOAD_LEN)
++		return 0;
++	return ba_wire_compose(wire, cap, HI5622_BA_H2D_GROUP_AMPDU,
++			       HI5622_BA_H2D_AMPDU_TX, payload,
++			       sizeof(payload));
++}
++
++size_t hi5622_ba_wire_tx_notify(u8 *wire, size_t cap, u16 uid, u8 tid,
++				u8 value)
++{
++	u8 payload[HI5622_BA_NOTIFY_PAYLOAD_LEN];
++
++	if (hi5622_ba_build_tx_notify(payload, sizeof(payload), uid, tid,
++				      value) != HI5622_BA_NOTIFY_PAYLOAD_LEN)
++		return 0;
++	return ba_wire_compose(wire, cap, HI5622_BA_H2D_GROUP_NOTIFY,
++			       HI5622_BA_H2D_TX_BA_NOTIFY, payload,
++			       sizeof(payload));
++}
++
++/* ---- parser ------------------------------------------------------------ */
++
++/* Accept either a full 802.11 action frame (24-byte MAC header) or the
++ * category-first body the firmware embeds (e.g. D2H 0x1D action 1 at hdr+20);
++ * the body layout is identical in both cases.
++ *
++ * Body layouts (vendor bytes, TABLES T8):
++ *   ADDBA req: 3,0,dialog,param[2],timeout[2],start-seq[2]
++ *   ADDBA rsp: 3,1,dialog,status[2],param[2],timeout[2]
++ *   DELBA:     3,2,param[2],reason[2]
++ */
++static int ba_parse_body(const u8 *b, size_t blen,
++			 struct hi5622_ba_action *out)
++{
++	u16 param;
++
++	if (!b || !out || blen < 3)
++		return HI5622_BA_EINVAL;
++	if (b[0] != HI5622_BA_CATEGORY)
++		return HI5622_BA_EINVAL;
++	ba_memset(out, 0, sizeof(*out));
++	out->action = b[1];
++	if (out->action == HI5622_BA_ACTION_ADDBA_REQ ||
++	    out->action == HI5622_BA_ACTION_ADDBA_RSP) {
++		if (blen < HI5622_BA_ACTION_MIN_LEN)
++			return HI5622_BA_EINVAL;
++		out->dialog = b[2];
++		if (out->action == HI5622_BA_ACTION_ADDBA_RSP) {
++			out->status = ba_get_le16(b + 3);
++			param = ba_get_le16(b + 5);
++			out->timeout_tu = ba_get_le16(b + 7);
++		} else {
++			param = ba_get_le16(b + 3);
++			out->timeout_tu = ba_get_le16(b + 5);
++			out->start_seq = ba_get_le16(b + 7);
++		}
++		out->tid = (u8)((param >> 2) & 0xf);
++		out->policy = (u8)((param >> 1) & 1);
++		out->amsdu = (u8)(param & 1);
++		out->baw = (u16)(param >> 6);
++		if (out->tid >= HI5622_BA_MAX_TID)
++			return HI5622_BA_EINVAL;
++		if (out->baw < HI5622_BA_BAW_MIN ||
++		    out->baw > HI5622_BA_BAW_MAX)
++			return HI5622_BA_EINVAL;
++		return HI5622_BA_OK;
++	}
++	if (out->action == HI5622_BA_ACTION_DELBA) {
++		if (blen < 6)
++			return HI5622_BA_EINVAL;
++		param = ba_get_le16(b + 2);
++		out->tid = (u8)((param >> 12) & 0xf);
++		out->initiator = (u8)((param >> 11) & 1);
++		out->reason = ba_get_le16(b + 4);
++		if (out->tid >= HI5622_BA_MAX_TID)
++			return HI5622_BA_EINVAL;
++		return HI5622_BA_OK;
++	}
++	return HI5622_BA_EINVAL;
++}
++
++int hi5622_ba_parse_action(const u8 *frame, size_t len,
++			   struct hi5622_ba_action *out)
++{
++	if (!frame || !out || len < 3)
++		return HI5622_BA_EINVAL;
++	/* full 802.11 action frame (24-byte header, category at [24])? */
++	if (len >= 25 && frame[0] == 0xd0 && frame[1] == 0x00 &&
++	    frame[24] == HI5622_BA_CATEGORY)
++		return ba_parse_body(frame + 24, len - 24, out);
++	return ba_parse_body(frame, len, out);
++}
++
++/* ---- core / peers ------------------------------------------------------ */
++
++void hi5622_ba_core_init(struct hi5622_ba_core *core)
++{
++	if (!core)
++		return;
++	ba_memset(core, 0, sizeof(*core));
++}
++
++void hi5622_ba_core_set_addrs(struct hi5622_ba_core *core, const u8 *own_mac,
++			      const u8 *bssid)
++{
++	if (!core)
++		return;
++	ba_copy_addr(core->own_mac, own_mac);
++	ba_copy_addr(core->bssid, bssid);
++}
++
++struct hi5622_ba_peer *hi5622_ba_peer_get(struct hi5622_ba_core *core,
++					  const u8 *mac)
++{
++	int i;
++
++	if (!core || !mac)
++		return NULL;
++	for (i = 0; i < HI5622_BA_MAX_PEERS; i++) {
++		if (core->peers[i].used &&
++		    ba_memcmp(core->peers[i].mac, mac, 6) == 0)
++			return &core->peers[i];
++	}
++	for (i = 0; i < HI5622_BA_MAX_PEERS; i++) {
++		if (!core->peers[i].used) {
++			ba_memset(&core->peers[i], 0,
++				  sizeof(core->peers[i]));
++			core->peers[i].used = 1;
++			ba_copy_addr(core->peers[i].mac, mac);
++			return &core->peers[i];
++		}
++	}
++	return NULL;
++}
++
++struct hi5622_ba_peer *hi5622_ba_peer_get_by_uid(struct hi5622_ba_core *core,
++						 u16 uid)
++{
++	int i;
++
++	if (!core)
++		return NULL;
++	for (i = 0; i < HI5622_BA_MAX_PEERS; i++) {
++		if (core->peers[i].used && core->peers[i].uid == uid)
++			return &core->peers[i];
++	}
++	return NULL;
++}
++
++struct hi5622_ba_peer *hi5622_ba_peer_bind(struct hi5622_ba_core *core,
++					   const u8 *mac, u16 uid)
++{
++	struct hi5622_ba_peer *peer;
++
++	if (!core || !mac)
++		return NULL;
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return NULL;
++	peer->uid = uid;
++	return peer;
++}
++
++void hi5622_ba_peer_drop(struct hi5622_ba_core *core,
++			 struct hi5622_ba_peer *peer)
++{
++	if (!core || !peer || peer < core->peers ||
++	    peer >= core->peers + HI5622_BA_MAX_PEERS)
++		return;
++	ba_memset(peer, 0, sizeof(*peer));
++}
++
++u32 hi5622_ba_active_sessions(const struct hi5622_ba_core *core)
++{
++	u32 n = 0;
++	int i, t;
++
++	if (!core)
++		return 0;
++	for (i = 0; i < HI5622_BA_MAX_PEERS; i++) {
++		if (!core->peers[i].used)
++			continue;
++		for (t = 0; t < HI5622_BA_MAX_TID; t++)
++			if (core->peers[i].tx[t].used &&
++			    core->peers[i].tx[t].state == 2)
++				n++;
++	}
++	return n;
++}
++
++/* ---- H2D post helpers -------------------------------------------------- */
++
++static int ba_post_h2d(const struct hi5622_ba_ops *ops, const u8 *wire,
++		       size_t len)
++{
++	if (!ops || !ops->post_h2d || !wire || !len)
++		return HI5622_BA_EINVAL;
++	return ops->post_h2d(ops->ctx, wire, len);
++}
++
++static int ba_post_relay_addba_rsp(struct hi5622_ba_core *core,
++				   const struct hi5622_ba_ops *ops,
++				   const struct hi5622_ba_peer *peer,
++				   const struct hi5622_ba_params *p)
++{
++	u8 wire[HI5622_BA_WIRE_MAX];
++	size_t len;
++	int rc;
++
++	len = hi5622_ba_wire_relay_addba_rsp(wire, sizeof(wire), peer->uid, p);
++	if (len != HI5622_BA_RELAY_WIRE_LEN)
++		return HI5622_BA_EINVAL;
++	rc = ba_post_h2d(ops, wire, len);
++	core->stats.last_rc = rc;
++	if (!rc)
++		core->stats.relay_rsp++;
++	else
++		core->stats.refused++;
++	return rc;
++}
++
++static int ba_post_relay_delba(struct hi5622_ba_core *core,
++			       const struct hi5622_ba_ops *ops,
++			       const struct hi5622_ba_peer *peer, u8 tid,
++			       u8 initiator)
++{
++	u8 wire[HI5622_BA_WIRE_MAX];
++	size_t len;
++	int rc;
++
++	len = hi5622_ba_wire_relay_delba(wire, sizeof(wire), peer->uid, tid,
++					 initiator);
++	if (len != HI5622_BA_RELAY_WIRE_LEN)
++		return HI5622_BA_EINVAL;
++	rc = ba_post_h2d(ops, wire, len);
++	core->stats.last_rc = rc;
++	if (!rc)
++		core->stats.relay_delba++;
++	else
++		core->stats.refused++;
++	return rc;
++}
++
++/* The g0 0x1C TX BA notify: informational (the decoded vendor firmware
++ * handler builds a follow-up MAC-core message); a post failure is recorded
++ * but never blocks the session state - the decoded contract does not make
++ * the notify a precondition of aggregation. */
++static void ba_post_notify(struct hi5622_ba_core *core,
++			   const struct hi5622_ba_ops *ops,
++			   const struct hi5622_ba_peer *peer, u8 tid, u8 value)
++{
++	u8 wire[HI5622_BA_WIRE_MAX];
++	size_t len;
++	int rc;
++
++	len = hi5622_ba_wire_tx_notify(wire, sizeof(wire), peer->uid, tid,
++				       value);
++	if (len != HI5622_BA_NOTIFY_WIRE_LEN)
++		return;
++	rc = ba_post_h2d(ops, wire, len);
++	core->stats.last_rc = rc;
++	if (!rc)
++		core->stats.notify++;
++	if (ops && ops->log && value == HI5622_BA_NOTIFY_TEARDOWN)
++		ops->log(ops->ctx, "ba: tx notify (teardown)");
++}
++
++/* ---- TX data path: aggregation window boundaries ----------------------- */
++
++int hi5622_ba_tx_mpdu(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, const u8 *mac, u8 tid,
++		      u16 seq)
++{
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_session *s;
++	u8 wire[HI5622_BA_WIRE_MAX];
++	size_t len;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !mac || tid >= HI5622_BA_MAX_TID)
++		return HI5622_BA_EINVAL;
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return HI5622_BA_ENOSPC;
++	s = &peer->tx[tid];
++	if (!s->used || s->state != 2)
++		return HI5622_BA_EOPNOTSUPP;	/* no agreement: never aggregate */
++	s->last_seq = seq;
++	if (!s->ampdu_started) {
++		len = hi5622_ba_wire_ampdu_start(wire, sizeof(wire), tid, seq,
++						 peer->uid, 0);
++		if (len != HI5622_BA_AMPDU_WIRE_LEN)
++			return HI5622_BA_EINVAL;
++		ret = ba_post_h2d(ops, wire, len);
++		core->stats.last_rc = ret;
++		if (ret) {
++			core->stats.refused++;
++			return ret;
++		}
++		core->stats.ampdu_start++;
++		s->ampdu_started = 1;
++		s->burst_count = 1;
++		if (ops && ops->log)
++			ops->log(ops->ctx, "ba: ampdu start");
++		return HI5622_BA_OK;
++	}
++	if (s->burst_count >= HI5622_BA_BURST_MAX) {
++		ret = hi5622_ba_tx_burst_end(core, ops, mac, tid);
++		if (ret)
++			return ret;
++		return hi5622_ba_tx_mpdu(core, ops, mac, tid, seq);
++	}
++	s->burst_count++;
++	return HI5622_BA_OK;
++}
++
++int hi5622_ba_tx_burst_end(struct hi5622_ba_core *core,
++			   const struct hi5622_ba_ops *ops, const u8 *mac,
++			   u8 tid)
++{
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_session *s;
++	u8 wire[HI5622_BA_WIRE_MAX];
++	size_t len;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !mac || tid >= HI5622_BA_MAX_TID)
++		return HI5622_BA_EINVAL;
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return HI5622_BA_ENOSPC;
++	s = &peer->tx[tid];
++	if (!s->used || !s->ampdu_started)
++		return HI5622_BA_OK;
++	len = hi5622_ba_wire_ampdu_end(wire, sizeof(wire), tid, peer->uid);
++	if (len != HI5622_BA_AMPDU_WIRE_LEN)
++		return HI5622_BA_EINVAL;
++	ret = ba_post_h2d(ops, wire, len);
++	core->stats.last_rc = ret;
++	if (ret) {
++		core->stats.refused++;
++		return ret;
++	}
++	core->stats.ampdu_end++;
++	s->ampdu_started = 0;
++	s->burst_count = 0;
++	if (ops && ops->log)
++		ops->log(ops->ctx, "ba: ampdu end");
++	return HI5622_BA_OK;
++}
++
++/* ---- host-initiated TX BA session (the in-kernel originator) ----------- */
++
++int hi5622_ba_tx_start(struct hi5622_ba_core *core,
++		       const struct hi5622_ba_ops *ops, const u8 *mac,
++		       const struct hi5622_ba_params *p)
++{
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_session *s;
++	u8 frame[HI5622_BA_FRAME_ADDBA_REQ_LEN];
++	struct hi5622_ba_params fp;
++	size_t flen;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !ops || !ops->tx_action || !mac || !p ||
++	    p->tid >= HI5622_BA_MAX_TID)
++		return HI5622_BA_EINVAL;
++	if (p->baw < HI5622_BA_BAW_MIN || p->baw > HI5622_BA_BAW_MAX)
++		return HI5622_BA_EINVAL;
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return HI5622_BA_ENOSPC;
++	s = &peer->tx[p->tid];
++	if (s->used && s->state == 2)
++		return HI5622_BA_OK;	/* already active: nothing to negotiate */
++	/* a retry of a pending request increments the dialog token (the
++	 * vendor increments a per-user counter) */
++	s->dialog = (u8)((s->used && s->state == 1) ? (s->dialog + 1) : 1);
++	s->used = 1;
++	s->state = 1;			/* ADDBA pending */
++	s->tid = p->tid;
++	s->policy = (u8)(p->policy & 1);
++	s->amsdu = (u8)(p->amsdu & 1);
++	s->baw = ba_clamp_baw(p->baw);
++	s->timeout_tu = p->timeout_tu;
++	s->ampdu_started = 0;
++	s->burst_count = 0;
++	fp = *p;
++	fp.dialog = s->dialog;
++	fp.baw = s->baw;
++	flen = hi5622_ba_build_addba_req(frame, sizeof(frame), &fp, peer->mac,
++					 core->own_mac, core->bssid);
++	if (flen != HI5622_BA_FRAME_ADDBA_REQ_LEN) {
++		s->state = 0;
++		s->used = 0;
++		return HI5622_BA_EINVAL;
++	}
++	ret = ops->tx_action(ops->ctx, frame, flen);
++	core->stats.last_rc = ret;
++	if (ret) {
++		core->stats.refused++;
++		s->state = 0;
++		s->used = 0;
++		return ret;
++	}
++	core->stats.addba_req++;
++	if (ops->log)
++		ops->log(ops->ctx, "ba: addba request tx");
++	return HI5622_BA_OK;
++}
++
++/* The TX-path hook: the in-kernel ADDBA negotiation decision for one QoS
++ * data MPDU.  This is what makes the AP the TX originator without any
++ * userspace help (stock hostapd has none of the vendor WAL commands). */
++int hi5622_ba_tx_data(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, const u8 *mac, u8 tid,
++		      u16 seq)
++{
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_session *s;
++	struct hi5622_ba_params p;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !mac || tid >= HI5622_BA_MAX_TID)
++		return HI5622_BA_EINVAL;
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return HI5622_BA_ENOSPC;
++	s = &peer->tx[tid];
++	if (!s->used || s->state == 0) {
++		ba_memset(&p, 0, sizeof(p));
++		p.tid = tid;
++		p.baw = HI5622_BA_BAW_DEFAULT;
++		p.timeout_tu = HI5622_BA_TIMEOUT_DEFAULT;
++		p.policy = 1;	/* immediate BA (vendor default) */
++		p.amsdu = 0;
++		return hi5622_ba_tx_start(core, ops, mac, &p);
++	}
++	if (s->state == 1)
++		return HI5622_BA_EAGAIN;	/* request outstanding: wait */
++	return hi5622_ba_tx_mpdu(core, ops, mac, tid, seq);
++}
++
++/* ---- received action frame --------------------------------------------- */
++
++int hi5622_ba_mgmt_rx(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, u16 uid, const u8 *mac,
++		      const u8 *frame, size_t len)
++{
++	struct hi5622_ba_action a;
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_session *s;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !ops || !mac || !frame)
++		return HI5622_BA_EINVAL;
++	if (hi5622_ba_parse_action(frame, len, &a) != HI5622_BA_OK) {
++		core->stats.refused++;
++		return HI5622_BA_EINVAL;
++	}
++	peer = hi5622_ba_peer_get(core, mac);
++	if (!peer)
++		return HI5622_BA_ENOSPC;
++	if (uid)
++		peer->uid = uid;
++	s = &peer->tx[a.tid];
++
++	if (a.action == HI5622_BA_ACTION_ADDBA_REQ) {
++		/* peer is the originator: AP answers with the response frame
++		 * and mirrors the RX session.  The vendor's per-TID RX sync to
++		 * the firmware uses the user-sync writer (item 7/8), whose
++		 * wire encoding is parked [U] - that is the RX direction, not
++		 * this lane's cut. */
++		u8 rsp[HI5622_BA_FRAME_ADDBA_RSP_LEN];
++		struct hi5622_ba_params rp;
++		size_t rlen;
++
++		s->used = 1;
++		s->state = 2;
++		s->tid = a.tid;
++		s->dialog = a.dialog;
++		s->policy = a.policy;
++		s->amsdu = a.amsdu;
++		s->baw = ba_clamp_baw(a.baw);
++		s->timeout_tu = a.timeout_tu;
++		s->start_seq = a.start_seq;
++		ba_memset(&rp, 0, sizeof(rp));
++		rp.tid = a.tid;
++		rp.dialog = a.dialog;
++		rp.policy = a.policy;
++		rp.amsdu = a.amsdu;
++		rp.baw = s->baw;
++		rp.status = 0;
++		rlen = hi5622_ba_build_addba_rsp(rsp, sizeof(rsp), &rp,
++						 peer->mac, core->own_mac,
++						 core->bssid);
++		if (rlen != HI5622_BA_FRAME_ADDBA_RSP_LEN)
++			return HI5622_BA_EINVAL;
++		if (!ops->tx_action)
++			return HI5622_BA_EINVAL;
++		ret = ops->tx_action(ops->ctx, rsp, rlen);
++		core->stats.last_rc = ret;
++		if (ret) {
++			core->stats.refused++;
++			return ret;
++		}
++		core->stats.addba_rsp++;
++		if (ops->log)
++			ops->log(ops->ctx, "ba: addba response tx");
++		return HI5622_BA_OK;
++	}
++
++	if (a.action == HI5622_BA_ACTION_ADDBA_RSP) {
++		struct hi5622_ba_params rp;
++
++		if (!s->used || s->state != 1) {
++			core->stats.refused++;
++			return HI5622_BA_EINVAL;	/* no pending request */
++		}
++		if (a.dialog != s->dialog) {
++			core->stats.refused++;
++			return HI5622_BA_EINVAL;	/* stale response */
++		}
++		ba_memset(&rp, 0, sizeof(rp));
++		rp.tid = a.tid;
++		rp.dialog = a.dialog;
++		rp.policy = a.policy;
++		rp.amsdu = a.amsdu;
++		rp.baw = ba_clamp_baw(a.baw);
++		rp.timeout_tu = a.timeout_tu;
++		rp.status = a.status;
++		ret = ba_post_relay_addba_rsp(core, ops, peer, &rp);
++		if (ret)
++			return ret;
++		if (a.status == 0) {
++			s->state = 2;	/* active: aggregation allowed */
++			s->baw = rp.baw;
++			s->timeout_tu = a.timeout_tu;
++			s->policy = a.policy;
++			s->amsdu = a.amsdu;
++			core->stats.sessions++;
++			/* vendor state machine: notify on pending -> active */
++			ba_post_notify(core, ops, peer, a.tid,
++				       HI5622_BA_NOTIFY_ACTIVE);
++			if (ops->log)
++				ops->log(ops->ctx, "ba: relay addba rsp (active)");
++		} else {
++			s->used = 0;
++			s->state = 0;
++			if (ops->log)
++				ops->log(ops->ctx, "ba: relay addba rsp (failed)");
++		}
++		return HI5622_BA_OK;
++	}
++
++	/* DELBA */
++	ret = ba_post_relay_delba(core, ops, peer, a.tid, a.initiator);
++	if (ret)
++		return ret;
++	if (s->used && s->state == 2)
++		ba_post_notify(core, ops, peer, a.tid,
++			       HI5622_BA_NOTIFY_TEARDOWN);
++	s->used = 0;
++	s->state = 0;
++	s->ampdu_started = 0;
++	if (ops->log)
++		ops->log(ops->ctx, "ba: relay delba");
++	return HI5622_BA_OK;
++}
++
++/* ---- firmware D2H events ----------------------------------------------- */
++
++int hi5622_ba_d2h(struct hi5622_ba_core *core,
++		  const struct hi5622_ba_ops *ops, const u8 *hdr, size_t len)
++{
++	struct hi5622_ba_peer *peer;
++	struct hi5622_ba_params p;
++	u16 uid;
++	u8 id, tid, action = 0;
++	int ret = hi5622_ba_check_enabled();
++
++	if (ret)
++		return ret;
++	if (!core || !ops || !hdr || len < HI5622_BA_HDR_LEN + 4)
++		return HI5622_BA_EINVAL;
++	id = hdr[6];
++	/* Not a BA event: ignore before any peer lookup (an unrelated D2H id
++	 * must never be misread as a BA session request). */
++	if (id != HI5622_BA_D2H_CREATE_BA && id != HI5622_BA_D2H_DEL_BA &&
++	    id != HI5622_BA_D2H_RX_DELBA_EVENT && id != HI5622_BA_D2H_BA_ACTION)
++		return HI5622_BA_OK;
++	uid = ba_get_le16(hdr + HI5622_BA_HDR_LEN);
++	if (id == HI5622_BA_D2H_BA_ACTION)
++		action = hdr[HI5622_BA_HDR_LEN + 3];
++	/* D2H 0x0F carries the TID at hdr[19] (the vendor handler reads
++	 * hdr[19..21]); ids 2/3/0x1D use hdr[14]. */
++	tid = (id == HI5622_BA_D2H_RX_DELBA_EVENT) ? hdr[19]
++						    : hdr[HI5622_BA_HDR_LEN + 2];
++	if (tid >= HI5622_BA_MAX_TID)
++		return HI5622_BA_EINVAL;
++	peer = hi5622_ba_peer_get_by_uid(core, uid);
++	if (!peer) {
++		/* no host-side user yet: fail closed, never guess a peer */
++		core->stats.refused++;
++		return HI5622_BA_EOPNOTSUPP;
++	}
++	core->stats.d2h_events++;
++
++	switch (id) {
++	case HI5622_BA_D2H_CREATE_BA:
++	case HI5622_BA_D2H_BA_ACTION:
++		if (id == HI5622_BA_D2H_BA_ACTION && action == 1) {
++			/* firmware relayed a received ADDBA response: the frame
++			 * bytes start at hdr+20 (TABLES T7) */
++			if (len < HI5622_BA_HDR_LEN + 8)
++				return HI5622_BA_EINVAL;
++			return hi5622_ba_mgmt_rx(core, ops, uid, peer->mac,
++						 hdr + HI5622_BA_HDR_LEN + 8,
++						 len - HI5622_BA_HDR_LEN - 8);
++		}
++		if (id == HI5622_BA_D2H_BA_ACTION && action == 2) {
++			/* firmware asks for a DELBA: initiator=1, reason=1 */
++			u8 frame[HI5622_BA_FRAME_DELBA_LEN];
++			size_t flen;
++
++			flen = hi5622_ba_build_delba(frame, sizeof(frame), tid,
++						     1, 1, peer->mac,
++						     core->own_mac, core->bssid);
++			if (flen != HI5622_BA_FRAME_DELBA_LEN)
++				return HI5622_BA_EINVAL;
++			if (!ops->tx_action)
++				return HI5622_BA_EINVAL;
++			ret = ops->tx_action(ops->ctx, frame, flen);
++			core->stats.last_rc = ret;
++			if (ret)
++				return ret;
++			core->stats.delba++;
++			return HI5622_BA_OK;
++		}
++		/* action 0 (or the old D2H 2): start a TX BA session */
++		ba_memset(&p, 0, sizeof(p));
++		p.tid = tid;
++		p.baw = HI5622_BA_BAW_DEFAULT;
++		p.dialog = (u8)(peer->tx[tid].dialog + 1);
++		p.policy = 1;	/* immediate BA (vendor default) */
++		p.amsdu = 0;
++		return hi5622_ba_tx_start(core, ops, peer->mac, &p);
++
++	case HI5622_BA_D2H_DEL_BA:
++	case HI5622_BA_D2H_RX_DELBA_EVENT: {
++		u8 frame[HI5622_BA_FRAME_DELBA_LEN];
++		size_t flen;
++		struct hi5622_ba_session *s = &peer->tx[tid];
++
++		if (!s->used || s->state != 2)
++			return HI5622_BA_OK;	/* nothing to tear down */
++		flen = hi5622_ba_build_delba(frame, sizeof(frame), tid, 1, 1,
++					     peer->mac, core->own_mac,
++					     core->bssid);
++		if (flen != HI5622_BA_FRAME_DELBA_LEN)
++			return HI5622_BA_EINVAL;
++		if (ops->tx_action) {
++			ret = ops->tx_action(ops->ctx, frame, flen);
++			core->stats.last_rc = ret;
++			if (ret)
++				return ret;
++		}
++		core->stats.delba++;
++		ba_post_notify(core, ops, peer, tid,
++			       HI5622_BA_NOTIFY_TEARDOWN);
++		s->used = 0;
++		s->state = 0;
++		s->ampdu_started = 0;
++		if (ops->log)
++			ops->log(ops->ctx, "ba: d2h delba -> delba tx");
++		return HI5622_BA_OK;
++	}
++	default:
++		return HI5622_BA_OK;	/* not a BA event: ignore */
++	}
++}
++
++/* ---- read-only status -------------------------------------------------- */
++
++int hi5622_ba_status_line(const struct hi5622_ba_core *core,
++			  unsigned int ba_enable, char *buf, size_t len)
++{
++	const struct hi5622_ba_stats *st;
++	unsigned int peers = 0, active = 0, pending = 0;
++	const char *mode;
++	int i, t, n;
++
++	if (!buf || !len)
++		return HI5622_BA_EINVAL;
++	if (ba_enable == 0u)
++		mode = "off";
++	else if (ba_enable == 1u)
++		mode = "tx-addba";
++	else
++		mode = "invalid";
++	if (core) {
++		for (i = 0; i < HI5622_BA_MAX_PEERS; i++) {
++			if (!core->peers[i].used)
++				continue;
++			peers++;
++			for (t = 0; t < HI5622_BA_MAX_TID; t++) {
++				if (!core->peers[i].tx[t].used)
++					continue;
++				if (core->peers[i].tx[t].state == 2)
++					active++;
++				else if (core->peers[i].tx[t].state == 1)
++					pending++;
++			}
++		}
++	}
++	st = core ? &core->stats : NULL;
++	n = snprintf(buf, len,
++		     "ba: ba_enable=%u (%s) peers=%u active=%u pending=%u req=%u rsp=%u delba=%u relay=%u/%u ampdu=%u/%u notify=%u events=%u refused=%u last_rc=%d\n",
++		     ba_enable, mode, peers, active, pending,
++		     st ? st->addba_req : 0u, st ? st->addba_rsp : 0u,
++		     st ? st->delba : 0u, st ? st->relay_rsp : 0u,
++		     st ? st->relay_delba : 0u, st ? st->ampdu_start : 0u,
++		     st ? st->ampdu_end : 0u, st ? st->notify : 0u,
++		     st ? st->d2h_events : 0u, st ? st->refused : 0u,
++		     st ? (int)st->last_rc : 0);
++	if (n < 0)
++		return (int)n;
++	return (int)((size_t)n < len ? (size_t)n : len - 1);
++}
+diff --git a/hi5622_ba.h b/hi5622_ba.h
+new file mode 100644
+index 0000000..52713bc
+--- /dev/null
++++ b/hi5622_ba.h
+@@ -0,0 +1,314 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_ba.h - fail-closed TX-direction block-ack (BA) core for the
++ * Hi5622V100 clean-room Wi-Fi driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * Lane wifi-ba-tx-impl (shared task-217, 2026-11-26).  PORTED from the
++ * committed BA skeleton (../wifi-ba-agg/src/hi5622_ba.{c,h}, task-178,
++ * artifact 78460841...cc33de02, 183 host checks) and extended with the
++ * TX-direction cut:
++ *
++ *   - the in-kernel ADDBA negotiation with the AP as TX originator
++ *     (hi5622_ba_tx_data(): first QoS MPDU to a bound peer -> ADDBA request;
++ *      the received ADDBA response -> g0 0x0A relay + TX BA notify + active);
++ *   - complete HCC wires (12-byte header + payload) for the three H2D BA
++ *     messages, byte-pinned in the host tests:
++ *       g0 0x0A BA relay        44 B (12 + 32)
++ *       g0 0x0B A-MPDU start/end 20 B (12 +  8)
++ *       g0 0x1C TX BA notify     32 B (12 + 20)
++ *   - the g0 0x1C TX BA notify emitted on the pending->active transition
++ *     (value 0) and on teardown (value 2), per the decoded vendor state
++ *     machine;
++ *   - the A-MPDU window boundaries on the TX path (start before a burst,
++ *     end after HI5622_BA_BURST_MAX MPDUs / at burst end / at teardown);
++ *   - a read-only status snapshot for the driver's cfg80211_status evidence.
++ *
++ * Wire facts and their evidence:
++ *   ../wifi-ba-agg/TABLES.md T3-T5/T8 (host-module decode) and
++ *   ../wifi-ba-agg/REPORT.md sec. 4/7.  The HCC header geometry of the three
++ *   messages was re-verified this lane from the pinned local vendor module
++ *   with objdump (hdr[0] group, hdr[6] id, total at hdr[4], tag 0x5a5a at
++ *   hdr[10], alloc nibble 1 / dst nibble hdr[1].high == hdr[9]); see
++ *   ../TABLES.md T1 of this lane.  Only derived addresses/byte values are
++ *   documented; no vendor binary is reproduced.
++ *
++ * Fail-closed contract (unchanged from the skeleton): every public entry
++ * point is inert unless the module parameter ba_enable == 1.  ba_enable == 0
++ * (default) returns -EOPNOTSUPP without building a frame, posting a message
++ * or changing state; ba_enable > 1 returns -EINVAL.  No caller may bypass it.
++ * The core is callback-driven (no device access), so the same code compiles
++ * in the kernel module and in the host selftest (-DHI5622_BA_HOST_TEST).
++ */
++#ifndef HI5622_BA_H
++#define HI5622_BA_H
++
++#ifdef HI5622_BA_HOST_TEST
++#include <stddef.h>
++#include <stdint.h>
++/* shared with h2d_frames.h (the host test compiles both) */
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++typedef int16_t  s16;
++typedef int32_t  s32;
++#endif
++#else
++#include <linux/types.h>
++#endif
++
++/* ---- decoded constants [V] --------------------------------------------- */
++
++#define HI5622_BA_H2D_BA_RELAY		0x0A	/* 32 B payload, 44 B wire */
++#define HI5622_BA_H2D_AMPDU_TX		0x0B	/*  8 B payload, 20 B wire */
++#define HI5622_BA_H2D_TX_BA_NOTIFY	0x1C	/* 20 B payload, 32 B wire */
++
++#define HI5622_BA_H2D_GROUP_CHIP	0u	/* HCC group 0 = chip/hmac     */
++/* The relay and A-MPDU builders write hdr[0] group nibble 0 (verified this
++ * lane from the vendor module: hmac_mgmt_rx_addba_rsp 0x45a84 bfi r2,r5,#0,4;
++ * the 0x0B builders preserve hcc_msg_alloc's group).  The vendor's TX BA
++ * notify builder forces hdr[0] = 2 (hmac_tx_ba_notify 0x16b90: mov r2,#2 /
++ * bfi r3,r2,#0,4) while the firmware advertises only a GROUP-0 id-0x1C
++ * handler (CA 0x5DFA0).  This lane posts the notify as group 0 (the
++ * handler-admitted pair; the informational notify must not weaken the
++ * driver's post gate) and records the vendor group-2 byte as a documented
++ * divergence - see REPORT.md sec. "the group byte" and TABLES.md T1. */
++#define HI5622_BA_H2D_GROUP_RELAY	0u
++#define HI5622_BA_H2D_GROUP_AMPDU	0u
++#define HI5622_BA_H2D_GROUP_NOTIFY	0u
++
++#define HI5622_BA_D2H_CREATE_BA		0x02
++#define HI5622_BA_D2H_DEL_BA		0x03
++#define HI5622_BA_D2H_RX_DELBA_EVENT	0x0F
++#define HI5622_BA_D2H_BA_ACTION		0x1D
++
++#define HI5622_BA_RELAY_TYPE		3
++#define HI5622_BA_RELAY_ADDBA_RSP	1
++#define HI5622_BA_RELAY_DELBA		2
++
++#define HI5622_BA_CATEGORY		3
++#define HI5622_BA_ACTION_ADDBA_REQ	0
++#define HI5622_BA_ACTION_ADDBA_RSP	1
++#define HI5622_BA_ACTION_DELBA		2
++
++#define HI5622_BA_HCC_TAG		0x5a5au
++#define HI5622_BA_HDR_LEN		12u
++#define HI5622_BA_ALLOC_NIBBLE		0x01u
++#define HI5622_BA_RELAY_PAYLOAD_LEN	32u
++#define HI5622_BA_RELAY_WIRE_LEN	44u
++#define HI5622_BA_AMPDU_PAYLOAD_LEN	8u
++#define HI5622_BA_AMPDU_WIRE_LEN	20u
++#define HI5622_BA_NOTIFY_PAYLOAD_LEN	20u
++#define HI5622_BA_NOTIFY_WIRE_LEN	32u
++#define HI5622_BA_WIRE_MAX		44u
++#define HI5622_BA_FRAME_ADDBA_REQ_LEN	33u
++#define HI5622_BA_FRAME_ADDBA_RSP_LEN	33u
++#define HI5622_BA_FRAME_DELBA_LEN	30u
++#define HI5622_BA_ACTION_MIN_LEN	9u
++#define HI5622_BA_FRAME_MAX		33u
++
++#define HI5622_BA_MAX_PEERS		8
++#define HI5622_BA_MAX_TID		8
++#define HI5622_BA_BAW_MIN		1
++#define HI5622_BA_BAW_MAX		256
++#define HI5622_BA_BAW_DEFAULT		64
++#define HI5622_BA_TIMEOUT_DEFAULT	0	/* vendor sends 0 (no timeout) */
++#define HI5622_BA_BURST_MAX		32
++
++/* TX BA notify values (the vendor state machine: 0 = pending->active,
++ * 2 = teardown) [V]. */
++#define HI5622_BA_NOTIFY_ACTIVE		0u
++#define HI5622_BA_NOTIFY_TEARDOWN	2u
++
++#define HI5622_BA_OK			0
++#define HI5622_BA_EINVAL		(-22)
++#define HI5622_BA_ENOSPC		(-28)
++#define HI5622_BA_EOPNOTSUPP		(-95)
++#define HI5622_BA_EAGAIN		(-11)
++
++/* ---- wire structures --------------------------------------------------- */
++
++struct hi5622_ba_params {
++	u8  tid;
++	u8  dialog;
++	u8  policy;		/* BA parameter set bit 1 */
++	u8  amsdu;		/* BA parameter set bit 0 */
++	u16 baw;		/* buffer size, 10-bit field, 1..256 */
++	u16 timeout_tu;		/* BA timeout in TU */
++	u16 start_seq;		/* starting sequence control */
++	u16 status;		/* ADDBA response status (0 = success) */
++};
++
++struct hi5622_ba_action {
++	u8  action;		/* 0 req, 1 rsp, 2 delba */
++	u8  tid;
++	u8  dialog;
++	u8  policy;
++	u8  amsdu;
++	u8  initiator;		/* DELBA only */
++	u16 baw;
++	u16 timeout_tu;
++	u16 start_seq;
++	u16 status;		/* ADDBA rsp only */
++	u16 reason;		/* DELBA only */
++};
++
++struct hi5622_ba_session {
++	u8  used;
++	u8  state;		/* 0 idle, 1 ADDBA pending, 2 active */
++	u8  tid;
++	u8  dialog;
++	u8  policy;
++	u8  amsdu;
++	u8  ampdu_started;
++	u8  burst_count;
++	u16 baw;
++	u16 timeout_tu;
++	u16 start_seq;
++	u16 last_seq;
++};
++
++struct hi5622_ba_peer {
++	u8  used;
++	u8  mac[6];
++	u16 uid;		/* firmware user index (vendor user+0xa84) */
++	struct hi5622_ba_session tx[HI5622_BA_MAX_TID];
++};
++
++struct hi5622_ba_stats {
++	u32 addba_req;		/* ADDBA request action frames sent     */
++	u32 addba_rsp;		/* ADDBA response action frames sent    */
++	u32 delba;		/* DELBA action frames sent             */
++	u32 relay_rsp;		/* g0 0x0A subtype 1 posted             */
++	u32 relay_delba;	/* g0 0x0A subtype 2 posted             */
++	u32 ampdu_start;	/* g0 0x0B start posted                 */
++	u32 ampdu_end;		/* g0 0x0B end posted                   */
++	u32 notify;		/* g0 0x1C posted                       */
++	u32 sessions;		/* sessions that reached active         */
++	u32 refused;		/* entry points refused (gate/args)     */
++	u32 d2h_events;		/* BA D2H events consumed               */
++	u32 last_rc;		/* last post/action return code         */
++};
++
++struct hi5622_ba_core {
++	struct hi5622_ba_peer peers[HI5622_BA_MAX_PEERS];
++	u8  own_mac[6];		/* our SA / BSSID for action frames */
++	u8  bssid[6];
++	struct hi5622_ba_stats stats;
++};
++
++struct hi5622_ba_ops {
++	void *ctx;
++	/* post one complete HCC wire (12 B header + payload) through the
++	 * driver's single post path.  The core has already filled group, id,
++	 * total length, tag and payload.  Return 0 on success. */
++	int (*post_h2d)(void *ctx, const u8 *wire, size_t total_len);
++	/* transmit one 802.11 action frame through the proven mgmt-TX path */
++	int (*tx_action)(void *ctx, const u8 *frame, size_t len);
++	void (*log)(void *ctx, const char *msg);
++};
++
++/* ---- module param / enable gate ---------------------------------------- */
++
++extern unsigned int hi5622_ba_enable;
++int hi5622_ba_check_enabled(void);	/* 0, -EOPNOTSUPP or -EINVAL */
++
++/* ---- core -------------------------------------------------------------- */
++
++void hi5622_ba_core_init(struct hi5622_ba_core *core);
++void hi5622_ba_core_set_addrs(struct hi5622_ba_core *core, const u8 *own_mac,
++			      const u8 *bssid);
++struct hi5622_ba_peer *hi5622_ba_peer_get(struct hi5622_ba_core *core,
++					  const u8 *mac);
++struct hi5622_ba_peer *hi5622_ba_peer_get_by_uid(struct hi5622_ba_core *core,
++						 u16 uid);
++/* Bind (create or refresh) the peer and its firmware user index.  The glue
++ * calls this from the cfg80211 station table before every D2H/action event;
++ * an unknown uid never creates a peer (fail closed, no guessed MAC). */
++struct hi5622_ba_peer *hi5622_ba_peer_bind(struct hi5622_ba_core *core,
++					   const u8 *mac, u16 uid);
++void hi5622_ba_peer_drop(struct hi5622_ba_core *core,
++			 struct hi5622_ba_peer *peer);
++u32 hi5622_ba_active_sessions(const struct hi5622_ba_core *core);
++
++/* ---- byte-exact action-frame builders (vendor shapes) ------------------ */
++
++size_t hi5622_ba_build_addba_req(u8 *frame, size_t cap,
++				 const struct hi5622_ba_params *p,
++				 const u8 *da, const u8 *sa, const u8 *bssid);
++size_t hi5622_ba_build_addba_rsp(u8 *frame, size_t cap,
++				 const struct hi5622_ba_params *p,
++				 const u8 *da, const u8 *sa, const u8 *bssid);
++size_t hi5622_ba_build_delba(u8 *frame, size_t cap, u8 tid, u8 initiator,
++			     u16 reason, const u8 *da, const u8 *sa,
++			     const u8 *bssid);
++
++/* ---- byte-exact payload builders (vendor shapes, T3-T5) ---------------- */
++
++size_t hi5622_ba_build_relay_addba_rsp(u8 *payload, size_t cap, u16 uid,
++				       const struct hi5622_ba_params *p);
++size_t hi5622_ba_build_relay_delba(u8 *payload, size_t cap, u16 uid, u8 tid,
++				   u8 initiator);
++size_t hi5622_ba_build_ampdu_start(u8 *payload, size_t cap, u8 tid, u16 seq,
++				   u16 uid, u8 flag);
++size_t hi5622_ba_build_ampdu_end(u8 *payload, size_t cap, u8 tid, u16 uid);
++size_t hi5622_ba_build_tx_notify(u8 *payload, size_t cap, u16 uid, u8 tid,
++				 u8 value);
++
++/* ---- complete HCC wire builders (12 B header + payload) ---------------- */
++
++/* Fill a complete 44/20/32-byte wire (group/id/total/tag/payload) and return
++ * its length, 0 on a refused argument or disabled gate.  These are the byte
++ * shapes the host tests pin and the glue posts through hi5622_frame_post()
++ * (which re-validates group/id/length/tag/dst/alloc against the firmware
++ * handler tables before any device write). */
++size_t hi5622_ba_wire_relay_addba_rsp(u8 *wire, size_t cap, u16 uid,
++				      const struct hi5622_ba_params *p);
++size_t hi5622_ba_wire_relay_delba(u8 *wire, size_t cap, u16 uid, u8 tid,
++				  u8 initiator);
++size_t hi5622_ba_wire_ampdu_start(u8 *wire, size_t cap, u8 tid, u16 seq,
++				  u16 uid, u8 flag);
++size_t hi5622_ba_wire_ampdu_end(u8 *wire, size_t cap, u8 tid, u16 uid);
++size_t hi5622_ba_wire_tx_notify(u8 *wire, size_t cap, u16 uid, u8 tid,
++				u8 value);
++/* Wrap one raw payload into a complete header (id/group per message). */
++void hi5622_ba_wrap_h2d(u8 *wire, size_t payload_len, u8 group, u8 id);
++
++/* ---- parsers ----------------------------------------------------------- */
++
++int hi5622_ba_parse_action(const u8 *frame, size_t len,
++			   struct hi5622_ba_action *out);
++
++/* ---- high-level state machine ------------------------------------------ */
++
++/* Host-initiated TX BA session: send the ADDBA request, state = pending. */
++int hi5622_ba_tx_start(struct hi5622_ba_core *core,
++		       const struct hi5622_ba_ops *ops,
++		       const u8 *mac, const struct hi5622_ba_params *p);
++/* The in-kernel TX-originator step for one QoS data MPDU:
++ *   idle    -> start the ADDBA negotiation (one request, state pending);
++ *   pending -> -EAGAIN (the request is outstanding; never aggregate yet);
++ *   active  -> emit the g0 0x0B A-MPDU start/end window boundaries.
++ * Returns 0 on success, -EOPNOTSUPP when no session/peer, or a refused arg. */
++int hi5622_ba_tx_data(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, const u8 *mac, u8 tid,
++		      u16 seq);
++int hi5622_ba_mgmt_rx(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, u16 uid, const u8 *mac,
++		      const u8 *frame, size_t len);
++int hi5622_ba_d2h(struct hi5622_ba_core *core,
++		  const struct hi5622_ba_ops *ops, const u8 *hdr, size_t len);
++int hi5622_ba_tx_mpdu(struct hi5622_ba_core *core,
++		      const struct hi5622_ba_ops *ops, const u8 *mac, u8 tid,
++		      u16 seq);
++int hi5622_ba_tx_burst_end(struct hi5622_ba_core *core,
++			   const struct hi5622_ba_ops *ops, const u8 *mac,
++			   u8 tid);
++
++/* ---- read-only status (cfg80211_status evidence) ----------------------- */
++
++int hi5622_ba_status_line(const struct hi5622_ba_core *core,
++			  unsigned int ba_enable, char *buf, size_t len);
++
++#endif /* HI5622_BA_H */
+diff --git a/hi5622_ba_glue.c b/hi5622_ba_glue.c
+new file mode 100644
+index 0000000..b3c05ee
+--- /dev/null
++++ b/hi5622_ba_glue.c
+@@ -0,0 +1,597 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_ba_glue.c - kernel binding for the fail-closed TX-direction BA core
++ * (lane wifi-ba-tx-impl, shared task-217).
++ *
++ * See hi5622_ba_glue.h for the integration points and hi5622_ba.h for the
++ * decoded wire contract.  All H2D/action posts are deferred to a workqueue
++ * because the D2H/mgmt hooks run in the HCC service kthread and the data-TX
++ * hook runs in ndo_start_xmit context; neither may run the sleeping post path
++ * inline.
++ */
++#include <linux/etherdevice.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++
++#include "hi5622_driver.h"
++#include "hi5622_cfg80211.h"
++#include "hi5622_frame_post.h"
++#include "hi5622_sta_ops_logic.h"
++#include "hi5622_mgmt_logic.h"
++#include "hi5622_ba.h"
++#include "hi5622_ba_glue.h"
++
++/* Bound on one deferred D2H/mgmt payload (34 B relay action frame fits). */
++#define HI5622_BA_GLUE_D2H_MAX		96u
++#define HI5622_BA_GLUE_MGMT_MAX		64u
++/* A burst window is closed when no new MPDU arrived for this long. */
++#define HI5622_BA_GLUE_BURST_HOLD_MS	20u
++/* AP data TX pacing: at most one negotiation/boundary work item at a time. */
++
++struct hi5622_ba_glue {
++	struct mutex		lock;		/* serializes the portable core */
++	struct hi5622_pci	*ctx;
++	struct hi5622_ba_core	core;
++	bool			ap_up;
++	u8			ap_band;
++	u8			ap_channel;
++	u8			ap_mac[6];
++	u32			seq;		/* mgmt-TX cookie sequence */
++
++	/* deferred D2H BA event (one slot; a newer event replaces it) */
++	struct work_struct	d2h_work;
++	spinlock_t		d2h_lock;
++	u8			d2h_buf[HI5622_BA_GLUE_D2H_MAX];
++	u32			d2h_len;
++	bool			d2h_pending;
++
++	/* deferred received action frame (one slot) */
++	struct work_struct	mgmt_work;
++	spinlock_t		mgmt_lock;
++	u8			mgmt_buf[HI5622_BA_GLUE_MGMT_MAX];
++	u32			mgmt_len;
++	bool			mgmt_pending;
++
++	/* deferred AP data-TX step + burst window close */
++	struct work_struct	tx_work;
++	struct delayed_work	end_work;
++	spinlock_t		tx_lock;
++	u8			tx_peer[6];
++	u16			tx_seq;
++	u8			tx_tid;
++	u32			tx_count;
++	bool			tx_pending;
++	bool			tx_open;
++
++	/* evidence counters */
++	u32			posts;
++	u32			refused;
++	u32			refused_gate;
++	u32			refused_no_ap;
++	u32			refused_no_sta;
++	u32			d2h_events;
++	u32			d2h_dropped;
++	u32			mgmt_events;
++	u32			mgmt_dropped;
++	u32			tx_events;
++	int			last_rc;
++};
++
++static struct hi5622_ba_glue ba_glue = {
++	.lock = __MUTEX_INITIALIZER(ba_glue.lock),
++	.d2h_lock = __SPIN_LOCK_UNLOCKED(ba_glue.d2h_lock),
++	.mgmt_lock = __SPIN_LOCK_UNLOCKED(ba_glue.mgmt_lock),
++	.tx_lock = __SPIN_LOCK_UNLOCKED(ba_glue.tx_lock),
++};
++
++static const struct hi5622_ba_ops ba_glue_ops;
++
++/* ------------------------------------------------------------------ */
++/* helpers                                                             */
++/* ------------------------------------------------------------------ */
++
++static bool ba_glue_armed(void)
++{
++	return hi5622_ba_check_enabled() == HI5622_BA_OK;
++}
++
++/* The peer's firmware user index (the BA messages' object key) from the
++ * cfg80211 station table; -ENOENT when the station is not known. */
++static int ba_glue_uid(struct hi5622_pci *ctx, const u8 *mac, u16 *uid)
++{
++	struct hi5622_cfg80211 *c = ctx ? ctx->cfg : NULL;
++	const struct hsop_sta *st;
++
++	if (!c || !mac || !uid)
++		return -ENODEV;
++	st = hsop_sta_find_const(&c->sta_table, mac);
++	if (!st)
++		return -ENOENT;
++	*uid = st->aid;
++	return 0;
++}
++
++/* The single H2D wire path; the core built the complete header + payload. */
++static int ba_glue_post_h2d(void *vctx, const u8 *wire, size_t len)
++{
++	struct hi5622_pci *ctx = vctx;
++	const char *what = "ba_h2d";
++	u16 id;
++	int rc;
++
++	if (!ctx || !wire || len < HI5622_BA_HDR_LEN)
++		return -EINVAL;
++	id = (u16)(wire[6] | ((u16)wire[7] << 8));
++	if (id == HI5622_BA_H2D_BA_RELAY)
++		what = "ba_relay";
++	else if (id == HI5622_BA_H2D_AMPDU_TX)
++		what = "ba_ampdu";
++	else if (id == HI5622_BA_H2D_TX_BA_NOTIFY)
++		what = "ba_notify";
++	rc = hi5622_frame_post(ctx, wire, len, what, NULL);
++	if (rc)
++		ba_glue.refused++;
++	else
++		ba_glue.posts++;
++	ba_glue.last_rc = rc;
++	return rc;
++}
++
++/* The proven mgmt-TX carrier (HCC g0 id 6, 48 B device control + inline
++ * 802.11 action frame) for the three BA action frames. */
++static int ba_glue_tx_action(void *vctx, const u8 *frame, size_t len)
++{
++	struct hi5622_pci *ctx = vctx;
++	struct himg_tx_params p;
++	u8 wire[HIMG_MGMT_TX_MAX_TOTAL];
++	size_t wlen = 0;
++	u16 uid = 0;
++	int rc;
++
++	if (!ctx || !frame || !len)
++		return -EINVAL;
++	if (!ba_glue.ap_up || !ba_glue.ap_channel) {
++		ba_glue.refused_no_ap++;
++		return -ENOTCONN;
++	}
++	memset(&p, 0, sizeof(p));
++	(void)ba_glue_uid(ctx, frame + 4, &uid);	/* addr1 = the peer */
++	p.channel = ba_glue.ap_channel;
++	p.len = (u16)len;
++	p.seq = ++ba_glue.seq;
++	p.dst = 0u;			/* single AP VAP -> dst nibble 0 */
++	p.frame = frame;
++	p.frame_len = (u16)len;
++	p.band = ba_glue.ap_band;
++	p.hdr2 = 0u;
++	p.vap_id = 0u;
++	p.cookie = (u16)(ba_glue.seq & 0x0fu);
++	p.user_id = uid;
++	rc = himg_build_hcc_mgmt_tx(wire, sizeof(wire), &wlen, &p);
++	if (rc) {
++		ba_glue.refused++;
++		ba_glue.last_rc = rc;
++		return rc;
++	}
++	rc = hi5622_frame_post(ctx, wire, wlen, "ba_mgmt_tx", NULL);
++	if (rc)
++		ba_glue.refused++;
++	else
++		ba_glue.posts++;
++	ba_glue.last_rc = rc;
++	return rc;
++}
++
++static void ba_glue_log(void *vctx, const char *msg)
++{
++	struct hi5622_pci *ctx = vctx;
++
++	if (!ctx || !ctx->pdev || !msg)
++		return;
++	dev_info_ratelimited(&ctx->pdev->dev, "ba: %s\n", msg);
++}
++
++static const struct hi5622_ba_ops ba_glue_ops = {
++	.post_h2d = ba_glue_post_h2d,
++	.tx_action = ba_glue_tx_action,
++	.log = ba_glue_log,
++};
++
++/* Bind the peer in the portable core (caller holds ba_glue.lock).  The uid
++ * comes from the cfg80211 station table; an unknown station is refused (the
++ * firmware BA messages are keyed by that user index - never guess it). */
++static struct hi5622_ba_peer *ba_glue_bind(struct hi5622_pci *ctx,
++					   const u8 *mac, u16 *uid_out)
++{
++	struct hi5622_ba_peer *peer;
++	u16 uid = 0;
++
++	if (ba_glue_uid(ctx, mac, &uid))
++		return NULL;
++	peer = hi5622_ba_peer_bind(&ba_glue.core, mac, uid);
++	if (peer && uid_out)
++		*uid_out = uid;
++	return peer;
++}
++
++/* ------------------------------------------------------------------ */
++/* deferred D2H BA events                                              */
++/* ------------------------------------------------------------------ */
++
++static void ba_glue_d2h_workfn(struct work_struct *work)
++{
++	struct hi5622_ba_glue *g = container_of(work, struct hi5622_ba_glue,
++						d2h_work);
++	struct hi5622_pci *ctx = g->ctx;
++	u8 buf[HI5622_BA_GLUE_D2H_MAX];
++	u32 len = 0;
++	u16 uid;
++	u8 id;
++	int rc;
++
++	spin_lock_bh(&g->d2h_lock);
++	if (!g->d2h_pending) {
++		spin_unlock_bh(&g->d2h_lock);
++		return;
++	}
++	memcpy(buf, g->d2h_buf, g->d2h_len);
++	len = g->d2h_len;
++	g->d2h_pending = false;
++	spin_unlock_bh(&g->d2h_lock);
++	if (!ctx || len < HI5622_BA_HDR_LEN + 4)
++		return;
++	id = buf[6];
++	uid = (u16)(buf[HI5622_BA_HDR_LEN] |
++		    ((u16)buf[HI5622_BA_HDR_LEN + 1] << 8));
++	mutex_lock(&g->lock);
++	if (hi5622_ba_peer_get_by_uid(&g->core, uid) == NULL) {
++		/* resolve the user index through the cfg80211 station table:
++		 * the D2H event carries no MAC, the host side does */
++		const struct hsop_sta *st;
++		int i;
++
++		st = NULL;
++		for (i = 0; i < (int)HSOP_MAX_STA; i++) {
++			if (ctx->cfg && ctx->cfg->sta_table.sta[i].used &&
++			    ctx->cfg->sta_table.sta[i].aid == uid) {
++				st = &ctx->cfg->sta_table.sta[i];
++				break;
++			}
++		}
++		if (!st) {
++			g->refused++;
++			g->last_rc = -ENOENT;
++			mutex_unlock(&g->lock);
++			return;
++		}
++		if (!hi5622_ba_peer_bind(&g->core, st->mac, uid)) {
++			g->refused++;
++			g->last_rc = -ENOSPC;
++			mutex_unlock(&g->lock);
++			return;
++		}
++	}
++	rc = hi5622_ba_d2h(&g->core, &ba_glue_ops, buf, len);
++	g->last_rc = rc;
++	g->d2h_events++;
++	dev_dbg(&ctx->pdev->dev, "ba: d2h id %u uid %u rc %d\n", id, uid, rc);
++	mutex_unlock(&g->lock);
++}
++
++void hi5622_ba_glue_d2h(struct hi5622_pci *ctx, const u8 *hdr,
++			const u8 *payload, u32 payload_avail, u32 wire_len)
++{
++	u32 n;
++
++	if (!ctx || !hdr || !payload)
++		return;
++	if (!ba_glue_armed())
++		return;
++	/* Cheap filter first: the four decoded D2H BA event ids on the D2H
++	 * event group (group 3).  Group 4 carries the boot/ready ids 1..4 and
++	 * must never be read as a BA event. */
++	if ((hdr[0] & 0x0fu) != 3u)
++		return;
++	if (hdr[6] != HI5622_BA_D2H_CREATE_BA &&
++	    hdr[6] != HI5622_BA_D2H_DEL_BA &&
++	    hdr[6] != HI5622_BA_D2H_RX_DELBA_EVENT &&
++	    hdr[6] != HI5622_BA_D2H_BA_ACTION)
++		return;
++	spin_lock_bh(&ba_glue.d2h_lock);
++	if (ba_glue.d2h_pending) {
++		ba_glue.d2h_dropped++;
++		spin_unlock_bh(&ba_glue.d2h_lock);
++		return;
++	}
++	n = wire_len;
++	if (n < HI5622_BA_HDR_LEN || n > HI5622_BA_GLUE_D2H_MAX) {
++		ba_glue.d2h_dropped++;
++		spin_unlock_bh(&ba_glue.d2h_lock);
++		return;
++	}
++	memcpy(ba_glue.d2h_buf, hdr, HI5622_BA_HDR_LEN);
++	n = min(n - HI5622_BA_HDR_LEN, payload_avail);
++	if (n > HI5622_BA_GLUE_D2H_MAX - HI5622_BA_HDR_LEN)
++		n = HI5622_BA_GLUE_D2H_MAX - HI5622_BA_HDR_LEN;
++	memcpy(ba_glue.d2h_buf + HI5622_BA_HDR_LEN, payload, n);
++	ba_glue.d2h_len = HI5622_BA_HDR_LEN + n;
++	ba_glue.d2h_pending = true;
++	spin_unlock_bh(&ba_glue.d2h_lock);
++	schedule_work(&ba_glue.d2h_work);
++}
++
++/* ------------------------------------------------------------------ */
++/* deferred received action frames                                     */
++/* ------------------------------------------------------------------ */
++
++static void ba_glue_mgmt_workfn(struct work_struct *work)
++{
++	struct hi5622_ba_glue *g = container_of(work, struct hi5622_ba_glue,
++						mgmt_work);
++	struct hi5622_pci *ctx = g->ctx;
++	u8 frame[HI5622_BA_GLUE_MGMT_MAX];
++	u8 peer[6];
++	u32 len;
++	u16 uid = 0;
++	u8 tid;
++	int rc;
++
++	spin_lock_bh(&g->mgmt_lock);
++	if (!g->mgmt_pending) {
++		spin_unlock_bh(&g->mgmt_lock);
++		return;
++	}
++	memcpy(frame, g->mgmt_buf, g->mgmt_len);
++	len = g->mgmt_len;
++	g->mgmt_pending = false;
++	spin_unlock_bh(&g->mgmt_lock);
++	if (!ctx || len < 25)
++		return;
++	memcpy(peer, frame + 10, 6);	/* addr2 = the transmitter/peer */
++	mutex_lock(&g->lock);
++	if (!ba_glue_bind(ctx, peer, &uid)) {
++		g->refused_no_sta++;
++		g->last_rc = -ENOENT;
++		mutex_unlock(&g->lock);
++		return;
++	}
++	rc = hi5622_ba_mgmt_rx(&g->core, &ba_glue_ops, uid, peer, frame, len);
++	/* DELBA parameter byte at frame[27]: tid<<4 | initiator<<3 */
++	tid = (u8)((frame[27] >> 4) & 0x0fu);
++	g->last_rc = rc;
++	g->mgmt_events++;
++	dev_dbg(&ctx->pdev->dev,
++		"ba: mgmt action 3/%u from %pM rc %d\n", frame[25], peer, rc);
++	if (rc == 0 && frame[25] == HI5622_BA_ACTION_DELBA)
++		hi5622_ba_tx_burst_end(&g->core, &ba_glue_ops, peer, tid);
++	mutex_unlock(&g->lock);
++}
++
++void hi5622_ba_glue_mgmt_rx(struct hi5622_pci *ctx, const u8 *frame,
++			    size_t len)
++{
++	if (!ctx || !frame)
++		return;
++	if (!ba_glue_armed())
++		return;
++	if (len < 26 || len > HI5622_BA_GLUE_MGMT_MAX)
++		return;
++	if (frame[0] != 0xd0 || frame[1] != 0x00)
++		return;			/* management action only */
++	if (frame[24] != HI5622_BA_CATEGORY)
++		return;			/* block-ack category 3 only */
++	spin_lock_bh(&ba_glue.mgmt_lock);
++	if (ba_glue.mgmt_pending) {
++		ba_glue.mgmt_dropped++;
++		spin_unlock_bh(&ba_glue.mgmt_lock);
++		return;
++	}
++	memcpy(ba_glue.mgmt_buf, frame, len);
++	ba_glue.mgmt_len = (u32)len;
++	ba_glue.mgmt_pending = true;
++	spin_unlock_bh(&ba_glue.mgmt_lock);
++	schedule_work(&ba_glue.mgmt_work);
++}
++
++/* ------------------------------------------------------------------ */
++/* deferred AP data-TX step (the in-kernel ADDBA originator)           */
++/* ------------------------------------------------------------------ */
++
++static void ba_glue_end_workfn(struct work_struct *work)
++{
++	struct hi5622_ba_glue *g = container_of(work, struct hi5622_ba_glue,
++						end_work.work);
++	struct hi5622_pci *ctx = g->ctx;
++	u8 peer[6];
++	u8 tid;
++	int rc;
++
++	spin_lock_bh(&g->tx_lock);
++	if (!g->tx_open) {
++		spin_unlock_bh(&g->tx_lock);
++		return;
++	}
++	memcpy(peer, g->tx_peer, 6);
++	tid = g->tx_tid;
++	g->tx_open = false;
++	spin_unlock_bh(&g->tx_lock);
++	if (!ctx)
++		return;
++	mutex_lock(&g->lock);
++	rc = hi5622_ba_tx_burst_end(&g->core, &ba_glue_ops, peer, tid);
++	g->last_rc = rc;
++	mutex_unlock(&g->lock);
++}
++
++static void ba_glue_tx_workfn(struct work_struct *work)
++{
++	struct hi5622_ba_glue *g = container_of(work, struct hi5622_ba_glue,
++						tx_work);
++	struct hi5622_pci *ctx = g->ctx;
++	u8 peer[6];
++	u16 seq;
++	u8 tid;
++	int rc;
++
++	spin_lock_bh(&g->tx_lock);
++	if (!g->tx_pending) {
++		spin_unlock_bh(&g->tx_lock);
++		return;
++	}
++	memcpy(peer, g->tx_peer, 6);
++	seq = g->tx_seq;
++	tid = g->tx_tid;
++	g->tx_pending = false;
++	spin_unlock_bh(&g->tx_lock);
++	if (!ctx)
++		return;
++	mutex_lock(&g->lock);
++	if (!ba_glue_bind(ctx, peer, NULL)) {
++		g->refused_no_sta++;
++		g->last_rc = -ENOENT;
++		mutex_unlock(&g->lock);
++		return;
++	}
++	rc = hi5622_ba_tx_data(&g->core, &ba_glue_ops, peer, tid, seq);
++	g->last_rc = rc;
++	g->tx_events++;
++	if (rc == 0) {
++		spin_lock_bh(&g->tx_lock);
++		g->tx_open = true;
++		spin_unlock_bh(&g->tx_lock);
++		/* close the A-MPDU window when the burst goes quiet */
++		mod_delayed_work(system_wq, &g->end_work,
++				 msecs_to_jiffies(HI5622_BA_GLUE_BURST_HOLD_MS));
++	}
++	mutex_unlock(&g->lock);
++}
++
++void hi5622_ba_glue_tx_data(struct hi5622_pci *ctx, const u8 *peer, u8 tid,
++			    u16 seq)
++{
++	if (!ctx || !peer)
++		return;
++	if (!ba_glue_armed())
++		return;
++	if (tid >= HI5622_BA_MAX_TID)
++		return;
++	spin_lock_bh(&ba_glue.tx_lock);
++	memcpy(ba_glue.tx_peer, peer, 6);
++	ba_glue.tx_tid = tid;
++	ba_glue.tx_seq = seq;
++	ba_glue.tx_count++;
++	ba_glue.tx_pending = true;
++	spin_unlock_bh(&ba_glue.tx_lock);
++	schedule_work(&ba_glue.tx_work);
++}
++
++/* ------------------------------------------------------------------ */
++/* lifecycle                                                           */
++/* ------------------------------------------------------------------ */
++
++int hi5622_ba_glue_init(struct hi5622_pci *ctx)
++{
++	if (!ctx)
++		return -EINVAL;
++	memset(&ba_glue.core, 0, sizeof(ba_glue.core));
++	hi5622_ba_core_init(&ba_glue.core);
++	ba_glue.ctx = ctx;
++	ba_glue.ap_up = false;
++	ba_glue.ap_channel = 0;
++	ba_glue.ap_band = 0;
++	memset(ba_glue.ap_mac, 0, sizeof(ba_glue.ap_mac));
++	INIT_WORK(&ba_glue.d2h_work, ba_glue_d2h_workfn);
++	INIT_WORK(&ba_glue.mgmt_work, ba_glue_mgmt_workfn);
++	INIT_WORK(&ba_glue.tx_work, ba_glue_tx_workfn);
++	INIT_DELAYED_WORK(&ba_glue.end_work, ba_glue_end_workfn);
++	if (hi5622_ba_enable == 1u)
++		dev_info(&ctx->pdev->dev,
++			 "ba: TX-direction block-ack ARMED (ba_enable=1): in-kernel ADDBA originator (AP-as-TX), g0 0x0A relay/g0 0x0B A-MPDU/g0 0x1C notify; no peer -> no frame (fail-closed)\n");
++	else if (hi5622_ba_enable > 1u)
++		dev_warn(&ctx->pdev->dev,
++			 "ba: ba_enable=%u is invalid (>1) - every BA entry point refuses (-EINVAL), no frame, no H2D\n",
++			 hi5622_ba_enable);
++	else
++		dev_info(&ctx->pdev->dev,
++			 "ba: TX-direction block-ack OFF (ba_enable=0 default): inert, no frame, no H2D message\n");
++	return 0;
++}
++
++void hi5622_ba_glue_remove(struct hi5622_pci *ctx)
++{
++	if (!ctx)
++		return;
++	cancel_work_sync(&ba_glue.d2h_work);
++	cancel_work_sync(&ba_glue.mgmt_work);
++	cancel_work_sync(&ba_glue.tx_work);
++	cancel_delayed_work_sync(&ba_glue.end_work);
++	ba_glue.ctx = NULL;
++}
++
++void hi5622_ba_glue_ap_up(struct hi5622_pci *ctx, u8 band, u8 channel,
++			  const u8 *mac)
++{
++	if (!ctx)
++		return;
++	mutex_lock(&ba_glue.lock);
++	ba_glue.ap_up = true;
++	ba_glue.ap_band = (u8)(band & 0x0fu);
++	ba_glue.ap_channel = channel;
++	if (mac)
++		memcpy(ba_glue.ap_mac, mac, 6);
++	hi5622_ba_core_set_addrs(&ba_glue.core, ba_glue.ap_mac,
++				 ba_glue.ap_mac);
++	mutex_unlock(&ba_glue.lock);
++	dev_info_ratelimited(&ctx->pdev->dev,
++			     "ba: AP up recorded (band %u channel %u mac %pM) - action frames can be sent once a peer negotiates\n",
++			     band, channel, ba_glue.ap_mac);
++}
++
++void hi5622_ba_glue_ap_down(struct hi5622_pci *ctx)
++{
++	if (!ctx)
++		return;
++	cancel_delayed_work_sync(&ba_glue.end_work);
++	mutex_lock(&ba_glue.lock);
++	ba_glue.ap_up = false;
++	ba_glue.ap_channel = 0;
++	memset(&ba_glue.core, 0, sizeof(ba_glue.core));
++	hi5622_ba_core_init(&ba_glue.core);
++	mutex_unlock(&ba_glue.lock);
++	dev_info_ratelimited(&ctx->pdev->dev,
++			     "ba: AP down - BA sessions cleared (no frame sent)\n");
++}
++
++int hi5622_ba_glue_status_line(struct hi5622_pci *ctx, char *buf, size_t len)
++{
++	char core_line[320];
++	int n, m;
++
++	if (!buf || !len)
++		return -EINVAL;
++	mutex_lock(&ba_glue.lock);
++	n = hi5622_ba_status_line(&ba_glue.core, hi5622_ba_enable,
++				  core_line, sizeof(core_line));
++	mutex_unlock(&ba_glue.lock);
++	if (n < 0)
++		return n;
++	m = snprintf(buf, len,
++		     "%s ba_glue: ap_up=%u band=%u channel=%u posts=%u refused=%u(gate=%u no_ap=%u no_sta=%u) d2h=%u(drop=%u) mgmt=%u(drop=%u) tx=%u last_rc=%d\n",
++		     core_line, ba_glue.ap_up ? 1u : 0u,
++		     (unsigned)ba_glue.ap_band, (unsigned)ba_glue.ap_channel,
++		     ba_glue.posts, ba_glue.refused, ba_glue.refused_gate,
++		     ba_glue.refused_no_ap, ba_glue.refused_no_sta,
++		     ba_glue.d2h_events, ba_glue.d2h_dropped,
++		     ba_glue.mgmt_events, ba_glue.mgmt_dropped,
++		     ba_glue.tx_events, ba_glue.last_rc);
++	if (m < 0)
++		return m;
++	return (int)((size_t)m < len ? (size_t)m : len - 1);
++}
+diff --git a/hi5622_ba_glue.h b/hi5622_ba_glue.h
+new file mode 100644
+index 0000000..5a1f4f3
+--- /dev/null
++++ b/hi5622_ba_glue.h
+@@ -0,0 +1,58 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_ba_glue.h - kernel binding for the fail-closed TX-direction BA core
++ * (Hi5622V100 clean-room driver, Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane wifi-ba-tx-impl, shared task-217).  The
++ * portable core (hi5622_ba.c) is callback-driven and host-tested; this file
++ * is the kernel glue that binds it to:
++ *
++ *   - the single H2D wire path hi5622_frame_post() (g0 0x0A relay 44 B,
++ *     g0 0x0B A-MPDU start/end 20 B, g0 0x1C TX BA notify 32 B);
++ *   - the proven mgmt-TX carrier (HCC g0 id 6, 48 B control + inline
++ *     action frame) for the ADDBA request/response/DELBA action frames;
++ *   - the D2H BA events (ids 2/3/0x0F/0x1D), the received category-3 action
++ *     frames, and the AP data-TX path (the in-kernel ADDBA originator).
++ *
++ * Fail-closed: every entry point is inert unless ba_enable == 1 (bounded
++ * counters are still kept).  The H2D/action posts are deferred to a
++ * workqueue: the D2H/mgmt hooks run in the HCC service thread and the TX
++ * hook runs in ndo_start_xmit context, neither of which may run the
++ * sleeping post path inline.
++ */
++#ifndef HI5622_BA_GLUE_H
++#define HI5622_BA_GLUE_H
++
++#include <linux/types.h>
++
++struct hi5622_pci;
++
++/* Allocate/initialize the core + workqueue state (probe; no device access). */
++int  hi5622_ba_glue_init(struct hi5622_pci *ctx);
++void hi5622_ba_glue_remove(struct hi5622_pci *ctx);
++
++/* The AP start committed (called from the cfg80211 start_ap success path):
++ * records the channel/band and the AP MAC the action frames are sent from. */
++void hi5622_ba_glue_ap_up(struct hi5622_pci *ctx, u8 band, u8 channel,
++			  const u8 *mac);
++void hi5622_ba_glue_ap_down(struct hi5622_pci *ctx);
++
++/* D2H BA events: call from the HCC deliver path for every frame (the glue
++ * filters group/id cheaply and defers the real work). */
++void hi5622_ba_glue_d2h(struct hi5622_pci *ctx, const u8 *hdr,
++			const u8 *payload, u32 payload_avail, u32 wire_len);
++
++/* A received management frame (group1 id13): the glue keeps only category-3
++ * action frames and defers the ADDBA/DELBA handling. */
++void hi5622_ba_glue_mgmt_rx(struct hi5622_pci *ctx, const u8 *frame,
++			    size_t len);
++
++/* One AP data MPDU was posted to a peer (called from the data-TX path after
++ * a successful ring post; xmit context, must not sleep). */
++void hi5622_ba_glue_tx_data(struct hi5622_pci *ctx, const u8 *peer, u8 tid,
++			    u16 seq);
++
++/* Read-only one-line status for cfg80211_status evidence. */
++int  hi5622_ba_glue_status_line(struct hi5622_pci *ctx, char *buf, size_t len);
++
++#endif /* HI5622_BA_GLUE_H */
+diff --git a/hi5622_data_tx.c b/hi5622_data_tx.c
+index 80f4f66..73d0aa9 100644
+--- a/hi5622_data_tx.c
++++ b/hi5622_data_tx.c
+@@ -65,6 +65,7 @@
+ #include "hi5622_sta_ops.h"
+ #include "dp_rings.h"
+ #include "dp_txrx.h"
++#include "hi5622_ba_glue.h"
+ 
+ #define HDTX_OWNER		0x48584454u /* "HDTX" host bookkeeping word */
+ #define HDTX_POLL_MS		5u
+@@ -357,6 +358,10 @@ out_unlock:
+ 	spin_unlock_irqrestore(&d->lock, flags);
+ 	if (rc)
+ 		return rc;
++	/* lane wifi-ba-tx-impl (task-217): the in-kernel ADDBA originator.
++	 * xmit-context safe (spinlock + schedule_work); inert unless
++	 * ba_enable=1 and the peer is an associated station. */
++	hi5622_ba_glue_tx_data(c->ctx, eth.da, (u8)p.tid, (u16)seq);
+ 	queue_delayed_work(system_wq, &d->poll,
+ 			   msecs_to_jiffies(HDTX_POLL_MS));
+ 	return 0;
+diff --git a/hi5622_mgmt.c b/hi5622_mgmt.c
+index a01d8b0..e05595c 100644
+--- a/hi5622_mgmt.c
++++ b/hi5622_mgmt.c
+@@ -35,6 +35,7 @@
+ #include "hi5622_mgmt.h"
+ #include "hi5622_mgmt_logic.h"
+ #include "hi5622_sta_ops_logic.h"
++#include "hi5622_ba_glue.h"
+ 
+ /* Management-frame TX carrier (wifi-ap-mgmt, task-143).  Default 0 keeps the
+  * .mgmt_tx op exactly as fail-closed as the bench-proven image: hostapd's
+@@ -199,6 +200,10 @@ void hi5622_mgmt_deliver(struct hi5622_pci *ctx, const u8 *hdr,
+ 		return;
+ 	}
+ 	mgmt_state.rx_events++;
++	/* lane wifi-ba-tx-impl (task-217): block-ack action frames are handed to
++	 * the BA core regardless of the cfg80211 delivery gate; the BA core has
++	 * its own fail-closed gate (ba_enable) and defers the work. */
++	hi5622_ba_glue_mgmt_rx(ctx, rx.frame, rx.frame_len);
+ 	if (!hi5622_mgmt_rx)
+ 		return;		/* count only (fail-closed default) */
+ 	c = ctx->cfg;
+diff --git a/hi5622_scan.c b/hi5622_scan.c
+index 3cef4f8..14f3554 100644
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -45,6 +45,7 @@
+ #include "hi5622_band_start.h"
+ #include "hi5622_dfs_mode.h"
+ #include "hi5622_vap_start_g0.h"
++#include "hi5622_ba_glue.h"
+ 
+ /* =====================================================================
+  * helpers
+@@ -3015,6 +3016,10 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
+ 	c->ctx->ap_started = true;
+ 	c->ctx->ap_seq_frames = (u8)posted;
+ 	posted = 0;	/* committed: not a dirty abort */
++	/* lane wifi-ba-tx-impl (task-217): record the committed AP so the BA
++	 * action-frame carrier can address it (channel/band/MAC); inert unless
++	 * ba_enable=1, no frame is sent here. */
++	hi5622_ba_glue_ap_up(c->ctx, p->band, p->channel, dev->dev_addr);
+ 	dev_info(wdev_dev,
+ 		 "cfg80211: start_ap committed; firmware VAP object readback=%s after %u ms wait (E2 restart evidence)\n",
+ 		 hi5622_scan_vap_wait_valid(c->ctx, HI5622_STAB_VAP_WAIT_MS) ?
+@@ -3071,6 +3076,7 @@ int hi5622_scan_op_stop_ap(struct wiphy *wiphy, struct net_device *dev,
+ 		c->ctx->ap_seq_dirty = false;
+ 		c->ctx->ap_seq_frames = 0;
+ 		c->ctx->ap_stopped_hostside = true;
++		hi5622_ba_glue_ap_down(c->ctx);
+ 		dev_info(wdev_dev,
+ 			 "cfg80211: host-side stop_ap (stop_ap_mode=0 default): cfg80211 state cleared, NO firmware write; the restart will re-post the AP config against the live firmware AP (bench E2: user_del of an AP-started VAP is NOT safe)\n");
+ 		return 0;
+@@ -3097,6 +3103,9 @@ int hi5622_scan_op_stop_ap(struct wiphy *wiphy, struct net_device *dev,
+ 		dev_info(wdev_dev,
+ 			 "cfg80211: stop_ap handed to provider '%s' (%zu B frame)\n",
+ 			 ops->name, len);
++	/* lane wifi-ba-tx-impl (task-217): the AP is down, the BA sessions are
++	 * no longer addressable - clear them (no frame sent). */
++	hi5622_ba_glue_ap_down(c->ctx);
+ out:
+ 	kfree(wire);
+ 	return rc;
+@@ -3401,6 +3410,13 @@ int hi5622_scan_status(struct hi5622_cfg80211 *c, char *buf, size_t len)
+ 					      hi5622_vap_start_g0_posts,
+ 					      hi5622_vap_start_g0_refusals,
+ 					      buf + pos, len - pos);
++	if (ret > 0)
++		pos += (size_t)ret;
++	if (pos >= len)
++		return (int)(len - 1);
++	/* lane wifi-ba-tx-impl (task-217): the BA parameter/session/outcome
++	 * (read-only; frames are posted from the BA workqueue, never here). */
++	ret = hi5622_ba_glue_status_line(c->ctx, buf + pos, len - pos);
+ 	if (ret > 0)
+ 		pos += (size_t)ret;
+ 	if (pos >= len)
+diff --git a/main.c b/main.c
+index 2b7148c..00f4655 100644
+--- a/main.c
++++ b/main.c
+@@ -24,6 +24,7 @@
+ #include "hi5622_cfg80211.h"
+ #include "hi5622_dp.h"
+ #include "h2d_send.h"
++#include "hi5622_ba_glue.h"
+ 
+ /* ---------------------------------------------------------------------
+  * MODULE PARAMS
+@@ -161,6 +162,16 @@ static int hi5622_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+ 		return dev_err_probe(dev, ret, "cfg80211 init\n");
+ 	}
+ 
++	/* lane wifi-ba-tx-impl (task-217): the fail-closed TX-direction BA core
++	 * (ba_enable=0 default; inert unless the attended fire sets it).  No
++	 * device access at init; the wire posts go through hi5622_frame_post(). */
++	ret = hi5622_ba_glue_init(ctx);
++	if (ret) {
++		hi5622_cfg80211_remove(ctx);
++		hi5622_hcc_remove(ctx);
++		return dev_err_probe(dev, ret, "ba glue init\n");
++	}
++
+ 	/* MAC data plane (merged wifi-dp-air lane): host state only at probe
+ 	 * (no rings, no device access); dp_setup is the one MAC/ring action. */
+ 	ret = hi5622_dp_probe(ctx);
+@@ -191,6 +202,9 @@ static void hi5622_remove(struct pci_dev *pdev)
+ 	struct hi5622_pci *ctx = pci_get_drvdata(pdev);
+ 
+ 	hi5622_del_all_attrs(&pdev->dev);
++	/* lane wifi-ba-tx-impl: cancel the BA workqueue before the subsystems it
++	 * posts through are freed. */
++	hi5622_ba_glue_remove(ctx);
+ 	/* Reverse of probe order (stability hardening): cfg80211 teardown cancels
+ 	 * the scan work and unregisters the VAPs, so it must run BEFORE the HCC
+ 	 * service/rings are freed - otherwise a pending scan work can post through
