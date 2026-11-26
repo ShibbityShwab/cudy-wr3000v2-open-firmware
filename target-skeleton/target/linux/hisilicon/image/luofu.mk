@@ -296,9 +296,9 @@ endef
 # Identity warning for the device page: the enclosure label may say v1; the PCB
 # is the luofu v2 design, not the MediaTek v1 (HARDWARE-IDENTITY.md;
 # TARGET-DESIGN.md 2). The runtime board_name is the DT root compatible, so
-# SUPPORTED_DEVICES carries the DT compatibles (cudy,wr3000-v2 becomes valid
-# once the machine descriptor's dt_compat list carries it - TODO in the machine
-# patch; TARGET-DESIGN.md 4.2).
+# SUPPORTED_DEVICES carries the DT compatibles; the machine descriptor's
+# dt_compat list (patch 001 luofu_dt_compat[]) already carries them, which is
+# why these strings are the actual runtime identity (TARGET-DESIGN.md 4.2).
 define Device/cudy_wr3000-v2
 	DEVICE_VENDOR := Cudy
 	DEVICE_MODEL := WR3000
