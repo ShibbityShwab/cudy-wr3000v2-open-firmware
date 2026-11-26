@@ -46,11 +46,14 @@ D2H frames actually delivered to the host (`g1 id3`, `g4 id4`; earlier catalogue
    **local handler tables only for groups 0 and 2** (`0x102866` calls: boot task `0x48338`
    g2/19 ids at table `0x10CC18`, `0x48342` g0/40 ids at `0x10CCFC`; hcc init `0x47BC8`
    g0/1 id at `0x10CBEC`) [V]: groups 1/3/4 are not locally consumed. The g2 id3 handler
-   `0xBBC9C` is entry id 3 of that local group-2 table [V]. A group-config lead table at CA
-   `0x10CF74` gives the queue index per group: **g2 -> 1 (same index as g0), g1/g3 -> 0,
-   g4 -> 2** [I, confirm with probe P16]. **The host-bound classes therefore take the
-   transport queues (0/2); the g2 id3 takes the local-dispatch queue (1).** [Q1 answered:
-   it is the group->queue selection, not an ETE type/filter.]
+   `0xBBC9C` is entry id 3 of that local group-2 table [V]. The static HCC message map at CA
+   `0x103FB8` (3 queues, 7 groups; `.data`, re-decoded here) carries the per-group queue
+   table at CA `0x10CF74` (7 x 12-B `{u16 group; u16 qidx; u32 item_array; u32 max_id}`):
+   **g0 -> q1, g1 -> q0, g2 -> q1, g3 -> q0, g4 -> q2, g5 -> q1, g6 -> q0** [V]. The item
+   arrays are staged into RAM by the boot copy (writable at runtime; P16 reads them).
+   **The host-bound classes therefore take the transport queues (0/2); the g2 id3 takes the
+   local-dispatch queue (1), the same queue as the locally registered group 0.**
+   [Q1 answered: it is the group->queue selection, not an ETE type/filter.]
 4. **The candidate is confirmed: the g2 id3 is an internal firmware notification; the
    host-bound RX copy is the g1 id13 [V].** `0xBBC9C` (local group-2/id-3 handler) -> the
    per-frame datapath `0xBA1C8` -> the CRX builder `0xB9780`: it sets **group 1**
@@ -115,7 +118,12 @@ Supporting decodes [V]:
   stays NULL, `0x102760` still queues the message and returns success, but nothing is
   scheduled. **This is the exact mechanism that can hold the g2 id3 without a visible failure.**
 * The destination/queue/group arrays are all host-readable firmware RAM (layout in
-  [TABLES.md](TABLES.md) T4; instance CA `0x171B6C`, dest record 0 CA `0x171FB4`).
+  [TABLES.md](TABLES.md) T4; instance CA `0x171B6C`, dest record 0 CA `0x171FB4`). The
+  static map they are initialised from is CA `0x103FB8` (`+8` = 3 queues, `+0x10` = 7
+  groups, `+0x18` queue config, `+0x1C` "HCC TX Thread" customer name, `+0x24` group
+  table `0x10CF74`, `+0x28` queue records `0x1040A8`); the group table's item-array
+  pointers (`0x118F08`, `0x119438`, ...) are staged into RAM by the boot copy, which is why
+  P16/P17 read them at runtime [V].
 * The message sources relevant here: the SMAC producer body `0xB53A4` calls `0x102760` at
   `0xB5492` [V\*]; the heartbeat builder at `0xC6C0A` [V]; the CRX builder at `0xBA17A` [V].
 
@@ -196,7 +204,7 @@ the D2H transport (which demonstrably delivers g1 id3 / g4 id4 in the same sessi
 
 | # | candidate | decoded fact | rank |
 | ---: | --- | --- | --- |
-| C1 | **group->queue routing: g2 id3 is enqueued to the firmware-local dispatch queue, not a transport queue** | `0x102760` picks queue by group record `+8` [V]; local handler tables exist only for groups 0/2 [V]; g2 id3 is entry 3 of the local g2 table with handler `0xBBC9C` [V]; lead config maps g2->qidx 1, g4->2, g1/g3->0 [I] | **primary** |
+| C1 | **group->queue routing: g2 id3 is enqueued to the firmware-local dispatch queue, not a transport queue** | `0x102760` picks queue by group record `+8` [V]; local handler tables exist only for groups 0/2 [V]; g2 id3 is entry 3 of the local g2 table with handler `0xBBC9C` [V]; the static HCC map (CA 0x103FB8 + group table 0x10CF74) maps g2->q1, g0->q1, g1/g3->q0, g4->q2 [V] | **primary** |
 | C2 | destination nibble: g2 id3 copies `u8[band_obj]` (chip-id byte) while heartbeat clears its nibble to 0 | `0xB5472` vs `0xC6BDA` [V]; the runtime value of `u8[band_obj]` is a bench read (P12) | secondary, probe-decidable |
 | C3 | ETE node type/source field, ring selection, notify id filter, doorbell mask | **ruled out** - constant across classes; notify id is a mailbox bit, deposit op has no type branch [V] | ruled out |
 | C4 | host-side dispatch tables drop it (`frame_unknown`) | only matters **after** deposit; the raw D2H catalogue reads the ring and would still show the frame; bench has never shown one [V\* + V] | ruled out for "never reaches" |

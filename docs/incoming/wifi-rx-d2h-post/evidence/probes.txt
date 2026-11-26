@@ -4,8 +4,8 @@ READ-ONLY probe pack (physical/BAR0 addresses; no writes)
      band1 obj CA 0x00175A18 -> phys 0x0082DA18
  P13 producer post-failure counter: band0 +0xCCE CA 0x001758BE phys 0x0082D8BE (u8)
      band1 +0xCCE CA 0x001766E6 phys 0x0082E6E6
- P14 dest0 record CA 0x00171FB4 phys 0x00829FB4 (u32 x6): [0]=dest idx [1]=map [2]=queue array
-     [3]=? [4]=group array [5]=?
+ P14 dest0 record CA 0x00171FB4 phys 0x00829FB4 (u32 x6): [0]=dest idx [1]=map (=0x00103FB8)
+     [2]=queue array (=0x171B70) [4]=group array (=0x171F54); mismatch = re-baseline
  P15 follow P14[2] (queue array): read queue objects at base+0xE4*i for i=0,1,2
      fields: +8 state, +0x48 msg-list count, +0xC0 notifier ptr, +0xC4 flag
  P16 follow P14[4] (group array): read 12-B records for groups 0..4;

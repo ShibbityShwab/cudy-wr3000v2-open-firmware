@@ -143,6 +143,11 @@ PASS group-config lead table groups 0..4 in order [(0, 1, 1152056, 50), (1, 0, 1
 PASS group-config lead: g2 queue idx qidx=1
 PASS group-config lead: g4 queue idx qidx=2
 PASS group-config lead: g1 queue idx qidx=0
+PASS HCC map CA 0x00103FB8 n_queues=3 3
+PASS HCC map n_groups=7 7
+PASS HCC map group-config array 0x0010CF74
+PASS HCC map thread name literal 'HCC TX Thread' 0x0010CFC8
+PASS group-config array is 7 entries (ends at the thread-name string) 
 PASS hcc instance 0x171B6C literal refs 4 refs: ['0x47d6c', '0x86fc8', '0x10281c', '0x1028ec']
 
-146/146 PASS
+151/151 PASS

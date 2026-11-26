@@ -38,6 +38,10 @@ QUEUE_STRIDE = 0xE4
 GROUP_STRIDE = 0xC
 BAND0 = 0x174BF0
 BAND_STRIDE = 0xE28
+# the HCC message map (static .data): 3 queues, 7 groups, group->queue table
+HCC_MAP = 0x103FB8          # +8 n_queues, +0x10 n_groups, +0x18 queue cfg, +0x1C thread name,
+                            # +0x20 n_groups, +0x24 group config array, +0x28 queue records
+GROUP_CFG = 0x10CF74        # 7 x 12-B {u16 group; u16 qidx; u32 item_array; u32 max_id}
 
 def sha256(path):
     h = hashlib.sha256()
@@ -339,6 +343,16 @@ def selftest(fw):
     ck("group-config lead: g2 queue idx", rows[2][1] == 1, "qidx=%d" % rows[2][1])
     ck("group-config lead: g4 queue idx", rows[4][1] == 2, "qidx=%d" % rows[4][1])
     ck("group-config lead: g1 queue idx", rows[1][1] == 0, "qidx=%d" % rows[1][1])
+    # the map struct itself (static .data): 3 queues / 7 groups / same group-config array
+    ck("HCC map CA 0x%08X n_queues=3" % HCC_MAP, fw.u32(HCC_MAP + 8) == 3,
+       "%d" % fw.u32(HCC_MAP + 8))
+    ck("HCC map n_groups=7", fw.u32(HCC_MAP + 0x10) == 7, "%d" % fw.u32(HCC_MAP + 0x10))
+    ck("HCC map group-config array", fw.u32(HCC_MAP + 0x24) == GROUP_CFG,
+       "0x%08X" % fw.u32(HCC_MAP + 0x24))
+    ck("HCC map thread name literal 'HCC TX Thread'",
+       fw.u32(HCC_MAP + 0x1C) == 0x10CFC8, "0x%08X" % fw.u32(HCC_MAP + 0x1C))
+    ck("group-config array is 7 entries (ends at the thread-name string)",
+       fw.u16(GROUP_CFG + 12 * 7) != 0 and fw.u16(GROUP_CFG + 12 * 7) > 0x36, "")
     # instance pointers are loadable literals in the image
     inst_refs = [a for a in range(BASE, BASE + len(fw.data) - 4, 4) if fw.u32(a) == HCC_INSTANCE]
     ck("hcc instance 0x171B6C literal refs", len(inst_refs) >= 3,
@@ -389,9 +403,10 @@ def tables(fw):
     print("   message dispatch: plat.ko chip group4 table 5 ids (0..4); wifi.ko hmac groups 1/2/3;")
     print("   wal group 2 -- the group-2 tables on the host are H2D-direction registrations, so a")
     print("   received g2 id3 has no D2H handler; raw D2H readers still catalogue every frame.")
-    print("\nT5 group-config lead table CA 0x10CF74 [I - candidate, confirm with probe P16/P17]")
-    for k in range(5):
-        e = 0x10CF74 + 12 * k
+    print("\nT5 HCC message map CA 0x%08X: %d queues, %d groups (group->queue table 0x%08X)"
+          % (HCC_MAP, fw.u32(HCC_MAP + 8), fw.u32(HCC_MAP + 0x10), GROUP_CFG))
+    for k in range(7):
+        e = GROUP_CFG + 12 * k
         print("   group=%d qidx=%d item_array=0x%08X max_id=%d" %
               (fw.u16(e), fw.u16(e + 2), fw.u32(e + 4), fw.u32(e + 8)))
     return 0
@@ -409,9 +424,9 @@ def probes(fw):
     print(" P13 producer post-failure counter: band0 +0xCCE CA 0x%08X phys 0x%08X (u8)"
           % (BAND0 + 0xCCE, r5(BAND0 + 0xCCE)))
     print("     band1 +0xCCE CA 0x%08X phys 0x%08X" % (BAND0 + BAND_STRIDE + 0xCCE, r5(BAND0 + BAND_STRIDE + 0xCCE)))
-    print(" P14 dest0 record CA 0x%08X phys 0x%08X (u32 x6): [0]=dest idx [1]=map [2]=queue array"
-          % (DEST0, r5(DEST0)))
-    print("     [3]=? [4]=group array [5]=?")
+    print(" P14 dest0 record CA 0x%08X phys 0x%08X (u32 x6): [0]=dest idx [1]=map (=0x%08X)"
+          % (DEST0, r5(DEST0), HCC_MAP))
+    print("     [2]=queue array (=0x171B70) [4]=group array (=0x171F54); mismatch = re-baseline")
     print(" P15 follow P14[2] (queue array): read queue objects at base+0xE4*i for i=0,1,2")
     print("     fields: +8 state, +0x48 msg-list count, +0xC0 notifier ptr, +0xC4 flag")
     print(" P16 follow P14[4] (group array): read 12-B records for groups 0..4;")

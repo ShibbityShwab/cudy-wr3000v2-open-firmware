@@ -96,9 +96,32 @@ hdr[2]=u8[dest_rec+1], hdr[3]=u8[dest_rec] (0xBA15C-0xBA172), post 0x102760 (0xB
 | band-1 object | 0x175A18 | same +0xE28 offset |
 | item array (group 2) | P16 | 16-byte entries {u32 id, u32 handler, u32 aux, u32 stats}; entry[3] = {3, 0xBBC9C, ..., stats} |
 | ETE ops table | 0x10CEDC | +0x10 = deposit 0xC61E0 |
+| HCC message map (static .data) | 0x103FB8 | +8 = 3 queues; +0x10 = 7 groups; +0x18 queue config 0x1040C0; +0x1C = "HCC TX Thread" name 0x10CFC8; +0x20 = 7; +0x24 group table 0x10CF74; +0x28 queue records 0x1040A8 |
+| group table | 0x10CF74 | 7 x 12-B {u16 group, u16 qidx, u32 item_array, u32 max_id}: g0 q1, g1 q0, g2 q1, g3 q0, g4 q2, g5 q1, g6 q0 |
+| queue records | 0x1040A8 | 3 x 8-B; entry k = {k*3, 0} (queue -> group-slot mapping) |
 | D2H notify object | *(0x172130) | +0x9C out[1] value reg, +0xA4 doorbell reg, +0xB0 ack pulse, +0xB4 latch, +0xB8 deferred shadow, +0xC0 lock |
 
-## T5 - host conversion and probe formulas
+## T5 - the static map: why the class decides the transport [V]
+
+```
+hcc map 0x103FB8: {+8 n_queues=3, +0x10 n_groups=7, +0x18 queue cfg, +0x1C "HCC TX Thread",
+                   +0x20 n_groups=7, +0x24 group table, +0x28 queue records}
+group table 0x10CF74 (12 B/entry): group  qidx  item_array     max_id
+  0     1     0x119438       50      <- local classes (40 registered handlers)
+  1     0     0x1191B8       40      <- host classes (no local handlers)
+  2     1     0x118F08       43      <- local classes (19 registered handlers, id3 -> 0xBBC9C)
+  3     0     0x118DB8       21      <- host classes
+  4     2     0x10CF24        5
+  5     1     0x00000000      0
+  6     0     0x00000000      0
+```
+
+The queue index is copied into the runtime group record (+8) at boot. Host-visible traffic
+(g1 id3/g1 id13/g4 id1/id2/id4) is built with destination nibble 0 and lands in the
+transport queues q0/q2; the g2 id3 lands in q1 (the local-dispatch queue). The item arrays are
+staged into RAM by the boot copy; the runtime contents (handlers and stats) are probe P16/P17.
+
+## T6 - host conversion and probe formulas
 
 | window | formula | examples |
 | --- | --- | --- |
@@ -107,7 +130,7 @@ hdr[2]=u8[dest_rec+1], hdr[3]=u8[dest_rec] (0xBA15C-0xBA172), post 0x102760 (0xB
 | PKTRAM (region 2) | phys = 0x1D8000 + (CA - 0x01000000) | - |
 | ACP (region 4) | phys = 0x4D8000 + (CA - 0x02000000) | - |
 
-## T6 - host D2H acceptance (vendor modules; committed lanes) [V\*]
+## T7 - host D2H acceptance (vendor modules; committed lanes) [V\*]
 
 | layer | fact |
 | --- | --- |

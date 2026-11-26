@@ -28,9 +28,11 @@ T4 host D2H acceptance (vendor modules, committed lanes)
    wal group 2 -- the group-2 tables on the host are H2D-direction registrations, so a
    received g2 id3 has no D2H handler; raw D2H readers still catalogue every frame.
 
-T5 group-config lead table CA 0x10CF74 [I - candidate, confirm with probe P16/P17]
+T5 HCC message map CA 0x00103FB8: 3 queues, 7 groups (group->queue table 0x0010CF74)
    group=0 qidx=1 item_array=0x00119438 max_id=50
    group=1 qidx=0 item_array=0x001191B8 max_id=40
    group=2 qidx=1 item_array=0x00118F08 max_id=43
    group=3 qidx=0 item_array=0x00118DB8 max_id=21
    group=4 qidx=2 item_array=0x0010CF24 max_id=5
+   group=5 qidx=1 item_array=0x00000000 max_id=0
+   group=6 qidx=0 item_array=0x00000000 max_id=0

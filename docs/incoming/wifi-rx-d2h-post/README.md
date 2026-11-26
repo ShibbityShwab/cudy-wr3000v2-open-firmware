@@ -11,7 +11,9 @@ message posted through CA `0x102760` actually go, and why does the host D2H ring
 
 The answer (detail in [REPORT.md](REPORT.md)): **`0x102760` is not a D2H deposit - it is a
 per-destination/per-group queue enqueue.** The group record's queue index decides which customer
-drains the message; the firmware registers *local* dispatch tables only for groups **0 and 2**,
+drains the message (static HCC map CA `0x103FB8`, group table CA `0x10CF74`: g2 -> queue 1,
+the local-dispatch queue; g1/g3 -> queue 0, g4 -> queue 2, the transport queues); the firmware
+registers *local* dispatch tables only for groups **0 and 2**,
 and the g2 id3 handler `0xBBC9C` is one of those local entries. The host-bound classes
 (groups 1/3/4) are the ones whose messages are enqueued to the transport queues and deposit
 through the ETE op `0xC61E0` -> ring commit `0xC192A` -> `d2h_notify(6)` `0xC6170`.
