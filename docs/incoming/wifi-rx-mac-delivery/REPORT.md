@@ -3,7 +3,7 @@
 **Lane:** `wifi-rx-mac-delivery` (task-220).  HOST-ONLY static decode of the pinned
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`; **CA = file offset + 0x40000**).
 Grades: **[V]** re-derived here by `tools/fw_rx_mac_delivery_re.py` (`--selftest`
-87/87 PASS); **[V\*]** committed earlier lane; **[M]** bench-measured earlier; **[I]**
+95/95 PASS); **[V\*]** committed earlier lane; **[M]** bench-measured earlier; **[I]**
 inference; **[U]** needs a device read / not locatable in this image.
 Companions: [README.md](README.md), [TABLES.md](TABLES.md), [PROBES.md](PROBES.md),
 [FIRE-RECIPE.md](FIRE-RECIPE.md), [tools/](tools/), [evidence/](evidence/).

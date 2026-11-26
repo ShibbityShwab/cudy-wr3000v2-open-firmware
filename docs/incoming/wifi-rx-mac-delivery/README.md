@@ -26,12 +26,12 @@ head 0x01019F80, tail 0x010186A8, count 0x10), so the F1 is not the list init.
 | [TABLES.md](TABLES.md) | every address/opcode/callsite: T1-T11, the names table, the counter words, the conversion constants |
 | [PROBES.md](PROBES.md) | **read-only probe pack P1-P11** (device-object counters, PPDU list self-check, MAC live bank) + the decision table |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | R0 preconditions, R1 probe-during-auth, R2 stock control, R3 escalation; PASS/FAIL/STOP |
-| [tools/fw_rx_mac_delivery_re.py](tools/fw_rx_mac_delivery_re.py) | stdlib re-derivation tool: `--selftest` **87/87 PASS**, `--decode`, `--tables`, `--probes` |
+| [tools/fw_rx_mac_delivery_re.py](tools/fw_rx_mac_delivery_re.py) | stdlib re-derivation tool: `--selftest` **95/95 PASS**, `--decode`, `--tables`, `--probes` |
 | [evidence/](evidence/) | selftest/decode/tables/probes transcripts (host-only) |
 
 ## Quick start (host, no device)
 
-    python3 tools/fw_rx_mac_delivery_re.py --selftest   # 87 checks, exit 0
+    python3 tools/fw_rx_mac_delivery_re.py --selftest   # 95 checks, exit 0
     python3 tools/fw_rx_mac_delivery_re.py --decode     # the chain
     python3 tools/fw_rx_mac_delivery_re.py --probes     # the read-only pack
 

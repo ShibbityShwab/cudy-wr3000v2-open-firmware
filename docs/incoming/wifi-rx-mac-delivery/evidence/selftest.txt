@@ -29,6 +29,14 @@ PASS reserve: ldr.w r3,[r5,#0x674] (count) (got 0x3674 want 0x3674)
 PASS reserve: str.w r3,[r5,#0x674] (count++) (got 0x3674 want 0x3674)
 == the RX -> CRX consumer: entry, queue intake, deposit ==
 PASS 0xBA48A bl -> per-frame CRX builder 0xB9780 (got 0xb9780 want 0xb9780)
+PASS RX-complete handler 0xBBC9C: push {r0,r1,r4,r5,r6,lr} (got 0xb573 want 0xb573)
+PASS group-2 dispatch entry 1 id 3 (got 0x3 want 0x3)
+PASS group-2 id 3 -> RX-complete handler 0xBBC9C (got 0xbbc9d want 0xbbc9d)
+PASS RX-complete handler: bl 0xBA1C8 (per-frame decoder) (got 0xba1c8 want 0xba1c8)
+PASS RX handler: bl 0x77324 (dequeue one frame) (got 0x77324 want 0x77324)
+PASS RX handler re-arm loop: bl 0x77324 (dequeue buffer) (got 0x77324 want 0x77324)
+PASS RX handler re-arm loop: bl 0xC1D58 (alloc descriptor block) (got 0xc1d58 want 0xc1d58)
+PASS RX handler re-arm loop: bl 0xB52F0 (reserve PPDU descriptor) (got 0xb52f0 want 0xb52f0)
 PASS RX intake: 0xBA0C0 bl -> queue pop 0x1024EA (got 0x1024ea want 0x1024ea)
 PASS RX intake: 0xBA0E2 bl -> node free 0x1024E6 (got 0x1024e6 want 0x1024e6)
 PASS CRX deposit: 0xBA17A bl -> hcc_msg_tx 0x102760 (got 0x102760 want 0x102760)
@@ -94,4 +102,4 @@ PASS thread table: HCC TX Thread (got 'HCC TX Thread' want 'HCC TX Thread')
 PASS thread table: HCC RX Thread (got 'HCC RX Thread' want 'HCC RX Thread')
 PASS thread table: HCC OAM Thread (got 'HCC OAM Thread' want 'HCC OAM Thread')
 
-== RESULT: 87/87 PASS, 0 FAIL ==
+== RESULT: 95/95 PASS, 0 FAIL ==

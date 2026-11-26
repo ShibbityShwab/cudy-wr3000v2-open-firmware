@@ -2,7 +2,7 @@
 
 **Lane:** wifi-rx-mac-delivery (task-220).  CA = file offset + 0x40000 of
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`).  Every row below is
-asserted by `tools/fw_rx_mac_delivery_re.py --selftest` (87/87 PASS) from the raw image.
+asserted by `tools/fw_rx_mac_delivery_re.py --selftest` (95/95 PASS) from the raw image.
 Grades: **[V]** byte-verified here; **[V\*]** committed earlier lane; **[I]** inference;
 **[U]** unknown/device read required.
 

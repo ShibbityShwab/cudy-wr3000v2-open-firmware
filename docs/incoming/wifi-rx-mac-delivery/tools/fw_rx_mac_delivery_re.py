@@ -165,6 +165,8 @@ POOL_STRIDE_SITE = 0xBF144    # mov.w r2,#0x188 (0x188-byte sub-pool records)
 PPDU_DESC_RESERVE = 0xB52F0
 # RX -> CRX consumer (this lane)
 CRX_BUILDER = 0xB9780
+RX_COMPLETE_HANDLER = 0xBBC9C   # group-2 id 3 handler: frames -> 0xBA1C8 -> 0xB9780 + descriptor re-arm
+PER_FRAME_DECODER = 0xBA1C8
 RX_PERFRAME_CALL = 0xBA48A
 HCC_MSG_TX = 0x102760
 HCC_DISPATCH = 0xFD7E8
@@ -234,6 +236,14 @@ def selftest(img):
 
     print("== the RX -> CRX consumer: entry, queue intake, deposit ==")
     c.eq(bl_target(img, RX_PERFRAME_CALL), CRX_BUILDER, "0xBA48A bl -> per-frame CRX builder 0xB9780")
+    c.eq(img.u16(RX_COMPLETE_HANDLER), 0xB573, "RX-complete handler 0xBBC9C: push {r0,r1,r4,r5,r6,lr}")
+    c.eq(img.u32(GROUP2_TABLE + 12), 0x00000003, "group-2 dispatch entry 1 id 3")
+    c.eq(img.u32(GROUP2_TABLE + 16), 0x000BBC9D, "group-2 id 3 -> RX-complete handler 0xBBC9C")
+    c.eq(bl_target(img, 0xBBD0C), PER_FRAME_DECODER, "RX-complete handler: bl 0xBA1C8 (per-frame decoder)")
+    c.eq(bl_target(img, 0xBBCF0), 0x77324, "RX handler: bl 0x77324 (dequeue one frame)")
+    c.eq(bl_target(img, 0xBBD2C), 0x77324, "RX handler re-arm loop: bl 0x77324 (dequeue buffer)")
+    c.eq(bl_target(img, 0xBBD36), 0xC1D58, "RX handler re-arm loop: bl 0xC1D58 (alloc descriptor block)")
+    c.eq(bl_target(img, 0xBBD40), PPDU_DESC_RESERVE, "RX handler re-arm loop: bl 0xB52F0 (reserve PPDU descriptor)")
     c.eq(bl_target(img, 0xBA0C0), RX_QUEUE_POP, "RX intake: 0xBA0C0 bl -> queue pop 0x1024EA")
     c.eq(bl_target(img, 0xBA0E2), RX_QUEUE_FREE, "RX intake: 0xBA0E2 bl -> node free 0x1024E6")
     c.eq(bl_target(img, 0xBA17A), HCC_MSG_TX, "CRX deposit: 0xBA17A bl -> hcc_msg_tx 0x102760")
@@ -338,7 +348,9 @@ def decode(img):
     print("A. the RX delivery chain (all addresses CA, Thumb unless noted)")
     rows = [
         ("MAC RX HW -> firmware", "[U]", "the SMAC RX interrupt/completion entry was not located in this image"),
-        ("HAL RX message intake", "0x%X" % RX_PERFRAME_CALL, "bl 0xB9780 - one call per received frame in the descriptor handler (0xBA1C8 body)"),
+        ("RX-complete message handler", "0x%X" % RX_COMPLETE_HANDLER, "group-2 id 3 handler: walks the received-frame list, calls 0xBA1C8 per frame, re-arms PPDU descriptors via 0xB52F0"),
+        ("per-frame decoder", "0x%X" % PER_FRAME_DECODER, "0xBA1C8: resolves chip/RX ctx, calls the CRX builder 0xB9780 at 0xBA48A per frame"),
+        ("HAL RX per-frame call", "0x%X" % RX_PERFRAME_CALL, "bl 0xB9780 - one call per received frame in the decoder"),
         ("queue intake (pop/free)", "0x%X / 0x%X" % (0xBA0C0, 0xBA0E2), "bl 0x1024EA pop / bl 0x1024E6 free - frames arrive as HCC message nodes"),
         ("per-chip RX ctx gate", "0x%X" % RX_CTX_ADD, "ldr.w r8,[r6+0x1a00]; NULL -> drop (log 0xA4E)"),
         ("CRX builder", "0x%X" % CRX_BUILDER, "pops frames, builds group 1 / id 13 D2H, posts it"),
@@ -361,10 +373,10 @@ def decode(img):
     print("     notify and host-consume paths work.  It does NOT prove the MAC-RX intake ran.")
     print()
     print("C. the intake that is missing")
-    print("  Client frames must become an HCC message node consumed by the RX descriptor handler")
-    print("  (pop at 0xBA0C0 -> bl 0xB9780 at 0xBA48A).  The producer of those nodes is the SMAC RX")
-    print("  completion path (MAC PPDU -> firmware RX descriptor -> node).  That producer entry is")
-    print("  [U] in this image (the ISR names table is not code-referenced; see TABLES T7).")
+    print("  The RX-complete message handler 0xBBC9C is registered (group-2 id 3) and fully decodes the")
+    print("  list -> 0xBA1C8 -> 0xB9780 chain plus the PPDU-descriptor re-arm (0xB52F0).  What is not")
+    print("  located is the PRODUCER that posts the group-2 id 3 message (the SMAC PPDU-completion ->")
+    print("  node step); its entry is [U] (the ISR names table is not code-referenced; TABLES T7).")
     print("  The demand-side state that the consumer itself reads is the per-chip RX ctx at")
     print("  chip+0x1a00 (0xB97EE); a NULL there drops the frame with log 0xA4E after intake.")
     print()
@@ -441,7 +453,8 @@ def tables(img):
     print("   runtime chain [M]: head 0x01019F80 (PKTRAM phys 0x%08X), tail 0x010186A8 (phys 0x%08X), count 0x10" % (pktram_phys(0x01019F80), pktram_phys(0x010186A8)))
     print("   allocator 0xBF128: sub-pool descriptor array CA 0x%X, 0x188-B records; 32-B blocks in PKTRAM" % POOL_DESC_BASE_VAL)
     print("T3 list: next +0x66C, prev +0x670, count +0x674, name +0x67C, desc size 0x1A0 (boot) / 0x198 (reserve)")
-    print("T4 RX consumer: 0x%X (pop 0x%X at 0xBA0C0; per-frame bl 0xB9780 at 0xBA48A)" % (CRX_BUILDER, RX_QUEUE_POP))
+    print("T4 RX consumer: handler 0x%X (group-2 id 3) -> decoder 0x%X (bl at 0xBBD0C) -> CRX builder 0x%X (bl at 0xBA48A; pop 0x%X at 0xBA0C0)"
+          % (RX_COMPLETE_HANDLER, PER_FRAME_DECODER, CRX_BUILDER, RX_QUEUE_POP))
     print("T5 CRX gate: ctx [chip+0x1A00] 0x%X | fwd flag info[+6] 0x%X | total<=0x680 0x%X" % (RX_CTX_ADD, CRX_FWD_LOAD, CRX_CAP_CMP))
     print("T6 deposit: hcc_msg_tx 0x%X -> ETE 0x%X -> notify 0x%X (ids 3/5/6 observed)" % (HCC_MSG_TX, ETE_NODE_FILL, D2H_NOTIFY))
     print("T7 SMAC names (data table CA 0x12266C, 0x20-byte records, no code xrefs): rx_complete_2g/5g ISR,")
