@@ -1,0 +1,16 @@
+net: ethernet: luofu-switch: add PFE/IFC init and default tables (RFC)
+
+The Hi5671Y switch's PFE (packet forwarding engine) needs its IFC (interface)
+forwarding tables and the default-table set programmed before the exception
+delivery path can classify frames. The vendor loader does this as three attended
+W-bench stages; this patch merges them into the normal boot init.
+
+The three source stages: the PFE init (the 036), the IFC default table (the 043)
+and the IFC EPS/EXT fix-up (the 046). The table layout and the default entries are
+decoded from the stock firmware's staged sequences. [U] The default-table content
+was validated against the stock's readback but was not exercised with a full
+forwarding matrix; the merge preserves the three stages' order.
+
+The bench gates and the `luofu_lsw.*` options are dropped (the acceptance rule).
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

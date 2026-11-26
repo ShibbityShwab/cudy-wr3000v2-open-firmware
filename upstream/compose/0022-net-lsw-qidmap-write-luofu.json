@@ -1,0 +1,17 @@
+{
+  "entry": "0022-net-lsw-qidmap-write-luofu",
+  "message": "commit-messages/0022-net-lsw-qidmap-write-luofu.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "022-net-lsw-qidmap-write-luofu.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "044-net-lsw-ifc-gate-token-fix.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "7f200c6112a8060a006fdfb84eaea066d09932f9eaae6d635f2f6085678ca35b"
+}

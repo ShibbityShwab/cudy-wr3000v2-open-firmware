@@ -1,0 +1,17 @@
+{
+  "entry": "0024-net-pie-completion-decode-luofu",
+  "message": "commit-messages/0024-net-pie-completion-decode-luofu.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "024-net-pie-completion-decode-luofu.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "053-net-pie-rxdecode-vendor-exact.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "4be925ca5f029bcf1dfc23a2b7976703870b2959e582e6ac0de98c721ba3a48c"
+}

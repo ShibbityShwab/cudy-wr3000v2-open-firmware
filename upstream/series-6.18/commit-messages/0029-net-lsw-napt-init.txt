@@ -1,0 +1,15 @@
+net: ethernet: luofu-switch: add NAPT flow-engine init (RFC)
+
+The switch's NAPT (flow-engine) block needs its flow/aging tables initialised
+before the engine can track flows. The vendor loader does this behind the attended
+W-bench gate; this patch makes it a normal boot init, matching the state the M1a
+proof image used (the decoded replay that produced native port deliveries).
+
+[V] The init sequence was validated on hardware: the M1a proof image
+(5800c9ab) replayed it and the switch delivered natively (ping 200/200, SSH).
+[U] The flow-table sizing and the aging parameters beyond the proof run are
+unmeasured.
+
+The bench gate and the `luofu_switch.*` options are dropped (the acceptance rule).
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

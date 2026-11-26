@@ -1,0 +1,17 @@
+{
+  "entry": "0021-net-lsw-init-luofu",
+  "message": "commit-messages/0021-net-lsw-init-luofu.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "021-net-lsw-init-luofu.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "031-net-lsw-eps-channel-map.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "6475667505614a310927a7e8fcbc3880422658bddb1628a2d039eca370121748"
+}

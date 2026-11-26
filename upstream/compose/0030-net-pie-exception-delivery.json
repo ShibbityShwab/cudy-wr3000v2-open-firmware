@@ -1,0 +1,13 @@
+{
+  "entry": "0030-net-pie-exception-delivery",
+  "message": "commit-messages/0030-net-pie-exception-delivery.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "060-net-pie-exception-delivery.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "777594696957cecfbd54d648badfd486ef5675498c7f00898d1eb3177852b653"
+}

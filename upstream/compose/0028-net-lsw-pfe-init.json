@@ -1,0 +1,21 @@
+{
+  "entry": "0028-net-lsw-pfe-init",
+  "message": "commit-messages/0028-net-lsw-pfe-init.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "036-net-lsw-pfe-init.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "043-net-lsw-ifc-default-table.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "046-net-lsw-ifc-fix-eps-ext.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "645786bab596c01861d7b2042380b9c04de1a6d6ea93a6eb3b7cac586e29d766"
+}

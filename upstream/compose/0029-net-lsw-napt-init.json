@@ -1,0 +1,13 @@
+{
+  "entry": "0029-net-lsw-napt-init",
+  "message": "commit-messages/0029-net-lsw-napt-init.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "059-net-lsw-napt-init.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "87f574e7a02cb74d276217d590513e98f81c895a5fd2fdf7abf3d84131c63a16"
+}

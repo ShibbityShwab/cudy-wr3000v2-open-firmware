@@ -1,0 +1,21 @@
+{
+  "entry": "0012-arm-thermal-luofu-tvsensor",
+  "message": "commit-messages/0012-arm-thermal-luofu-tvsensor.txt",
+  "status": "ready-for-review",
+  "pieces": [
+    {
+      "patch": "012-arm-thermal-luofu-tvsensor.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "066-thermal-luofu-tvsensor-w23.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "067-dt-bindings-thermal-luofu-tvsensor-w23.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "a090536c58e85849cd2baa2b78a176a9dd53aeb8eb03b7bc5273cb028dc4ac9e"
+}

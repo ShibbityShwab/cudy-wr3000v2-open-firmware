@@ -10,8 +10,16 @@
     {
       "patch": "038-net-gmac-maxframe-init.patch",
       "hunks": "all"
+    },
+    {
+      "patch": "041-net-gmac-macconf-nodoorbell.patch",
+      "hunks": "all"
+    },
+    {
+      "patch": "051-net-gmac-macregs-w16.patch",
+      "hunks": "all"
     }
   ],
   "drop": [],
-  "expected_sha256": "2e29f355ec93ea082a1c09261ed84ecea2592ccdee5fcf3b0373549af7b31b42"
+  "expected_sha256": "a92aa3df813852154144526123a0d8a72b99c4ba0ca8cf43c58a7ea7d8ae1213"
 }

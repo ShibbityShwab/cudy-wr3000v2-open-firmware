@@ -1,0 +1,13 @@
+{
+  "entry": "0027-net-lsw-eqm-qminit",
+  "message": "commit-messages/0027-net-lsw-eqm-qminit.txt",
+  "status": "RFC",
+  "pieces": [
+    {
+      "patch": "032-net-lsw-eqm-qminit.patch",
+      "hunks": "all"
+    }
+  ],
+  "drop": [],
+  "expected_sha256": "719c824c1f173b8c98b1c48181cf8177a9f1aad70c71ca2a216b1f35e7d50ffd"
+}

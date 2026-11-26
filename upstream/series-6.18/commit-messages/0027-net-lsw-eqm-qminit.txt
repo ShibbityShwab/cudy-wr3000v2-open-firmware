@@ -1,0 +1,17 @@
+net: ethernet: luofu-switch: add EQM queue-manager init (RFC)
+
+The Hi5671Y switch's EQM (queue manager) block needs its queue/credit/shaping tables
+programmed before the LSW datapath can enqueue. The vendor loader does this as part of
+the attended W7 bring-up step; this patch makes the same table set part of the normal
+boot init, so the switch comes up fully configured without a bench gate.
+
+The tables and the init order are decoded from the stock firmware's W6/W7 sequences
+(the EPS channel map and the EQM init); the register layout is the one the vendor's
+own registers use on this silicon revision. [U] The exact queue/credit split was not
+observed under concurrent traffic - the bring-up was exercised with the gate set and
+mirror off, not with a live forwarding matrix.
+
+The `luofu_lsw.qminit` bench option and the attended-gate comments are dropped: the
+review form must carry no lab gates or module parameters (the acceptance rule).
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>

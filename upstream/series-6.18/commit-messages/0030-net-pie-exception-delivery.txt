@@ -1,0 +1,15 @@
+net: ethernet: luofu-pie: add native exception-class RX delivery (RFC)
+
+The PIE (packet interface engine) can deliver exception-class frames (the
+control/protocol traffic the switch punts to the CPU) through its own RX path
+instead of the accepterr bench option. This patch implements that native delivery
+path and retires the accepterr option from the review form.
+
+[V] The delivery was exercised with the exception path enabled on the bench line
+(the E0-a mirror-off run and the M1a proof both delivered exception frames
+natively). [U] The complete exception-class taxonomy and the per-class queue
+selection are not fully measured.
+
+The accepterr bench option is dropped (the acceptance rule).
+
+Signed-off-by: ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
