@@ -1,0 +1,30 @@
+# fw_dfs_set_re.py --dump
+
+image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B, sha256 7fc87e2051e8...)
+objdump: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-objdump ; 342693 instructions decoded
+
+key 0x07E7 -> worker CA 0xb58fc (table A row 94); body = u8(hdr+24)
+body[0] = 0x01 ARM / 0x00 CLEAR (1-byte body, u16 len at hdr+22)
+
+arm writes (u16 bit0, old & ~1):
+  CA 0x4010e008  @0b59c6  bit0 <- 1
+  CA 0x4010e004  @0b59d6  bit0 <- 0
+  CA 0x4010e000  @0b59e8  bit0 <- 1
+  CA 0x4010e0a8  @0b59fa  bit0 <- 1
+  CA 0x4010e0a4  @0b5a08  bit0 <- 0
+  CA 0x4010e0a0  @0b5a18  bit0 <- 1
+clear writes (all six u16 bit0 <- 0) when the armed pattern is read:
+  CA 0x4010e008  @0b5a8e
+  CA 0x4010e004  @0b5a9e
+  CA 0x4010e000  @0b5aac
+  CA 0x4010e0a8  @0b5aba
+  CA 0x4010e0a4  @0b5ac8
+  CA 0x4010e0a0  @0b5ad4
+
+per-module context (lookup CA 0xA4C0E gate: >=1 ctx state in 1..3):
+  u32[ctx+0x4A0] gate (0 to arm) / u8[ctx+0x4A5] CAC-active flag
+  u32[ctx+0x4AC] helper object -> CA 0xF593C(arm) / 0xF58D8(clear)
+
+wire frame (29 B):
+  00 01 00 00 1d 00 01 00 00 00 5a 5a 00 00 00 00 01 00 00 00 e7 07 01 00 01 ff ff ff ff  (arm, body 01)
+  00 01 00 00 1d 00 01 00 00 00 5a 5a 00 00 00 00 01 00 00 00 e7 07 01 00 00 ff ff ff ff  (clear, body 00)

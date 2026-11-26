@@ -1,0 +1,109 @@
+# fw_dfs_set_re.py --selftest (host-only, pinned image)
+# image: 928,920 B sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+# run: python3 tools/fw_dfs_set_re.py <FIRMWARE.bin> --selftest
+
+image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B, sha256 7fc87e2051e8...)
+objdump: /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-objdump ; 342693 instructions decoded
+
+=== A. identity + dispatcher row 94 ===
+PASS   1  firmware length == 928920 B
+PASS   2  firmware sha256 == 7fc87e20...311b
+PASS   3  table A row 94 key == 0x07E7
+PASS   4  table A key 0x07E7 -> worker CA 0xb58fc
+PASS   5  dispatcher key load = u16 hdr+20
+PASS   6  dispatcher payload = hdr+24
+
+=== B. the worker's gates (CA 0xb58fc) ===
+PASS   7  worker prologue
+PASS   8  gate 1: hcc ctx byte +17
+PASS   9  gate 1: == 1
+PASS  10  gate 2: per-link word +0x4B0
+PASS  11  gate 2: resolver word [perlink+0xE20]
+PASS  12  gate 2: started-module scan call
+PASS  13  scan prologue
+PASS  14  scan: count byte [arg+18]
+PASS  15  scan: message ctx state -1
+PASS  16  scan: state in 1..3
+PASS  17  scan: count the started ctx
+
+=== C. the body parse ===
+PASS  18  payload = hdr+24 in the dispatcher ABI
+PASS  19  body[0] = u8 payload[0]
+PASS  20  body[0] == 0 -> the clear branch
+PASS  21  clear branch target
+
+=== D. the six band-1 SMAC sub-base registers ===
+PASS  22  literal @0b595c == sub-base register 0x4010e000
+PASS  23  literal pool seat 0xb5b7c holds 0x4010e000
+PASS  24  literal @0b5962 == sub-base register 0x4010e004
+PASS  25  literal pool seat 0xb5b80 holds 0x4010e004
+PASS  26  literal @0b596a == sub-base register 0x4010e008
+PASS  27  literal pool seat 0xb5b84 holds 0x4010e008
+PASS  28  literal @0b5972 == sub-base register 0x4010e0a0
+PASS  29  literal pool seat 0xb5b88 holds 0x4010e0a0
+PASS  30  literal @0b597a == sub-base register 0x4010e0a4
+PASS  31  literal pool seat 0xb5b8c holds 0x4010e0a4
+PASS  32  literal @0b5988 == sub-base register 0x4010e0a8
+PASS  33  literal pool seat 0xb5b90 holds 0x4010e0a8
+PASS  34  the 0x4010e000 base word has exactly the 4 pinned load sites
+PASS  35  0x4010e004 literal loaded only by its one handler site
+PASS  36  0x4010e008 literal loaded only by its one handler site
+PASS  37  0x4010e0a0 literal loaded only by its one handler site
+PASS  38  0x4010e0a4 literal loaded only by its one handler site
+PASS  39  0x4010e0a8 literal loaded only by its one handler site
+PASS  40  arm write @0b59c6 -> 0x4010e008 set
+PASS  41  arm write @0b59d6 -> 0x4010e004 clr
+PASS  42  arm write @0b59e8 -> 0x4010e000 set
+PASS  43  arm write @0b59fa -> 0x4010e0a8 set
+PASS  44  arm write @0b5a08 -> 0x4010e0a4 clr
+PASS  45  arm write @0b5a18 -> 0x4010e0a0 set
+PASS  46  arm: +8 gets bit0 SET (orr.w r3,r3,#1)
+PASS  47  arm: +4 gets bit0 CLEAR (bic.w r3,r3,#1)
+PASS  48  clear write @0b5a8e -> 0x4010e008
+PASS  49  clear write @0b5a9e -> 0x4010e004
+PASS  50  clear write @0b5aac -> 0x4010e000
+PASS  51  clear write @0b5aba -> 0x4010e0a8
+PASS  52  clear write @0b5ac8 -> 0x4010e0a4
+PASS  53  the sixth clear write reuses the arm path's shared store @0xB5A18
+PASS  54  arm pattern {1,0,1,1,0,1} on REG_CA[0..5]
+PASS  55  arm pattern = set,clr,set,set,clr,set
+
+=== E. the CAC-active flag + helper pair ===
+PASS  56  flag gate: u32[ctx+0x4A0]
+PASS  57  flag read: u8[ctx+0x4A5]
+PASS  58  arm: flag = 1
+PASS  59  clear: flag = 0
+PASS  60  arm helper call @0b5b20 -> 0xf593c
+PASS  61  arm helper call @0b5b26 -> 0x5f450
+PASS  62  clear helper call @0b5b5c -> 0xf58d8
+PASS  63  clear helper call @0b5b62 -> 0x5e95c
+PASS  64  arm helper F593C validates its object (cbnz)
+PASS  65  module ctx fields differ from the 0x01F7 mode key: the 0x07E7 worker never touches bandobj+0xF04
+
+=== F. the host frame (our driver's wire bytes) ===
+PASS  66  arm frame == the pinned KAT
+PASS  67  clear frame == the pinned KAT
+PASS  68  arm frame length == 29
+PASS  69  arm frame group nibble == 0
+PASS  70  arm frame id == 1
+PASS  71  arm frame total field @+4 == 29
+PASS  72  arm frame key @+20 == 0x07E7
+PASS  73  arm frame body len @+22 == 1
+PASS  74  arm frame tag @+10 == 0x5a5a
+PASS  75  arm frame 0xFF tail
+PASS  76  clear frame length == 29
+PASS  77  clear frame group nibble == 0
+PASS  78  clear frame id == 1
+PASS  79  clear frame total field @+4 == 29
+PASS  80  clear frame key @+20 == 0x07E7
+PASS  81  clear frame body len @+22 == 1
+PASS  82  clear frame tag @+10 == 0x5a5a
+PASS  83  clear frame 0xFF tail
+PASS  84  arm body byte == 0x01
+PASS  85  clear body byte == 0x00
+PASS  86  arms and clears differ only in the body byte
+PASS  87  independent builder reproduces the arm KAT
+PASS  88  independent builder reproduces the clear KAT
+PASS  89  0x07E7 is NOT the 0x01F7 mode key
+
+RESULT: 89/89 checks PASS
