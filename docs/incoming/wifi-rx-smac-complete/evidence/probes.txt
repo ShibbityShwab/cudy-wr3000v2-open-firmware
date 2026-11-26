@@ -1,0 +1,22 @@
+read-only probe pack (no writes, no retries; never read phys 0x1016xxxx):
+| # | item | address | meaning |
+| P0 | D2H catalogue (host, no device read) | - | g4 id1/id2 + g4 id4 present? g1 id13 present = RX delivered to host |
+| P1 | band dispatch word | CA 0x180814 (phys 0x40838814) | u32; +8 -> band0 obj, +0x1C -> band1 obj (expect 0x174BF0 / 0x175A18) |
+| P2 | band0 obj +0x2a0 (SMAC base) | CA 0x174E90 (phys 0x4082CE90) | 0x40042000 boot default, or a firmware-RAM SMAC context block (Lead bench: 0x00114F18) |
+| P3 | band1 obj +0x2a0 (SMAC base) | CA 0x175CB8 (phys 0x4082DCB8) | 0x40062000 = still the boot default (5G SMAC context never attached) |
+| P4 | SMAC status word (follow P2/P3 base) | CA BASE+0xe8 | producer gate; read before/after the auth burst. If P2 is a device-IO base: phys BASE+0x3B8000+0xe8; if FW-RAM base: phys BASE+0x406B8000+0xe8 |
+| P5 | band0 producer entry counter | CA 0x1758B0 (phys 0x4082D8B0) | u8; ++ after the bit2 gate, before the dequeue; any increment = the ISR body ran past the gate |
+| P5b | band1 producer entry counter | CA 0x1766D8 (phys 0x4082E6D8) | u8; band-1 mirror |
+| P6 | SMAC ack word (follow P2/P3 base) | CA BASE+0xe4 | producer writes 4, body D 0x80, body E 0x100, body F mask&~status; a change = ISR work |
+| P7 | other SMAC source counters (band0) | CA 0x1758A8 / 0x1758A9 (phys 0x4082D8A8 / 0x4082D8A9) | body E / body D counters: movement shows SMAC IRQ delivery works at all |
+| P8 | MAC band0 enable/status | CA 0x4010820C / 0x40108214 (phys 0x404C020C / 0x404C0214) | enable written by MAC start 0x4AF0C: band0 = 0xf (bits 0..3) |
+| P9 | MAC band1 enable/status | CA 0x4010C200 / 0x4010C220 (phys 0x404C4200 / 0x404C4220) | enable written by MAC start: band1 = 0x1029 (bits 0,3,5,12); INTC-id mapping [U] |
+| P10 | consumer counters (existing pack) | band0 obj +0xCC5/+0x1AD4/+0x1ADA | bump = the consumer's own gates saw a frame (wifi-rx-mac-delivery P5-P8) |
+| P11 | PPDU alloced list | band0 obj +0x66C/+0x670/+0x674 | head/tail/count; producer unlinks one and re-links a fresh one per completion |
+
+device-IO conversion: phys = CA + 0x3B8000 ; firmware-RAM conversion: phys = CA + 0x406B8000
+the host CANNOT read the INTC/event controller at CA 0x4016xxxx (outside region 3).
+Decision: P5 increments + P6 changes => the producer ran; the break is then in the consumer (P10).
+          P5 stays 0 while P7 moves  => the RX source specifically is not delivered
+                                        (MAC enable-mask bit hypothesis).
+          P5 and P7 both stay 0     => SMAC IRQ delivery is dead on this boot.

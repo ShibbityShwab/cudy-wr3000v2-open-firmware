@@ -1,0 +1,34 @@
+T1 - IRQ -> SMAC handler registration (per-band init 0xD1B68; c6da2/c6ff4)
+| band0 IRQ | band1 IRQ | prio | wrapper band0 / band1 | common body | status bit of [base+0xe8] |
+| 47 | 53 | 5 | 0xaec95 / 0xaec89 | 0xaec74 | bit0: set->return, else post RTOS event 1 |
+| 49 | 55 | 5 | 0xb54c9 / 0xb54bd | 0xb53a4 | bit2: set->return, else PRODUCE g2 id3 |
+| 50 | 56 | 5 | 0xb0d51 / 0xb0d45 | 0xb0ce0 | status dispatch (16-B D2H) |
+| 51 | 57 | 5 | 0xaec69 / 0xaec5d | 0xaeb80 | bit7: set->return, else ring walk |
+| 52 | 58 | 5 | 0xaeb75 / 0xaeb69 | 0xaea9c | bit8: set->return, else g2 id0x23 D2H |
+| 82 | 84 | 14 | 0xae48d / 0xae481 | 0xae45c | mask-ack: (mask & ~status) -> +0xe4 |
+| 83 | 85 | 5 | 0xb0d51 / 0xb0d45 | 0xb0ce0 | status dispatch (16-B D2H) |
+| 59 | 60 | 5 | 0xb0c45 / 0xb0c39 | 0xb0ab8 | error bits (0/1/2) |
+
+T2 - producer body 0xB53A4 sequence (every row asserted by --selftest)
+| 0xB53A8 | ldr.w r3,[r0,#0x2a0] | SMAC register/context base (init: 0x40042000 / 0x40062000) |
+| 0xB53AE | ldr.w r3,[r3,#0xe8] | SMAC status word |
+| 0xB53B2 | lsls r3,r3,#0x1d ; bmi ret | bit2 SET -> early return (gate G2) |
+| 0xB53BE | ldrb/strb [r0,#0xcc0] | entry counter (probe P5) |
+| 0xB53C8 | bl 0xBFD4C | pre-dequeue hook |
+| 0xB53D4 | bl 0xB084C(band+0x348,&out,3) | dequeue a completion entry (gate G3) |
+| 0xB53F4 | ldr [r4,#0x2a0] ; str #4,[r3,#0xe4] | SMAC ack bit2 write (probe P6) |
+| 0xB5402 | bl 0xB0C88 | received-frame chain pointer |
+| 0xB5418 | bl 0xB2BD8(band+0x66c,node) | unlink PPDU descriptor from the alloced list |
+| 0xB5424 | movs r0,#0x14 ; bl 0x102822 | alloc 20-byte message (gate G4) |
+| 0xB5462 | movs r2,#2 ; bfi hdr[0],#0,#4 | group nibble = 2 |
+| 0xB546E | movs r3,#3 ; strb hdr[6] | id = 3 (u16 hdr[6] = 3) |
+| 0xB5472 | bfi hdr[1], u8[band],#4,#4 | destination nibble = band object byte 0 |
+| 0xB5488 | str band_obj,[hdr,#0x14] | consumer 0xBBC9C reads this field |
+| 0xB548C | str chain,[hdr,#0xc] | consumer 0xBBC9C reads this field |
+| 0xB5492 | bl 0x102760 | post the message (HCC message layer) |
+| 0xB5458 | bl 0xB52F0 | re-arm a fresh 0x198-B PPDU descriptor |
+
+T3 - host conversion (committed by wifi-ppdu-init / wifi-tbtt-timer)
+| window | formula | examples |
+| device IO | phys = CA + 0x3B8000 | 0x400420e8 -> 0x403FA0E8 |
+| firmware RAM | phys = CA + 0x406B8000 | band0 object 0x174BF0 -> 0x4082CBF0 |

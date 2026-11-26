@@ -1,0 +1,39 @@
+lane wifi-rx-smac-complete: the SMAC PPDU-completion producer of group-2 id 3
+image: rootfs-2.4.15/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b)
+
+IRQ entry (ARM vector) CA 0x40064 -> blx 0xC2EFC (event dispatcher)
+  pending id = word[0x4016010C] & 0x3FF (max 0x5F); handler = [0x17D398+0x98+4*id];
+  ack = word[0x40160110] = pending word.  The host cannot read CA 0x4016xxxx.
+
+per-band SMAC sources registered by per-band init 0xD1B68 (band0 | band1):
+  IRQ 47 | 53  prio  5  wrapper 0xaec95|0xaec89  body 0xaec74|0xaec74
+  IRQ 49 | 55  prio  5  wrapper 0xb54c9|0xb54bd  body 0xb53a4|0xb53a4   <== group-2 id-3 PRODUCER
+  IRQ 50 | 56  prio  5  wrapper 0xb0d51|0xb0d45  body 0xb0ce0|0xb0ce0
+  IRQ 51 | 57  prio  5  wrapper 0xaec69|0xaec5d  body 0xaeb80|0xaeb80
+  IRQ 52 | 58  prio  5  wrapper 0xaeb75|0xaeb69  body 0xaea9c|0xaea9c
+  IRQ 82 | 84  prio 14  wrapper 0xae48d|0xae481  body 0xae45c|0xae45c
+  IRQ 83 | 85  prio  5  wrapper 0xb0d51|0xb0d45  body 0xb0ce0|0xb0ce0
+  IRQ 59 | 60  prio  5  wrapper 0xb0c45|0xb0c39  body 0xb0ab8|0xb0ab8
+
+producer body 0xB53A4 (band0 IRQ 49 / band1 IRQ 55):
+  1. base = [band_obj+0x2a0]  (band0 0x40042000, band1 0x40062000 from init 0xD2046/0xD2094)
+     status = [base+0xe8]; if bit2 SET -> return (early out before any counter)
+  2. [band_obj+0xcc0]++  (entry counter)
+  3. bl 0xBFD4C; r = 0xB084C(band_obj+0x348, &out, 3)  (dequeue a completion entry)
+     if r != 0 -> log line 0x2a1, ack, return
+  4. desc = 0xB0C88(...); 0xB2BD8(band_obj+0x66C, desc-8)  (unlink PPDU descriptor)
+  5. [base+0xe4] = 4  (SMAC ack for source bit2)
+  6. msg = 0x102822(0x14) (20-byte message); fill HCC header:
+       hdr[0]&0xf = 2 (group 2);  u16 hdr[6] = 3 (id 3);  hdr[7] = 0
+       hdr[1] |= u8[band_obj]<<4 (destination); hdr[2] = u8[band_obj+2]; hdr[3] = 0x12
+       hdr[0xc] = received-frame chain; hdr[0x13] = 1; hdr[0x14] = band_obj; hdr[0x1d] = 0
+  7. 0x102760(msg)  -> HCC message layer (dest/group resolve: 0x102744 + instance 0x171B6C)
+  8. 0xB52F0(band_obj, band_obj+0x320, desc-8)  -> reserve + link a fresh PPDU descriptor
+
+consumer half (cross-check): group-2 table 0x10CC18 entry id 3 -> 0xBBC9C;
+  dispatcher 0xFD7E8 (group = u8[hdr]&0xf, id = u16[hdr+6]) calls it; 0xBBC9C reads
+  [hdr+0x14] (band object) and [hdr+0xc] (frame chain) - exactly the two payload fields
+  the producer writes - then 0xBA1C8 -> 0xB9780 builds the g1 id-13 CRX D2H per frame.
+
+host-visible state: the INTC (CA 0x4016xxxx) is not in the host region-3 window; the MAC
+  enable masks 0x40108214/0x4010C220 and the SMAC words 0x400420e8/0x400420e4 ARE (see --probes).
