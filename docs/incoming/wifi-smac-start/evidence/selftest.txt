@@ -1,0 +1,163 @@
+=== selftest: image identity ===
+PASS   1  firmware length == 928920
+PASS   2  firmware sha256 == 7fc87e20...311b
+
+=== A. timer words: complete literal reference set ===
+PASS   3  0x401015CC literal refs == the six documented sites
+PASS   4  0x400024B0 literal refs == the three documented sites
+PASS   5  start helper state read
+PASS   6  start helper guard
+PASS   7  start helper value 1
+PASS   8  start helper literal == 0x401015CC
+PASS   9  start helper write-low-half
+PASS  10  start helper derive interval word
+PASS  11  start helper derive interval word 2
+PASS  12  start helper read old interval
+PASS  13  start helper save slot == 0x001664C8
+PASS  14  start helper save old interval
+PASS  15  start helper interval 100
+PASS  16  start helper write interval
+PASS  17  start helper refcount++
+PASS  18  stop helper state read
+PASS  19  stop helper decrement
+PASS  20  stop helper literal == 0x401015CC
+PASS  21  stop helper write 0
+PASS  22  stop helper save-slot literal
+PASS  23  stop helper interval literal
+PASS  24  stop helper restore interval
+PASS  25  stop helper return
+PASS  26  helper caller @0e868e
+PASS  27  helper caller @0e8804
+PASS  28  helper caller @0f3c02
+PASS  29  helper caller @0f3d1c
+PASS  30  helper owner 0e8670 is a real prologue
+PASS  31  helper owner 0f3b22 is a real prologue
+PASS  32  E8670 band selector
+PASS  33  E8670 band0 MAC-start literal
+PASS  34  E8670 band0 MAC-start literal == 0x4011080C
+PASS  35  F3B22 freq compare (2400 = 2.4 GHz)
+PASS  36  TBTT block literal @0f3c34 == 401015a4
+PASS  37  TBTT block literal @0f3c36 == 401015ac
+PASS  38  TBTT block literal @0f3c3c == 40101584
+PASS  39  TBTT block literal @0f3c4c == 40101594
+PASS  40  TBTT block literal @0f3c96 == 401015a8
+PASS  41  TBTT block literal @0f3cea == 40101588
+PASS  42  TBTT block literal @0f3cf6 == 4010159c
+PASS  43  TBTT block set complete
+PASS  44  MAC start 0x4AF0C device-literal set == documented 10
+PASS  45  MAC start does not touch the timer words
+
+=== B. boot SMAC init CA 0xD1B68 ===
+PASS  46  init prologue
+PASS  47  init region length 7272
+PASS  48  init region base == 0x174BE0
+PASS  49  init memset call
+PASS  50  init per-band object base == 0x174C30
+PASS  51  init band stride 3624
+PASS  52  init stride multiply
+PASS  53  band loop count read
+PASS  54  band loop compare
+PASS  55  band loop body branch
+PASS  56  band loop advance object
+PASS  57  band loop advance index
+PASS  58  device chain A base literal @0d2044 == 40042000
+PASS  59  device chain A base literal @0d2094 == 40062000
+PASS  60  device chain B base literal @0d20fc == 40080000
+PASS  61  device chain B base literal @0d217c == 400b0000
+PASS  62  device chain A store +608
+PASS  63  device chain A store +612
+PASS  64  device chain A store +616
+PASS  65  device chain A store +620
+PASS  66  device chain A store +624
+PASS  67  device chain A store +628
+PASS  68  device chain A store +632
+PASS  69  device chain A store +636
+PASS  70  device chain B store +648
+PASS  71  device chain B store +652
+PASS  72  device chain B store +656
+PASS  73  device chain B store +660
+PASS  74  device chain B store +664
+PASS  75  device chain B store +668
+PASS  76  device chain B store +672
+PASS  77  device chain B store +676
+PASS  78  band0 SMAC base == 0x4010A000
+PASS  79  band1 SMAC base == 0x4010E000
+PASS  80  RAM block attach literal @0d2bc8 == 00114f18
+PASS  81  RAM block attach literal @0d2ca0 == 00115128
+PASS  82  RAM block attach literal @0d2caa == 00183438
+PASS  83  RAM block attach literal @0d2cb4 == 001817a0
+PASS  84  RAM block attach literal @0d2cbc == 00180904
+PASS  85  RAM block attach literal @0d2cc2 == 00180e68
+PASS  86  RAM block attach store +576
+PASS  87  RAM block attach store +584
+PASS  88  RAM block attach store +580
+PASS  89  RAM block attach store +588
+PASS  90  RAM block attach store +592
+PASS  91  RAM block attach store +596
+PASS  92  RAM block attach store +600
+PASS  93  attach +580 value is the +488 block
+PASS  94  attach group memset call
+PASS  95  attach group base == 0x174E70
+PASS  96  0x114F18 has exactly the seven documented load sites
+PASS  97  0x114F18 load @085ef2 (rate/power table read) inside the image
+PASS  98  0x114F18 load @0a5414 (rate/power table read) inside the image
+PASS  99  0x114F18 load @0a54d2 (rate/power table read) inside the image
+PASS 100  0x114F18 load @0a5652 (rate/power table read) inside the image
+PASS 101  0x114F18 load @0a5770 (rate/power table read) inside the image
+PASS 102  0x114F18 load @0d2bc8 (boot fill source) inside the image
+PASS 103  0x114F18 load @0da824 (rate/power table select) inside the image
+PASS 104  fill source tables are the two literals
+PASS 105  fill writes u16 into 0x114F18
+PASS 106  fill first loop ends at 37
+PASS 107  fill second loop ends at 244
+PASS 108  fill block stride 244
+PASS 109  only one direct caller of the SMAC init
+
+=== C. band objects / wrapper / ISR context ===
+PASS 110  band accessor band guard
+PASS 111  band accessor stride
+PASS 112  band accessor base == 0x174BF0
+PASS 113  band accessor mla
+PASS 114  band1 object = band0 + stride
+PASS 115  wrapper band0 load
+PASS 116  wrapper literal == 0x180814
+PASS 117  wrapper band0 object load
+PASS 118  wrapper band1 object load
+PASS 119  ISR body 0xAE45C context read
+PASS 120  ISR body 0xAE45C status read
+PASS 121  ISR body 0xAE45C mask write
+PASS 122  ISR body 0xAEB80 context read
+PASS 123  ISR body 0xAEB80 status read
+PASS 124  ISR body 0xAEB80 mask write
+PASS 125  seven common ISR bodies documented
+
+=== D. per-band SMAC ISR name table CA 0x12266C ===
+PASS 126  name blob has 45 strings
+PASS 127  first 7 name pairs (5g/2g) in order
+PASS 128  12 smac_msg_proc names present
+PASS 129  event names present
+PASS 130  smac_tbtt names present
+PASS 131  tbtt handler is not among the 8 registered INTC sources
+
+=== E. stock H2D keys vs our ladder ===
+PASS 132  stock capture keys parsed (25 distinct)
+PASS 133  stock capture has the beacon/VAP/channel/RF keys
+PASS 134  stock capture does not contain 0x0242/0x0243
+PASS 135  our keys absent from the stock boot == 0x0064/0x0067/0x0242/0243
+PASS 136  20 stock-only g0-id1 keys
+PASS 137  key 0x0064 -> worker 0x0449e4
+PASS 138  key 0x0065 -> worker 0x046394
+PASS 139  key 0x0067 -> worker 0x045f74
+PASS 140  key 0x00d8 -> worker 0x081038
+PASS 141  key 0x0124 -> worker 0x0841b8
+PASS 142  key 0x0127 -> worker 0x084da4
+PASS 143  key 0x01cf -> worker 0x084d14
+PASS 144  key 0x01f7 -> worker 0x0b5b9c
+PASS 145  key 0x0242 -> worker 0x04c524
+PASS 146  key 0x0243 -> worker 0x08419c
+PASS 147  key 0x03e4 -> worker 0x084260
+
+=== F. negative results ===
+PASS 148  no dispatch worker is the SMAC init / timer helper / band start
+
+PASS: 148 assertions, 0 failed

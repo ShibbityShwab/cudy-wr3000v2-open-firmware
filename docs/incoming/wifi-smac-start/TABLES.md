@@ -60,6 +60,17 @@ r4+576 = obj+640 and r4+608 = obj+672. The ISR bodies read obj+672 as the
 working band-0 read of obj+672 = 0x114F18 equals the value the same init writes
 at r4+576 = obj+640 (0x20 offset discrepancy - R7 must probe both).
 
+## T3b. Context status/mask pair [V addresses / U bits]
+
+| field | site | meaning |
+| --- | --- | --- |
+| [ctx]+228 | 0xAE46A read, 0xAE474 write (body 0xAE45C) | SMAC ack/mask word (live band0 read 0x00A00096) |
+| [ctx]+232 | 0xAE46A read (body 0xAE45C), 0xAEB8A (body 0xAEB80) | SMAC clear word (live band0 read 0) |
+| mask literal | 0xAE468 = 0x01000200 | bits 9 and 25 of the mask source [ctx+700] |
+
+Bit assignment of 0x00A00096 stays [U]; R7 #10/#11 record it as a liveness
+signature (the ISR writes it).
+
 ## T4. RAM block set [V]
 
 | block | value / role |

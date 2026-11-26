@@ -1,0 +1,35 @@
+T2 timer writers:
+  site       fn         write
+  0x0897ee  0x897D6    strh 0 -> 0x401015CC; restore interval
+  0x089814  0x8980C    strh 1 -> 0x401015CC; save; 100
+  0x09f436  per-link init str count -> 0x401015CC
+  0x09f43e  per-link init str 100 -> 0x400024B0
+  0x0a0052  per-link init str 0 -> 0x401015CC
+  0x0a02a0  per-link init str count -> 0x401015CC
+  0x0a02a8  per-link init str 100 -> 0x400024B0
+  0x0a047a  per-link init str 0 -> 0x401015CC
+
+T3 per-band object fields (r4 = 0x174C30 + band*0xE28):
+  offset   band0        band1       
+  +576     0x114F18     0x114F18    
+  +584     0x115128     0x115128    
+  +608     0x40042000   0x40062000  
+  +648     0x40080000   0x400B0000  
+  +672     0x40083000   0x400B3000  
+  +720     0x4010A000   0x4010E000  
+  +724     0x40109000   0x4010D000  
+
+T5 stock-vs-ladder g0-id1 keys:
+  stock keys (25): 0000 0005 000b 003c 0052 0065 0069 006f 0073 0078 00d8 00f7 011e 0124 0127 015d 01cf 01ee 01f7 025f 02bd 03e4 07d9 07e7 07e8
+  ladder keys:     0064 0065 0067 00d8 0124 0127 01f7 0242 0243
+  stock-only:      0000 0005 000b 003c 0052 0069 006f 0073 0078 00f7 011e 015d 01cf 01ee 025f 02bd 03e4 07d9 07e7 07e8
+  stock-only -> worker: 0000->0840b4 0005->082878 000b->0a09f0 003c->0811b8 0052->042044 0069->0839b4 006f->081c44 0073->084920 0078->0a5824 00f7->045a30 011e->0a1a58 015d->0b2410 01cf->084d14 01ee->04213c 025f->082850 02bd->0438f0 03e4->084260 07d9->04366c 07e7->0b58fc 07e8->0429b0
+
+T6 ISR names CA 0x12266C: 45 strings; first 7 pairs:
+  1 smac_coex_rx_abort_end_{5g,2g}_isr -> body 0x0ae45c (IRQ 47/53)
+  2 smac_rx_complete_{5g,2g}_isr -> body 0x0aea9c (IRQ 49/55)
+  3 smac_tx_complete_{5g,2g}_isr -> body 0x0aeb80 (IRQ 50/56)
+  4 smac_common_timer_{5g,2g}_isr -> body 0x0b53a4 (IRQ 51/57)
+  5 smac_coex_pta_rx_abort_timeout_{5g,2g}_isr -> body 0x0b0ce0 (IRQ 52/58)
+  6 smac_coex_tx_abort_end_{5g,2g}_isr -> body 0x0b0ab8 (IRQ 82/84)
+  7 smac_coex_pta_tx_abort_timeout_{5g,2g}_isr -> body 0x0aec74 (IRQ 83/85)

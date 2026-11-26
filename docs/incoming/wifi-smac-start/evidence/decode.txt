@@ -1,0 +1,46 @@
+the 5 GHz SMAC start decode (host-only)
+
+BENCH DATUM (Lead 2026-11-26 11:30, 2.4 GHz differential):
+  working 2.4 AP: 0x401015CC=0 0x400024B0=0x64 obj+672=RAM block
+  silent  5G AP: 0x401015CC=0 0x400024B0=0x64 obj+672=0x40062000
+  => the timer words are NOT the discriminator (task-214 latch
+     hypothesis refuted); the per-band SMAC context pointer is.
+
+A. timer words 0x401015CC/0x400024B0 complete reference sites:
+   0x0897ee -> 0x401015CC
+   0x089814 -> 0x401015CC
+   0x09f436 -> 0x401015CC
+   0x0a0052 -> 0x401015CC
+   0x0a02a0 -> 0x401015CC
+   0x0a047a -> 0x401015CC
+   0x0897f6 -> 0x400024B0
+   0x09f43e -> 0x400024B0
+   0x0a02a8 -> 0x400024B0
+   start helper CA 0x08980c (write 1), stop helper CA 0x0897d6 (write 0);
+   called only from CA 0xE8670 and CA 0xF3B22 (per-band TBTT timing config).
+
+B. boot SMAC init CA 0x0d1b68 (caller 0x048314):
+   memsets 7272 B at 0x174be0; loops band instances (base 0x174c30 + band*0xE28):
+   [obj+608..] device chain A base 0x40042000 (literal @0x0d2044)
+   [obj+608..] device chain A base 0x40062000 (literal @0x0d2094)
+   [obj+648..] device chain B base 0x40080000 (literal @0x0d20fc)
+   [obj+648..] device chain B base 0x400b0000 (literal @0x0d217c)
+   [obj+720/+724] SMAC bases 0x4010a000/0x40109000 (band0) vs 0x4010e000/0x4010D000 (band1)
+   [obj+576..] RAM block attach: 00114f18 00115100 00115128 00183438 001817a0 00180904 00180e68
+   address relation: obj=wrapper object, r4=obj+0x40 =>
+     r4+608 = obj+672 (device base; band1 = 0x40062000)
+     r4+576 = obj+640 (RAM block 0x114F18)
+
+C. band objects: band0 0x174bf0, band1 0x175a18 (accessor CA 0x0f4f48); ISR bodies read [obj+672].
+   silent band1 obj+672 = the boot device-base default 0x40062000
+   => the band-1 SMAC context never advanced to the attached
+      RAM-block state the working 2.4 GHz band shows.
+
+D. 0x114F18 load sites (five literal copies, seven loads):
+   0x085ef2  rate/power table read
+   0x0a5414  rate/power table read
+   0x0a54d2  rate/power table read
+   0x0a5652  rate/power table read
+   0x0a5770  rate/power table read
+   0x0d2bc8  boot fill source
+   0x0da824  rate/power table select

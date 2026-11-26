@@ -97,6 +97,21 @@ content at 0x114F18..0x115100 is the 0x0096 fill; the live +228 word 0xA00096
 is consistent with a firmware write at +230. Blocks 0x115128/0x183438/
 0x1817A0/0x180904/0x180E68 are the rest of the per-band block set.
 
+### 3b. The status word 0x00A00096 (Lead's [ctx+672]+228 read) [V/I/U]
+
+The common ISR bodies treat the +228/+232 pair as the SMAC mask/ack words, not
+as a control structure: body CA 0xAE45C does
+`r3 = ([ctx+700] & 0x01000200) & ~[ctx+672]+232` and writes it to
+`[ctx+672]+228` (0xAE468/0xAE46A/0xAE470/0xAE474). So +228 is the ack/mask
+word and +232 the clear word. The working band's live value 0x00A00096 =
+bits 0x800000 | 0x200000 | 0x96 (0x80|0x10|0x04|0x02): the static bit
+assignment needs either a live before/after read of an ISR (R7 #10/#11) or a
+per-bit experiment, so it stays **[U]**; it is recorded as a liveness
+signature, not as a start condition. The image content of the 0x114F18 block
+at +228/+232 is 0x00960096, so only the +230 u16 changed (0x0096 -> 0x00A0)
+- consistent with a live firmware write, recorded as evidence that the block
+is attached and used.
+
 ## 4. The band-object accessor [V]
 
 CA 0xF4F48: `movw r0,#3624 ; ldr r3,=0x174BF0 ; mla r0,r0,r1,r3` =

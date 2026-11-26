@@ -1,0 +1,24 @@
+R7 SMAC-context differential (read-only; the Lead fires)
+
+device IO: BAR0 = CA + 0x3B8000 - 0x40000000, phys = CA + 0x3B8000
+fw RAM:    BAR0 = CA + 0x6B8000, phys = 0x40000000 + CA + 0x6B8000
+
+  wrapper band0 obj      CA 0018081c  w4  BAR0 off 0x83881c  0x00174BF0
+  wrapper band1 obj      CA 00180830  w4  BAR0 off 0x838830  0x00175A18
+  band0 obj+576          CA 00174e30  w4  BAR0 off 0x82ce30  0x00114F18 (attach)
+  band0 obj+608          CA 00174e5c  w4  BAR0 off 0x82ce5c  0x40042000
+  band0 obj+672          CA 00174e90  w4  BAR0 off 0x82ce90  the Lead's +672 datum
+  band1 obj+576          CA 00175c58  w4  BAR0 off 0x82dc58  attach slot
+  band1 obj+608          CA 00175c90  w4  BAR0 off 0x82dc90  0x40062000
+  band1 obj+672          CA 00175cb8  w4  BAR0 off 0x82dcb8  0x40062000 (silent)
+  band1 obj+640          CA 00175c98  w4  BAR0 off 0x82dc98  r4+576 if r4=obj+0x20
+  band0 obj+640          CA 00174e70  w4  BAR0 off 0x82ce70  0x00114F18
+  timer word 0           CA 401015cc  w4  BAR0 off 0x4b95cc  0 on both bands
+  timer word 1           CA 400024b0  w2  BAR0 off 0x3ba4b0  0x64 on both bands
+  TBTT block band0 slot  CA 40101584  w4  BAR0 off 0x4b9584  per-band TBTT slot
+  TBTT block band1 slot  CA 40101588  w4  BAR0 off 0x4b9588  per-band TBTT slot
+  SMAC block 0x114F18    CA 00114f18  w4  BAR0 off 0x7ccf18  attached block set
+  SMAC block 0x115128    CA 00115128  w4  BAR0 off 0x7cd128  attached block set
+  SMAC block 0x180E68    CA 00180e68  w4  BAR0 off 0x838e68  attached block set
+
+Read-only. Never write. Never read the RC misc window.
