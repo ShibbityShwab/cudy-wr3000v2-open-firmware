@@ -65,6 +65,8 @@ assert_sha "$WORK/hi5622_vap_start_g0.h" 92b17b152d48c633ea4a82d130a2522b2857341
 assert_sha "$WORK/hi5622_band_start.h" 443b071d3ce131c21d46c54e9f7f510221cf75d31a39603c8e68907394bd1ddc
 
 # ---- 2. R5 order patch --------------------------------------------------
+assert_sha "$LANE/patches/0001-r5-order.patch" e464f4cf0038859705be492967771e7c3294ef7ba84275c96bb4b473a6b86cf7
+assert_sha "$LANE/patches/0002-r5-selftest-update.patch" f35d34e4370da5469d24b0defd078aec8dacd4895b2e1226d8135c72d32cba4e
 ( cd "$WORK" && patch -p1 --no-backup-if-mismatch < "$LANE/patches/0001-r5-order.patch" >/dev/null )
 if ls "$WORK"/*.rej "$WORK"/*.orig >/dev/null 2>&1; then
 	echo "build-r5-order: patch left .rej/.orig files" >&2; exit 1; fi
