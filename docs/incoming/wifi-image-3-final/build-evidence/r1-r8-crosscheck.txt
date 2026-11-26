@@ -1,0 +1,163 @@
+== IMAGE #3 FINAL - R1-R8 receipt cross-check (host-only; 2026-11-26T03:12:18Z) ==
+
+## R1 - kernel package pin inside the image rootfs
+opensource/docs/incoming/wifi-image-3/build-evidence/work/root/etc/apk/world:17:kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+opensource/docs/incoming/wifi-image-3/build-evidence/work/root/lib/apk/db/installed:1382:D:kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1
+opensource/docs/incoming/wifi-image-3/build-evidence/work/root/lib/apk/db/installed:1407:D:kernel=6.18.60~6f995278d21563ed4dd8f2609f3659c8-r1 kmod-hi5622-cfg80211
+## R1 - pair recorder in the rootfs payload manifest
+124112ad83abb52a447d70ded88aad83f1180ea5b12536c3bc76ac8c271b06ce  ./etc/init.d/luofu_record_pair
+## R1 - selector raw attribute exists in the shipped selector driver
++static DEVICE_ATTR_RO(raw);
+## R1 - kernel lineage: the same slice is pinned by image #1, #2, ABI-image and #3
+  opensource/docs/incoming/wifi-final-image/HASHES.txt: 1 mentions of the pinned slice
+  opensource/docs/incoming/wifi-final-image-2/HASHES.txt: 1 mentions of the pinned slice
+  opensource/docs/incoming/wifi-abi-image/README.md: 0
+0 mentions of the pinned slice
+
+## R2 - module identities
+545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99  /home/shibbityshwab/wifi-image-3-module-artifacts/hi5622_wifi.activity.ko
+a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed  /home/shibbityshwab/wifi-image-3-module-artifacts/hi5622_wifi.installed.ko
+379092 /home/shibbityshwab/wifi-image-3-module-artifacts/hi5622_wifi.activity.ko
+358544 /home/shibbityshwab/wifi-image-3-module-artifacts/hi5622_wifi.installed.ko
+737636 total
+params installed: 64  activity: 64
+vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8 
+depends : cfg80211
+license (the .modinfo carries two identical license=GPL strings):
+GPL
+GPL
+text compare (objcopy -O binary -j .text; OpenWrt toolchain):
+494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1  /tmp/final-inst.text
+494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1  /tmp/final-act.text
+  .text BYTE-IDENTICAL
+feature params present: 7
+
+## R2 - userspace carries
+bc4d9c73f5dae02b7e31dd378891b86a29e38eb783fa690e045a0cd6b9861b91  /home/shibbityshwab/wifi-image-3-artifacts/cfg80211.ko
+fef44f3bdfc87c583f8d694338f9eb715c756d85422ef7c81b51e19040a838e6  /home/shibbityshwab/wifi-image-3-artifacts/hostapd
+hostapd version string: 2.12
+hostapd 11AX support marker count: 1
+cfg80211 pkcs7/x509 symbol refs: 0
+
+## R3 - fail-closed uci defaults in the shipped /etc/config/hi5622
+47:	option autoload '0'
+143:	option band5g '0'
+145:	option vap5g '0'
+147:	option ap_chan_wait_ms '300'
+149:	option desc_table '0'
+151:	option dfs_mode '0'
+154:	option he_caps '0'
+156:	option ba_enable '0'
+160:	option enabled '0'
+/etc/hi5622 files shipped:
+./etc/hi5622/FIRMWARE-POLICY.txt
+./etc/hi5622/IMAGE-3-NOTES.txt
+./etc/hi5622/hostapd-open-5g40.conf
+./etc/hi5622/hostapd-open-ax.conf
+./etc/hi5622/hostapd-open.conf
+./etc/hi5622/hostapd-open.proven.conf
+./etc/hi5622/hostapd-wpa2-hardened.conf
+./etc/hi5622/hostapd-wpa2-wpa3.conf
+./etc/hi5622/hostapd-wpa2.conf
+./etc/hi5622/hostapd-wpa3-sae.conf
+
+## R4 - regdomain receipt source: cfg80211 unsigned-regdb build
+cfg80211 size: 2317952 B (pinned 2317952)
+regulatory.db shipped: c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  ./lib/firmware/regulatory.db
+
+## R5 - vendor firmware re-push artifacts
+PD4 rebuild from the pinned vendor FIRMWARE.bin (repo tool, host-only):
+wrote /tmp/final-r5/pd4/FIRMWARE.PD4.bin (sha256 cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1)
+wrote /tmp/final-r5/pd4/PD4-MANIFEST.txt
+cfe24bfb194899f362bfcb0301d7e28a3b4dce0ef4e70b705d54a1f78d3037b1  /tmp/final-r5/pd4/FIRMWARE.PD4.bin
+928920 /tmp/final-r5/pd4/FIRMWARE.PD4.bin
+vendor FIRMWARE.bin: 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b  /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin
+host wifi_block.bin: ABSENT (/tmp was cleaned)
+wifi_block expected: 2472 B sha256 0b4ef9188fc1c9160b4b30cc20be0e704dd62412cbdb25dd51ea5ffb16145b32
+
+## R6 - loader + page/status sysfs attrs exist in the shipped module
+boot
+cfg80211_status
+h2d_ctx_create
+h2d_status
+h2d_txq_sync72
+hcc_arm
+hcc_loop
+prepare
+release
+seed
+status
+upload
+verify
+
+## R7 - 802.11ax config shipped
+16:interface=wlan0
+17:ssid=cudy-ap-test-he
+18:hw_mode=g
+19:channel=6
+24:ieee80211ax=1
+ieee80211ax=1 count: 1
+
+## R8 - 5 GHz config shipped
+16:interface=wlan5
+17:ssid=cudy-ap-test-5g40
+18:hw_mode=a
+19:channel=40
+20:ieee80211n=1
+21:ieee80211ac=1
+23:beacon_int=100
+24:dtim_period=2
+module carries the F2-chain params: 5
+
+## rollback artifacts
+8ba1ad22d78f89e1fa2f7ed45dbffea0bc8a6619890f820cc8ba27ce5c9bd8b8  /home/shibbityshwab/wifi-final-image-2-artifacts/final-image-2-sysupgrade.bin
+31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d  /home/shibbityshwab/wifi-final-image-2-artifacts/rootfs.ubi
+d3c665f16e76811d741bcaa7a670a6467e6a8c3ad0d49f61363a0157e2832d57  /home/shibbityshwab/wifi-image-update-artifacts/rootfs.ubi
+image-2 container root member:
+31e7a39c2d7b022ee16b850a72508c256d2e6c5265ab695717f08df466b9035d  -
+
+## recovery door image
+-rw-r--r-- 1 shibbityshwab shibbityshwab 22024351 Nov 25 16:08 tftp/recovery.bin
+bc40580943e8a9865bb8288d3294f687  tftp/recovery.bin
+
+## stock write-path binaries present in the 2.5.24 stock rootfs (symlinks followed)
+present usr/sbin/ubiformat
+present bin/fw_printenv
+present(symlink) usr/bin/wget -> /bin/uclient-fetch
+present(symlink) usr/bin/sha256sum -> ../../bin/busybox
+present(symlink) sbin/reboot -> ../bin/busybox
+present sbin/mtd
+present bin/uclient-fetch
+
+## Path B installer: flags/gates
+8:# --apply --attended --recovery-armed.  --apply writes ONLY pair b
+22:# usage: tools/stock-telnet-install.sh --inspect --image FILE
+23:#        tools/stock-telnet-install.sh --apply --attended --recovery-armed --image FILE
+46:	--inspect) APPLY=0 ;;
+47:	--apply) APPLY=1 ;;
+48:	--attended) ATTENDED=1 ;;
+49:	--recovery-armed) RECOVERY_ARMED=1 ;;
+65:	[ "$ATTENDED" = 1 ] || die "--apply requires --attended"
+66:	[ "$RECOVERY_ARMED" = 1 ] || die "--apply requires --recovery-armed"
+83:    "KSHA=%s" % sha(k), "RSHA=%s" % sha(r), "KSLOT=%s" % sha(slot)]) + "\n")
+
+## supplemental - image #3 userspace / package identity (from the image rootfs)
+1234:P:iw
+1235-V:6.17-r1
+1178:P:hostapd-mbedtls
+1179-V:2026.08.07~831364bf-r7
+1397:P:kmod-hi5622-wifi
+1398-V:6.18.60-r1
+1372:P:kmod-hi5622-cfg80211
+1373-V:6.18.60-r1
+regulatory.db: c682b8e0f2f61385929586409f092638ba84dd795503d220be15b5c3d16dd75d  ./lib/firmware/regulatory.db
+iw package V: 6.17-r1 (HE Iftypes decode needs iw >= 6.17)
+
+## supplemental - preflight script no-device-contact scan (manual repetition of the selftest check)
+  ssh/telnet/curl/wget/mtd-write/ubiformat/insmod/rmmod occurrences in preflight-image-3.sh:
+586:		say "RESULT: PASS - fire-ready for the ROOTFS-ONLY path: write mtd14 only (ubiformat), never kernelb, then the pair-b handover (RUNBOOK.md section 6)."
+
+## supplemental - strict-gate rehearsal provenance (NOT the on-box fire gate)
+  positive witness = the RUNBOOK section 5 expected stock pair-A values, hand-written for the rehearsal
+  proc-mtd = the 2026-11-08 stock capture dumps/router-20261108/full/proc_mtd.txt (geometry identical)
+  the REAL fire gate must use the witness captured live on the stock pair-A shell at flash time (RUNBOOK 5.2)

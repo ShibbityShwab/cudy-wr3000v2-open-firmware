@@ -1,0 +1,36 @@
+== IMAGE #3 FINAL - preconditions inventory (host-only; 2026-11-26T03:12:26Z) ==
+
+## gate tools (present; NOT run: this lane makes no bench contact)
+present tools/bench-link.sh (5285 B)
+present tools/recovery-card.sh (4567 B)
+present tools/uart-capture.sh (5598 B)
+present tools/stock-telnet-install.sh (11386 B)
+present tools/telnet-exec.py (1147 B)
+present tools/rsh.sh (476 B)
+present tools/rscp.sh (374 B)
+present tools/session-brief.sh (9872 B)
+
+## recovery card image pin (tools/recovery-card.sh)
+21:EXPECTED_MD5=bc40580943e8a9865bb8288d3294f687
+22:EXPECTED_SIZE=22024351
+-rw-r--r-- 1 shibbityshwab shibbityshwab 22024351 Nov 25 16:08 tftp/recovery.bin
+bc40580943e8a9865bb8288d3294f687  tftp/recovery.bin
+
+## stock root channel helper
+19:    print("usage: telnet-exec.py --host H -- <command>...", file=sys.stderr)
+
+## artifact freeze: the flash unit must not be rebuilt after the preflight
+  host artifact mtimes:
+/home/shibbityshwab/wifi-image-3-artifacts/image-3-sysupgrade.bin 7843840 B 2026-11-25 22:37:59.029094960 +0700
+/home/shibbityshwab/wifi-image-3-artifacts/kernel-slice.bin 3372638 B 2026-11-25 22:37:59.030094974 +0700
+/home/shibbityshwab/wifi-image-3-artifacts/rootfs.ubi 4456448 B 2026-11-25 22:37:59.031094989 +0700
+/home/shibbityshwab/wifi-image-3-artifacts/cfg80211.ko 2317952 B 2026-11-25 22:37:59.035095047 +0700
+/home/shibbityshwab/wifi-image-3-artifacts/hostapd 1618388 B 2026-11-25 22:37:59.038095091 +0700
+
+## no-device-contact property of the preflight (selftest assertion)
+7:ok   --unit-test passes (mtd geometry, 0xFF padding, /proc/mtd parser, witness parser, UBI magic)
+37:ok   preflight script contains no ssh/telnet/curl/wget/mtd-write/ubiformat/insmod/rmmod command
+
+## R5 host staging gap (checked, actionable before the flash)
+  /tmp/blocks/wifi_block.bin ABSENT: the current box must be asked for /lib/firmware/hi_wifi/wifi_block.bin (pre-flash rescue) or the local 618-word capture rebuilt
+  /tmp/hi5622-pd4/FIRMWARE.PD4.bin ABSENT: reproducible offline (PD4 build sha cfe24bfb matches)

@@ -1,0 +1,38 @@
+ok   preflight-image-3.sh passes sh -n
+ok   preflight-image-3.sh is executable
+ok   --help exits 0 and names the host-only preflight
+ok   unknown option exits 2 (usage)
+ok   invalid --path exits 2 (usage)
+ok   --print-pins prints the container/slot/free-space/hostapd pins
+ok   --unit-test passes (mtd geometry, 0xFF padding, /proc/mtd parser, witness parser, UBI magic)
+ok   missing default container exits 2 with a usage error
+ok   explicit nonexistent container exits 2
+ok   a non-tar container fails closed (exit 1, size/sha + tar FAIL)
+ok   a synthetic 6-member container parses its members and fails closed on the wrong kernel/root
+ok   RUNBOOK carries the container pin
+ok   RUNBOOK carries the kernel-slice pin
+ok   RUNBOOK carries the kernelb slot pin
+ok   RUNBOOK carries the rootfs UBI pin
+ok   RUNBOOK carries the installed-module pin
+ok   RUNBOOK carries the cfg80211 pin
+ok   RUNBOOK carries the hostapd pin
+ok   RUNBOOK carries the 19,922,944 B free-space number
+ok   RUNBOOK carries the 7,843,840 B container size
+ok   RUNBOOK carries the kernel apk pin
+ok   RUNBOOK carries the image-2 rollback rootfs pin
+ok   RUNBOOK documents the two install paths
+ok   RUNBOOK documents the recovery door
+ok   RUNBOOK documents the recovery image identity
+ok   RUNBOOK documents the read-only UART capture
+ok   RUNBOOK documents the page-golden receipt
+ok   RUNBOOK documents the HE AP receipt
+ok   RUNBOOK documents the 5 GHz R8 gates
+ok   RUNBOOK has the STOP-conditions section
+ok   README carries the container pin
+ok   README carries the 19,922,944 B free-space number
+ok   README carries the 7,843,840 B container size
+ok   PREFLIGHT documents the --strict fire gate
+ok   PREFLIGHT documents the witness file format
+ok   build-evidence/preflight-run.txt records the 23/0 host-artifact run
+ok   preflight script contains no ssh/telnet/curl/wget/mtd-write/ubiformat/insmod/rmmod command
+selftest: 37 passed, 0 failed

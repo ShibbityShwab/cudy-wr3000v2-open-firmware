@@ -1,0 +1,6 @@
+PASS  unit: mtd geometry (mtd12 0x840000, mtd14 0x1740000, free 19922944 B, 34 PEBs)
+PASS  unit: 0xFF slot padding (8-byte fixture)
+PASS  unit: /proc/mtd parser (name/size/erasesize/hex)
+PASS  unit: stock-witness parser (multi-word cmdline preserved)
+PASS  unit: UBI magic detector
+preflight-image-3 unit-test: 5 passed, 0 failed

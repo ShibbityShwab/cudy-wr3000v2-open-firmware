@@ -1,0 +1,15 @@
+IMAGE #3 pinned identities (docs/incoming/wifi-image-3/HASHES.txt)
+container        7843840 B  sha256 4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53
+kernel slice     3372638 B  sha256 13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f  (UNCHANGED container member)
+kernelb slot     8650752 B  sha256 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e  (0xFF-padded slice; mtd12)
+rootfs UBI       4456448 B  sha256 90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3  (container member "root")
+root squashfs    4009984 B  sha256 ecbba4f97300607cd41614ab09c9aa6378bcea215e8de37f4c3097b860a0bfaf  (UBI vol0)
+module installed 358544 B  sha256 a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed  (64 params)
+module activity  379092 B  sha256 545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99
+cfg80211.ko      2317952 B  sha256 bc4d9c73f5dae02b7e31dd378891b86a29e38eb783fa690e045a0cd6b9861b91
+hostapd          1618388 B  sha256 fef44f3bdfc87c583f8d694338f9eb715c756d85422ef7c81b51e19040a838e6  (v2.12, CONFIG_DRIVER_11AX_SUPPORT)
+mtd11 kernela    8650752 B (0x840000)
+mtd12 kernelb    8650752 B (0x840000)  <- full slot fits exactly
+mtd13 rootfsa    24379392 B (0x1740000)
+mtd14 rootfsb    24379392 B (0x1740000)  <- 19922944 B free after IMAGE #3
+eraseblock       131072 B (128 KiB); rootfs UBI = 34 PEBs

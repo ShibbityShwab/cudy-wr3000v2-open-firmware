@@ -1,0 +1,54 @@
+== IMAGE #3 FINAL - independent artifact verification (host-only; 2026-11-26T03:12:26Z) ==
+
+## artifact directory: /home/shibbityshwab/wifi-image-3-artifacts (local; never committed)
+total 23428
+drwxr-xr-x 1 shibbityshwab shibbityshwab     226 Nov 25 22:36 .
+drwx------ 1 shibbityshwab shibbityshwab    4412 Nov 26 07:43 ..
+-rw-r--r-- 1 shibbityshwab shibbityshwab     572 Nov 25 22:37 SHA256SUMS
+-rw-r--r-- 1 shibbityshwab shibbityshwab 2317952 Nov 25 22:37 cfg80211.ko
+-rw-r--r-- 1 shibbityshwab shibbityshwab  358544 Nov 25 22:37 hi5622_wifi.installed.ko
+-rwxr-xr-x 1 shibbityshwab shibbityshwab 1618388 Nov 25 22:37 hostapd
+-rw-r--r-- 1 shibbityshwab shibbityshwab 7843840 Nov 25 22:37 image-3-sysupgrade.bin
+-rw-r--r-- 1 shibbityshwab shibbityshwab 3372638 Nov 25 22:37 kernel-slice.bin
+-rw-r--r-- 1 shibbityshwab shibbityshwab 4009984 Nov 25 22:37 root.squashfs
+-rw-r--r-- 1 shibbityshwab shibbityshwab 4456448 Nov 25 22:37 rootfs.ubi
+
+## sha256sum -c SHA256SUMS (the shipped checksum manifest)
+image-3-sysupgrade.bin: OK
+kernel-slice.bin: OK
+rootfs.ubi: OK
+root.squashfs: OK
+hi5622_wifi.installed.ko: OK
+cfg80211.ko: OK
+hostapd: OK
+SUMS_RC=0
+
+## sizes in bytes
+ 7843840 /home/shibbityshwab/wifi-image-3-artifacts/image-3-sysupgrade.bin
+ 3372638 /home/shibbityshwab/wifi-image-3-artifacts/kernel-slice.bin
+ 4456448 /home/shibbityshwab/wifi-image-3-artifacts/rootfs.ubi
+ 4009984 /home/shibbityshwab/wifi-image-3-artifacts/root.squashfs
+ 2317952 /home/shibbityshwab/wifi-image-3-artifacts/cfg80211.ko
+ 1618388 /home/shibbityshwab/wifi-image-3-artifacts/hostapd
+  358544 /home/shibbityshwab/wifi-image-3-artifacts/hi5622_wifi.installed.ko
+23977794 total
+
+## container sha256 + tar members
+4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53  /home/shibbityshwab/wifi-image-3-artifacts/image-3-sysupgrade.bin
+drwxr-xr-x 0/0               0 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/
+-rw-r--r-- 0/0              63 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/CONTROL
+-rw-r--r-- 0/0            2212 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/INSTALL-STATUS.txt
+-rw-r--r-- 0/0             945 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/fip-manifest.txt
+-rw-r--r-- 0/0         3372638 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/kernel
+-rw-r--r-- 0/0         4456448 2026-11-27 00:00 sysupgrade-cudy_wr3000-v2/root
+
+## kernelb slot identity = 0xFF-padded kernel slice to 8,650,752 B
+1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e  -
+
+## mtd14 free space after the rootfs UBI
+24379392 - 4456448 = 19922944 B
+
+## repo work copy of the same bake (local, gitignored build-evidence/work/)
+4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53  opensource/docs/incoming/wifi-image-3/build-evidence/work/image-3-sysupgrade.bin
+90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3  opensource/docs/incoming/wifi-image-3/build-evidence/work/rootfs.ubi
+13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f  opensource/docs/incoming/wifi-image-3/build-evidence/work/kernel.bin

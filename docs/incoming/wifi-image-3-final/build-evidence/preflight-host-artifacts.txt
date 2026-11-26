@@ -1,0 +1,41 @@
+== IMAGE #3 flash preflight (host-only; task-201) ==
+mode      : host-artifacts
+path      : rootfs-only
+container : /home/shibbityshwab/wifi-image-3-artifacts/image-3-sysupgrade.bin
+artifacts : /home/shibbityshwab/wifi-image-3-artifacts
+module art: /home/shibbityshwab/wifi-image-3-module-artifacts
+witness   : (not supplied)
+proc-mtd  : (not supplied)
+
+PASS  container is the pinned IMAGE #3 build (4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53, 7843840 B)
+RECORD container 7843840 B; kernel member 3372638 B; root member 4456448 B; tar metadata 14754 B
+RECORD the 7843840 B container is a host tar, not a single-slot payload: it is written as the kernel member (3372638 B -> mtd12 slot 8650752 B) and the root member (4456448 B -> mtd14)
+PASS  container has exactly 6 tar members (dir + CONTROL + INSTALL-STATUS + fip-manifest + kernel + root)
+PASS  container carries the sysupgrade-cudy_wr3000-v2 directory member
+PASS  kernel slice (member) is the pinned artifact (13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f, 3372638 B)
+PASS  kernelb slot identity derived from the slice: 1794a531ed19548e4b82467f21c5775e6c59cf1ca21d7718a0ec3ec59054460e (8650752 B, 0xFF-padded)
+PASS  CONTROL names BOARD=cudy_wr3000-v2 TARGET=hisilicon/luofu
+PASS  fip-manifest slice-size/slice-sha256/slot-limit match the unchanged kernel
+PASS  INSTALL-STATUS.txt present (carries the do-not-stock-sysupgrade warning)
+PASS  rootfs UBI (member root) is the pinned artifact (90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3, 4456448 B)
+PASS  rootfs member starts with the UBI# EC magic
+PASS  rootfs UBI is a whole number of 128 KiB PEBs (34)
+PASS  kernelb/mtd12 is 8650752 B and the padded kernel slot fills it exactly
+PASS  rootfsb/mtd14 24379392 B holds the 4456448 B rootfs UBI; 19922944 B free (18% used)
+RECORD after the rootfs write 19922944 B remain on mtd14 for the rootfs_data overlay
+PASS  artifact image-3-sysupgrade.bin is the pinned artifact (4cd85b5d24826774878504c333d7ea24a58b423401245f2d52c699d9e54a5f53, 7843840 B)
+PASS  artifact kernel-slice.bin is the pinned artifact (13e8121445767fc84d3928bbed276b0a0e1229a315ce2c26d65a99f59669ad7f, 3372638 B)
+PASS  artifact rootfs.ubi is the pinned artifact (90ae340cdd2df7c77a2840accbbebe9f537b417eac1d5d4384723b7a7cfdf2e3, 4456448 B)
+PASS  artifact root.squashfs is the pinned artifact (ecbba4f97300607cd41614ab09c9aa6378bcea215e8de37f4c3097b860a0bfaf, 4009984 B)
+PASS  artifact cfg80211.ko is the pinned artifact (bc4d9c73f5dae02b7e31dd378891b86a29e38eb783fa690e045a0cd6b9861b91, 2317952 B)
+PASS  artifact hostapd is the pinned artifact (fef44f3bdfc87c583f8d694338f9eb715c756d85422ef7c81b51e19040a838e6, 1618388 B)
+PASS  artifact hi5622_wifi.installed.ko is the pinned artifact (a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed, 358544 B)
+PASS  artifact directory SHA256SUMS verifies
+PASS  module activity artifact is the pinned artifact (545192dfdd9110d0439418b159f4fc6b56af09e295a56bf179b4838b1d713b99, 379092 B)
+PASS  module installed artifact is the pinned artifact (a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed, 358544 B)
+RECORD module unstripped artifact present: 1441520 B (not a pinned input)
+
+-------------------------------------------------------------------------------
+preflight-image-3: 23 passed, 0 failed, 0 warnings
+RESULT: PASS - host artifacts are the pinned IMAGE #3 build. NOT fire-ready yet: rerun with --strict --stock-witness FILE --proc-mtd FILE before any write (RUNBOOK.md section 3 and 5.3).
+REMINDER: the fire still needs a human at the bench, tools/recovery-card.sh READY, tools/bench-link.sh PASS and a running read-only UART capture (RUNBOOK.md section 2).
