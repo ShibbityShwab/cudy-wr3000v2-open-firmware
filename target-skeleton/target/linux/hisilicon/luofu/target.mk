@@ -27,7 +27,7 @@ CPU_TYPE:=cortex-a9
 # submission (TARGET-DESIGN.md 5.3).
 FEATURES+=nand
 
-# TODO(packages): the ubifs userspace package is not required by the selected
-# rootfs shape (squashfs in a static UBI volume + JFFS2 overlay); it is kept
-# from the TARGET-DESIGN.md 4.2 sketch until the final package list is decided.
-DEFAULT_PACKAGES += ubifs
+# The ubifs userspace package is deliberately NOT in DEFAULT_PACKAGES: the
+# selected rootfs shape is squashfs in a static UBI volume with a JFFS2 overlay
+# (TARGET-DESIGN.md 5.3), which needs no ubifs userspace tooling. Revisit only
+# if the overlay switches to UBIFS.

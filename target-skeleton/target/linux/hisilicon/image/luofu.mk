@@ -316,7 +316,10 @@ define Device/cudy_wr3000-v2
 	IMAGES := sysupgrade.bin
 	SUPPORTED_DEVICES += cudy,wr3000-v2 hisilicon,luofu-r116 hisilicon,luofu
 	IMAGE/sysupgrade.bin := luofu-rootfs-ubi | luofu-sysupgrade-container | append-metadata
-	# TODO(packages): final DEVICE_PACKAGES list (TARGET-DESIGN.md 4.2).
+	# DEVICE_PACKAGES is intentionally empty: the board needs no extra
+	# kernel packages beyond the target default (the PCIe, the FMC/NAND and the
+	# GPIO/LED/keys support are all built into the target kernel; the Wi-Fi
+	# driver is out of scope for PR-1 - TARGET-DESIGN.md 4.2).
 	# DEVICE_PACKAGES :=
 	# TODO(factory): no factory/install image definition on purpose. The
 	# install path is an open question (TARGET-DESIGN.md 5.5); do not add a
