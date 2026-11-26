@@ -1,0 +1,12 @@
+# extracted vendor base DT provenance (LOCAL, gitignored - not committed)
+
+path : dumps/router-20261108/kernelb/kernelb.dtb (parent repo, local evidence)
+size : 13880 bytes
+sha256: ffe7bcc408c6238320e71342a37594974c9290f272aaba508d4132af05bcd880
+decompiled: 727 lines via dtc -I dtb -O dts
+note : this is the STATIC board DT shipped in flash (pre-U-Boot-overlay);
+       the vendor R116 overlay (LEDs/keys/Wi-Fi endpoints) is applied at runtime
+       by the stock loader and is NOT part of this base DTB.
+
+comparison run: tools/check-board-dts.py --dtb <board.dtb> --vendor-dtb kernelb.dtb
+full output     : dts-check.log (node-name diff + compatible-set diff)

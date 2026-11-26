@@ -1,0 +1,19 @@
+# board DTS compile evidence - host cpp + dtc, 2026-11-27
+
+source : opensource/target-skeleton/dts/luofu-r116.dts
+lines  : 715
+sha256 : 6774221ef49b10888bfb277f2c7620858a798a3cf228b1660cb483df50e6b062
+dtc    : Version: DTC v1.8.1
+cpp    : cpp (GCC) 16.2.1 20260810
+kernel : 27663a017ad8ac6883e11a81015db0c0fc341a9e (OpenWrt main, linux-6.18.60)
+dt-bindings: $LINUX/include (hisilicon,luofu-crg.h from target patch 004)
+
+command:
+  cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp -I<linux>/include -I<linux>/arch/arm/boot/dts -I<linux>/scripts/dtc/include-prefixes dts/luofu-r116.dts -o luofu-r116.pre.dts
+  dtc -I dts -O dtb -o luofu-r116.dtb luofu-r116.pre.dts
+  dtc -I dtb -O dts -o luofu-r116.decompiled.dts luofu-r116.dtb
+
+result : DTC-RC=0, 0 warnings, DTB 12848 bytes
+dtb sha: 1c200daf8046cb154e5e6dfa990cd827348ab960da9fce13596ebfa0bb4e04b8
+pre sha: 183ff0a13a9ebc27c70c847e4c51ec9fb8b15d19fb2a28935f3decd2f9f1ea56
+decompiled lines: 687
