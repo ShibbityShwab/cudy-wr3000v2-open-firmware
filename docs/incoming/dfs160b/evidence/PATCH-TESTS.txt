@@ -1,0 +1,11 @@
+dfs160b independent patch/order test evidence (HOST-ONLY)
+
+The test re-derives the nl80211_chan_width pins from the target kernel
+6.18.60 UAPI header (not from the lane's own constants), proves the four
+new files in patches/0001-dfs160b.patch are byte-identical to src/, checks
+every patch hunk fact, the build-script pins and the lane docs.
+
+RUN: python3 tools/dfs160b_patch_test.py
+
+RESULT: 108 checks, 0 failure(s)
+

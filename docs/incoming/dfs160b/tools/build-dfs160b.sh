@@ -51,7 +51,7 @@ expect_sha "$LANE/src/hi5622_dfsb.h" b254d29df2c9fbd08e813e3eb10dcf06c1f080a696e
 expect_sha "$LANE/src/hi5622_dfsb.c" 784f2e6f964187884e0bce275732de875f8837a7c4341bd9336d3a15cff0ece9 "src/hi5622_dfsb.c"
 expect_sha "$LANE/src/hi5622_dfsb_k.h" cf354fe1c9c3adafcd67c148339ae2f4a0c246c16c002e00a095a9a1e639c52b "src/hi5622_dfsb_k.h"
 expect_sha "$LANE/src/hi5622_dfsb_k.c" 3f3dd12b277c243a51376902e02f94bad295296e7293978b89cedb27e458f4b8 "src/hi5622_dfsb_k.c"
-expect_sha "$LANE/patches/0001-dfs160b.patch" d1793dacb0eac4bd25dc9fd93fb3302c5f4f2301d468a5ec5d0ab929bbe35f9b "patches/0001-dfs160b.patch"
+expect_sha "$LANE/patches/0001-dfs160b.patch" 61177c2a2e502d0858f0069e71923f49f520f2b07713b21468002d5091686c6d "patches/0001-dfs160b.patch"
 
 # ---- kernel tree / cross toolchain (a tree with Module.symvers) --------
 KDIR=

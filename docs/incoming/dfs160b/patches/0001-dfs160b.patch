@@ -1,14 +1,28 @@
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/cfg80211-provider.symvers dfs160b-work/cfg80211-provider.symvers
---- dfs-relax-build/cfg80211-provider.symvers	2026-11-26 11:43:27.649537501 +0700
-+++ dfs160b-work/cfg80211-provider.symvers	2026-11-26 16:00:29.462180284 +0700
+diff --git a/Kbuild b/Kbuild
+index 5bdb394..f88fc21 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -36,6 +36,7 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
+ 		 hi5622_desc_table.o hi5622_band_start.o hi5622_dfs_mode.o \
+ 		 hi5622_dfs_set.o hi5622_vap_start_g0.o \
++		 hi5622_dfsb.o hi5622_dfsb_k.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+diff --git a/cfg80211-provider.symvers b/cfg80211-provider.symvers
+index eda925b..5a89bc8 100644
+--- a/cfg80211-provider.symvers
++++ b/cfg80211-provider.symvers
 @@ -10,3 +10,4 @@
  0x00000000	cfg80211_bss_iter	cfg80211	EXPORT_SYMBOL	
  0x00000000	cfg80211_mgmt_tx_status_ext	cfg80211	EXPORT_SYMBOL	
  0x00000000	cfg80211_rx_mgmt_ext	cfg80211	EXPORT_SYMBOL	
 +0x00000000	cfg80211_cac_event	cfg80211	EXPORT_SYMBOL	
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_ap_frames.c dfs160b-work/hi5622_ap_frames.c
---- dfs-relax-build/hi5622_ap_frames.c	2026-11-26 11:43:17.669497835 +0700
-+++ dfs160b-work/hi5622_ap_frames.c	2026-11-26 16:00:29.461451493 +0700
+diff --git a/hi5622_ap_frames.c b/hi5622_ap_frames.c
+index a6a82ab..973708a 100644
+--- a/hi5622_ap_frames.c
++++ b/hi5622_ap_frames.c
 @@ -9,6 +9,7 @@
   * synthesizes frames from them and refuses malformed input.
   */
@@ -17,7 +31,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  
  /* ------------------------------------------------------------------ */
  /* small helpers                                                      */
-@@ -416,8 +417,15 @@
+@@ -416,8 +417,15 @@ static int haf_build_body_chan(u8 *body, size_t cap,
  		return -ENOSPC;
  	if (p->band > 1u || p->vap_id > 0x0fu || p->channel == 0u)
  		return -EINVAL;
@@ -34,10 +48,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	body[2] = p->channel;
  	body[3] = 0u;
  	return 0;
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_ap_frames.h dfs160b-work/hi5622_ap_frames.h
---- dfs-relax-build/hi5622_ap_frames.h	2026-11-26 11:43:17.672497846 +0700
-+++ dfs160b-work/hi5622_ap_frames.h	2026-11-26 16:00:29.461354411 +0700
-@@ -186,6 +186,7 @@
+diff --git a/hi5622_ap_frames.h b/hi5622_ap_frames.h
+index a177e11..d878cd6 100644
+--- a/hi5622_ap_frames.h
++++ b/hi5622_ap_frames.h
+@@ -186,6 +186,7 @@ struct haf_ap_params {
  	u16	center_freq1;	/* chandef center freq, MHz (info only) */
  	u16	center_freq2;	/* 80+80 second segment, 0 otherwise */
  	u8	width;		/* nl80211_chan_width (info only) */
@@ -45,9 +60,10 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	u16	head_len;
  	u16	tail_len;
  	u8	head[HAF_MAX_HEAD];	/* cfg80211 beacon head (fixed + IEs) */
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_cfg80211.c dfs160b-work/hi5622_cfg80211.c
---- dfs-relax-build/hi5622_cfg80211.c	2026-11-26 11:43:39.059626785 +0700
-+++ dfs160b-work/hi5622_cfg80211.c	2026-11-26 16:00:29.461979797 +0700
+diff --git a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+index f5d7582..995ab1d 100644
+--- a/hi5622_cfg80211.c
++++ b/hi5622_cfg80211.c
 @@ -49,6 +49,7 @@
  #include "hi5622_sta_ops.h"
  #include "hi5622_data_tx.h"
@@ -56,7 +72,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  
  /* ---------------------------------------------------------------------
   * Module parameters (host-only bench experiments; defaults are the safe
-@@ -224,6 +225,7 @@
+@@ -224,6 +225,7 @@ static const struct ieee80211_channel hi5622_channels_5g[] = {
  	HI5622_CH5G(132, 5660, HI5622_DFS),
  	HI5622_CH5G(136, 5680, HI5622_DFS),
  	HI5622_CH5G(140, 5700, HI5622_DFS),
@@ -64,7 +80,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  };
  
  static const struct ieee80211_rate hi5622_rates_5g[] = {
-@@ -457,6 +459,21 @@
+@@ -457,6 +459,21 @@ static int hi5622_cfg11_setup_one_band(struct hi5622_cfg80211 *c, u8 band)
  		sband->n_channels = (int)vn;
  	}
  	c->wiphy->bands[band_idx] = sband;
@@ -86,7 +102,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	if (hi5622_band5g && band_idx == NL80211_BAND_5GHZ)
  		dev_info(&c->ctx->pdev->dev,
  			 "cfg80211: band5g=1 5GHz wiphy profile active: %d channels (vendor 29-ch list, ch144 + 4.9 GHz block), HT cap 0x%04x, VHT cap 0x%08x, MCS map 0x%04x\n",
-@@ -598,6 +615,7 @@
+@@ -598,6 +615,7 @@ int hi5622_cfg80211_init(struct hi5622_pci *ctx)
  
  	if (!ctx)
  		return -EINVAL;
@@ -94,7 +110,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	if (ctx->cfg) {
  		dev_warn(&ctx->pdev->dev, "cfg80211: already initialised\n");
  		return 0;
-@@ -748,6 +766,7 @@
+@@ -748,6 +766,7 @@ void hi5622_cfg80211_remove(struct hi5622_pci *ctx)
  	unsigned int i, created;
  	bool registered;
  
@@ -102,9 +118,10 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	if (!ctx || !ctx->cfg)
  		return;
  	c = ctx->cfg;
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_cfg80211_ops.c dfs160b-work/hi5622_cfg80211_ops.c
---- dfs-relax-build/hi5622_cfg80211_ops.c	2026-11-26 11:53:21.715449914 +0700
-+++ dfs160b-work/hi5622_cfg80211_ops.c	2026-11-26 16:00:29.462124389 +0700
+diff --git a/hi5622_cfg80211_ops.c b/hi5622_cfg80211_ops.c
+index 02774a3..b20e233 100644
+--- a/hi5622_cfg80211_ops.c
++++ b/hi5622_cfg80211_ops.c
 @@ -46,6 +46,7 @@
  #include "hi5622_cfg80211.h"
  #include "hi5622_driver.h"
@@ -113,7 +130,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  #include "hi5622_keys.h"
  #include "hi5622_mgmt.h"
  #include "hi5622_sta.h"
-@@ -519,6 +520,12 @@
+@@ -519,6 +520,12 @@ const struct cfg80211_ops hi5622_cfg11_ops = {
  	.abort_scan		= hi5622_scan_op_abort,
  	.start_ap		= hi5622_scan_op_start_ap,
  	.stop_ap		= hi5622_scan_op_stop_ap,
@@ -126,9 +143,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	/* WPA2 key path (wifi-wpa-static lane, task-139): decoded firmware
  	 * g0 id1 cmds 0x0078/0x007A/0x0079, fail-closed behind wpa_keys=0. */
  	.add_key		= hi5622_keys_op_add,
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_dfsb.c dfs160b-work/hi5622_dfsb.c
---- dfs-relax-build/hi5622_dfsb.c	1970-01-01 07:00:00.000000000 +0700
-+++ dfs160b-work/hi5622_dfsb.c	2026-11-26 16:00:43.651408940 +0700
+diff --git a/hi5622_dfsb.c b/hi5622_dfsb.c
+new file mode 100644
+index 0000000..6e10c5f
+--- /dev/null
++++ b/hi5622_dfsb.c
 @@ -0,0 +1,386 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -516,9 +535,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
 +	}
 +	return 0;
 +}
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_dfsb.h dfs160b-work/hi5622_dfsb.h
---- dfs-relax-build/hi5622_dfsb.h	1970-01-01 07:00:00.000000000 +0700
-+++ dfs160b-work/hi5622_dfsb.h	2026-11-26 15:57:08.109753304 +0700
+diff --git a/hi5622_dfsb.h b/hi5622_dfsb.h
+new file mode 100644
+index 0000000..6b42fce
+--- /dev/null
++++ b/hi5622_dfsb.h
 @@ -0,0 +1,269 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -789,9 +810,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
 +			struct hi5622_dfsb_ap_plan *out);
 +
 +#endif /* HI5622_DFSB_H */
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_dfsb_k.c dfs160b-work/hi5622_dfsb_k.c
---- dfs-relax-build/hi5622_dfsb_k.c	1970-01-01 07:00:00.000000000 +0700
-+++ dfs160b-work/hi5622_dfsb_k.c	2026-11-26 15:59:45.100160734 +0700
+diff --git a/hi5622_dfsb_k.c b/hi5622_dfsb_k.c
+new file mode 100644
+index 0000000..f5ab2ea
+--- /dev/null
++++ b/hi5622_dfsb_k.c
 @@ -0,0 +1,380 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
@@ -1173,9 +1196,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
 +	mutex_unlock(&dfsb_k.lock);
 +	return rc;
 +}
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_dfsb_k.h dfs160b-work/hi5622_dfsb_k.h
---- dfs-relax-build/hi5622_dfsb_k.h	1970-01-01 07:00:00.000000000 +0700
-+++ dfs160b-work/hi5622_dfsb_k.h	2026-11-26 15:59:28.713221261 +0700
+diff --git a/hi5622_dfsb_k.h b/hi5622_dfsb_k.h
+new file mode 100644
+index 0000000..3e4dcb5
+--- /dev/null
++++ b/hi5622_dfsb_k.h
 @@ -0,0 +1,45 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
@@ -1222,10 +1247,11 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
 +			      unsigned int link_id);
 +
 +#endif /* HI5622_DFSB_K_H */
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_frames_api.h dfs160b-work/hi5622_frames_api.h
---- dfs-relax-build/hi5622_frames_api.h	2026-11-26 11:43:39.055381787 +0700
-+++ dfs160b-work/hi5622_frames_api.h	2026-11-26 16:00:29.459293305 +0700
-@@ -166,6 +166,8 @@
+diff --git a/hi5622_frames_api.h b/hi5622_frames_api.h
+index 62ee80e..47b1ebb 100644
+--- a/hi5622_frames_api.h
++++ b/hi5622_frames_api.h
+@@ -166,6 +166,8 @@ struct hi5622_ap_start_params {
  				 * channel-config frame; 0 = not specified */
  	u16	user_id;	/* VAP user id, 12-bit [U] */
  	u16	center_freq;	/* chandef.chan->center_freq, MHz */
@@ -1234,7 +1260,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	u8	width;		/* nl80211_chan_width */
  	u16	beacon_interval;	/* TU */
  	u16	dtim_period;
-@@ -263,7 +265,10 @@
+@@ -263,7 +265,10 @@ struct hi5622_vap_start_params {
  struct hi5622_chan_cfg_params {
  	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
  	u8	channel;	/* channel number (hw_value), 1..196 */
@@ -1246,9 +1272,10 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	u8	module;		/* g0 hdr[3] module index */
  	u8	dst;		/* HCC dst nibble */
  	u32	seq;		/* WAL cfg-event sequence [I] */
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_scan.c dfs160b-work/hi5622_scan.c
---- dfs-relax-build/hi5622_scan.c	2026-11-26 13:17:45.345237700 +0700
-+++ dfs160b-work/hi5622_scan.c	2026-11-26 16:00:29.461224166 +0700
+diff --git a/hi5622_scan.c b/hi5622_scan.c
+index e3531f2..beca6a2 100644
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
 @@ -45,6 +45,7 @@
  #include "hi5622_band_start.h"
  #include "hi5622_dfs_mode.h"
@@ -1257,7 +1284,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  #include "hi5622_vap_start_g0.h"
  
  /* =====================================================================
-@@ -1838,7 +1839,7 @@
+@@ -1838,7 +1839,7 @@ static void hi5622_scan_vap_start_g0_probe(struct hi5622_pci *ctx,
   * fields (+ the four CAC-context words +0x49C/+0x4A0/+0x4A4/+0x4A8) plus
   * bit0 of the six device registers (read-only; the window is host-readable,
   * phys = CA + 0x3B8000) and never writes. */
@@ -1266,7 +1293,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  				      struct hi5622_dfs_set_probe *p)
  {
  	const u32 *regs;
-@@ -1941,6 +1942,8 @@
+@@ -1941,6 +1942,8 @@ static int hi5622_scan_fill_ap_start(struct hi5622_scan *s,
  	p->iftype = 3u;
  	p->user_id = (u8)s->user_id;
  	p->center_freq = set->chandef.chan->center_freq;
@@ -1275,7 +1302,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	p->width = (u8)set->chandef.width;
  	p->beacon_interval = (u16)set->beacon_interval;
  	p->dtim_period = (u16)set->dtim_period;
-@@ -2218,6 +2221,40 @@
+@@ -2218,6 +2221,40 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
  		rc = -EINVAL;
  		goto out;
  	}
@@ -1316,7 +1343,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	/* lane wifi-band1-start-send (task-206): FAIL-CLOSED parameter gates for
  	 * the H2D g0-id1 key 0x0242 band-start send (and its optional fallback
  	 * rungs).  Runs BEFORE any frame (no partial ladder on a bad parameter):
-@@ -2321,7 +2358,9 @@
+@@ -2321,7 +2358,9 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
  	}
  	if (hi5622_beacon_static) {
  		struct hi5622_chan_cfg_params cp;
@@ -1326,7 +1353,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  		unsigned int plan_n, i;
  		bool readback_ok;
  
-@@ -2351,6 +2390,43 @@
+@@ -2351,6 +2390,43 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
  			rc = -EINVAL;
  			goto out;
  		}
@@ -1370,7 +1397,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  		/* Vendor order: the VAP add (the band-bearing VAP create - the
  		 * AP workers dereference the firmware VAP object) first, then the
  		 * channel config.  A base posted in THIS call is required; a
-@@ -2523,6 +2599,7 @@
+@@ -2523,6 +2599,7 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
  		memset(&cp, 0, sizeof(cp));
  		cp.band = p->band;
  		cp.channel = (u8)p->channel;
@@ -1378,9 +1405,10 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  		cp.vap_id = p->vap_id;
  		cp.module = p->module;
  		cp.dst = 0u;
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_scan.h dfs160b-work/hi5622_scan.h
---- dfs-relax-build/hi5622_scan.h	2026-11-26 11:43:09.163448520 +0700
-+++ dfs160b-work/hi5622_scan.h	2026-11-26 16:00:29.461321218 +0700
+diff --git a/hi5622_scan.h b/hi5622_scan.h
+index 888870b..afb8194 100644
+--- a/hi5622_scan.h
++++ b/hi5622_scan.h
 @@ -34,6 +34,7 @@
  #include <net/cfg80211.h>
  
@@ -1389,7 +1417,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  #include "hi5622_scan_logic.h"
  
  struct hi5622_pci;
-@@ -77,6 +78,10 @@
+@@ -77,6 +78,10 @@ struct hi5622_scan {
  
  /* cfg80211 layer lifecycle (hi5622_cfg80211.c calls these). */
  int  hi5622_scan_init(struct hi5622_cfg80211 *c);
@@ -1400,9 +1428,10 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  void hi5622_scan_remove(struct hi5622_cfg80211 *c);
  
  /* cfg80211 ops (hi5622_cfg80211_ops.c calls these). */
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/hi5622_vapscan_provider.c dfs160b-work/hi5622_vapscan_provider.c
---- dfs-relax-build/hi5622_vapscan_provider.c	2026-11-26 11:54:54.235729951 +0700
-+++ dfs160b-work/hi5622_vapscan_provider.c	2026-11-26 16:00:29.461613859 +0700
+diff --git a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
+index 86e37fe..a0900f1 100644
+--- a/hi5622_vapscan_provider.c
++++ b/hi5622_vapscan_provider.c
 @@ -38,6 +38,7 @@
  #include "hi5622_vapscan_map.h"
  #include "vapstart_frames.h"
@@ -1411,7 +1440,7 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  #include "hi5622_mgmt_logic.h"
  #include "hi5622_key_frames.h"
  
-@@ -358,12 +359,15 @@
+@@ -358,12 +359,15 @@ static int vapscan_chan_cfg(u8 *wire, size_t cap, size_t *out_len,
  		return -EINVAL;
  	if (p->module > 0x12u || p->dst > 0x0fu || p->vap_id > 0x0fu)
  		return -EINVAL;
@@ -1428,14 +1457,3 @@ diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c'
  	hp.module = p->module;
  	hp.dst = p->dst;
  	f = kmalloc(sizeof(*f), GFP_KERNEL);
-diff -ruN '--exclude=*.o' '--exclude=*.ko' '--exclude=*.mod' '--exclude=*.mod.c' '--exclude=.*.cmd' '--exclude=*.cmd' '--exclude=modules.order' '--exclude=Module.symvers' '--exclude=build.log' dfs-relax-build/Kbuild dfs160b-work/Kbuild
---- dfs-relax-build/Kbuild	2026-11-26 12:29:29.566209414 +0700
-+++ dfs160b-work/Kbuild	2026-11-26 16:00:29.459048504 +0700
-@@ -36,6 +36,7 @@
- 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
- 		 hi5622_desc_table.o hi5622_band_start.o hi5622_dfs_mode.o \
- 		 hi5622_dfs_set.o hi5622_vap_start_g0.o \
-+		 hi5622_dfsb.o hi5622_dfsb_k.o \
- 		 hi5622_key_frames.o hi5622_keys.o \
- 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
- 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
