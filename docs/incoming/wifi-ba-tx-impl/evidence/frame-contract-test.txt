@@ -1,0 +1,3 @@
+ba_tx_frame_test: independent TX-direction BA wire/contract checks
+ba_tx_frame_test: 99 checks, 0 failures
+exit=0

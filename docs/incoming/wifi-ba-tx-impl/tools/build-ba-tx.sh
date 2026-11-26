@@ -150,6 +150,7 @@ fi
 
 # ---- 5. host tests ------------------------------------------------------
 OUT="$OUT" "$LANE/tools/run-host-tests.sh" "$WORK"
+python3 "$LANE/tools/ba_tx_frame_test.py" "$WORK"
 
 # ---- 6. pins ------------------------------------------------------------
 echo "build-ba-tx: base tree        $TREE_SRC"

@@ -4,6 +4,8 @@ ba_tx_selftest: 211 checks, 0 failures
 ba_tx_selftest: Hi5622V100 TX-direction BA core (lane wifi-ba-tx-impl)
 ba_tx_selftest: 225 checks, 0 failures
 run-host-tests: PASS (211 standalone + 225 with the driver H2D gate)
+ba_tx_frame_test: independent TX-direction BA wire/contract checks
+ba_tx_frame_test: 99 checks, 0 failures
 build-ba-tx: base tree        /tmp/r5-build
 build-ba-tx: patched tree     /tmp/ba-tx-build
 build-ba-tx: artefact         /tmp/batx-artifact/hi5622_wifi.ko
