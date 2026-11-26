@@ -58,8 +58,9 @@ inert - no frame, no H2D message, no state change. `ba_enable=1` arms it;
   sha256 **`234b3d4b...0104d841`**, **66 params** (`ba_enable` read-only
   0444 default 0), 0 build warnings, `.text` sha256 `70259123...20ec8fc`,
   vermagic `6.18.60 SMP mod_unload ARMv7 p2v8`, `depends=cfg80211`;
-* **host tests: 335 checks, 0 failures** (C 211 standalone + 225 with the
-  driver's H2D gate; Python 99);
+* **host tests: 535 check executions, 0 failures** (the C model 211
+  standalone and 225 with the driver's H2D gate - the same source compiled
+  twice; the independent Python contract test 99);
 * **provably wired** (unlike the skeleton): `hi5622_ba_glue_d2h`,
   `hi5622_ba_glue_mgmt_rx`, `hi5622_ba_glue_tx_data`, `hi5622_ba_glue_ap_up`
   and `hi5622_ba_glue_status_line` each have a call site in the driver's own

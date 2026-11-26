@@ -67,10 +67,11 @@ base/patched shas is in `evidence/artifact-pins.txt`.
     python3 tools/ba_tx_frame_test.py /tmp/ba-tx-build
     ./tools/build-ba-tx.sh                         # full chain + build + tests
 
-Result: **335 checks, 0 failures** - C 211 standalone + 225 with the driver
-H2D decode gate (the 225 include the 211: the same binary with
-`-DHAVE_H2D_FRAMES`), Python 99. Transcripts: `evidence/host-tests.txt`,
-`evidence/frame-contract-test.txt`, `evidence/build.txt`.
+Result: **535 check executions, 0 failures** - C 211 standalone and 225 with
+the driver H2D decode gate (the same source compiled twice, the 225 include
+the 211 plus 14 H2D-gate assertions), Python 99. Transcripts:
+`evidence/host-tests.txt`, `evidence/frame-contract-test.txt`,
+`evidence/build.txt`.
 
 The C model compiles the REAL portable core (`src/hi5622_ba.c`) and, in the
 second part, the patched tree's `h2d_frames.c`; it asserts every wire byte
