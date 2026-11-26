@@ -1,5 +1,7 @@
 T1 PPDU descriptor-list init: CA 0xC016C (init) <- 0xD3BAC <- device init 0xD1B68 <- 0x48314
 T2 device object: 0x174BF0 + 0xE28*band  (0x174BF0 / 0x175A18)
+   runtime chain [M]: head 0x01019F80 (PKTRAM phys 0x401F1F80), tail 0x010186A8 (phys 0x401F06A8), count 0x10
+   allocator 0xBF128: sub-pool descriptor array CA 0x172134, 0x188-B records; 32-B blocks in PKTRAM
 T3 list: next +0x66C, prev +0x670, count +0x674, name +0x67C, desc size 0x1A0 (boot) / 0x198 (reserve)
 T4 RX consumer: 0xB9780 (pop 0x1024EA at 0xBA0C0; per-frame bl 0xB9780 at 0xBA48A)
 T5 CRX gate: ctx [chip+0x1A00] 0xB97EE | fwd flag info[+6] 0xBA0FC | total<=0x680 0xBA114

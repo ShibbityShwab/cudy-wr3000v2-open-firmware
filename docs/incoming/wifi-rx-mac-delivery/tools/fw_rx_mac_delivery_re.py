@@ -158,6 +158,9 @@ DEVICE_INIT_CALL = 0x48314
 DEVICE_BASE = 0x174BF0
 PPDU_LIST_NAME = 0x1060F7
 POOL_ALLOC = 0xBF128
+POOL_DESC_BASE = 0xBF240      # literal: pool sub-pool descriptor array base = 0x00172134
+POOL_DESC_BASE_VAL = 0x00172134
+POOL_STRIDE_SITE = 0xBF144    # mov.w r2,#0x188 (0x188-byte sub-pool records)
 # PPDU descriptor pool/reserve (this lane)
 PPDU_DESC_RESERVE = 0xB52F0
 # RX -> CRX consumer (this lane)
@@ -221,6 +224,9 @@ def selftest(img):
     c.eq(img.u16(0xB5332), 0x67CF, "reserve: add.w r7,r0,#0x678 (list lock)")
     c.eq(img.u16(0xB535C), 0x73CC, "reserve: mov.w r3,#0x198 (descriptor size)")
     c.eq(bl_target(img, 0xB5364), 0xC1E0C, "reserve: bl -> memset(desc,0x198,0)")
+    c.eq(img.u32(POOL_DESC_BASE), POOL_DESC_BASE_VAL, "allocator 0xBF128: sub-pool descriptor base 0x00172134")
+    c.eq(img.u16(POOL_STRIDE_SITE), 0xF44F, "allocator: mov.w r2,#0x188 (sub-pool stride)")
+    c.eq(img.u16(POOL_STRIDE_SITE + 2), 0x72C4, "allocator: 0x188 immediate encoding")
     c.eq(img.u16(0xB536E), 0x3670, "reserve: ldr.w r3,[r5,#0x670] (list tail)")
     c.eq(img.u16(0xB5376), 0x4670, "reserve: str.w r4,[r5,#0x670] (link tail)")
     c.eq(img.u16(0xB5380), 0x3674, "reserve: ldr.w r3,[r5,#0x674] (count)")
@@ -320,6 +326,11 @@ def phys(ca):
     return (ca + RAM_PHYS_BASE) & 0xFFFFFFFF
 
 
+def pktram_phys(ca):
+    """PKTRAM phys = 0x40000000 + 0x1D8000 + (CA - 0x01000000) (ppdu-init convention)."""
+    return (0x40000000 + 0x1D8000 + (ca - 0x01000000)) & 0xFFFFFFFF
+
+
 def decode(img):
     print("image: %s  %d B  sha256 %s" % (img.path, img.size, img.sha))
     print("CA = file offset + 0x%X" % CA_BASE)
@@ -377,9 +388,11 @@ def probes(img):
         ("P1", "device obj band0 name ptr", band_obj(0) + 0x67C, phys(band_obj(0) + 0x67C), 4,
          "0x001060F7 = device init + PPDU list init ran"),
         ("P2", "device obj band0 list next", band_obj(0) + 0x66C, phys(band_obj(0) + 0x66C), 4,
-         "self ptr 0x%X when list is empty/initialised" % (band_obj(0) + 0x66C)),
+         "bench [M] head node 0x01019F80 (PKTRAM); self ptr only if empty"),
         ("P3", "device obj band0 list count", band_obj(0) + 0x674, phys(band_obj(0) + 0x674), 4,
-         "preallocated descriptor count"),
+         "bench [M] 0x10 = the 16 PKTRAM descriptors are present"),
+        ("P11", "band0 list prev (+0x670)", band_obj(0) + 0x670, phys(band_obj(0) + 0x670), 4,
+         "bench [M] tail 0x010186A8 (PKTRAM phys 0x%08X)" % pktram_phys(0x010186A8)),
         ("P4", "device obj band0 name ptr b1", band_obj(1) + 0x67C, phys(band_obj(1) + 0x67C), 4,
          "0x001060F7 if band 1 object also inited"),
         ("P5", "RX-path counter cc5", band_obj(0) + 0xCC5, phys(band_obj(0) + 0xCC5), 1,
@@ -399,6 +412,14 @@ def probes(img):
         print("  %-4s %-28s CA %-12s phys 0x%08X w=%d  %s"
               % (pid, name, ("0x%X" % ca) if ca is not None else "-", ph, w, expect))
     print()
+    print()
+    print("PPDU descriptor chain (bench [M] datum, task context / rx-ppdu-init):")
+    print("  list head node CA 0x01019F80 -> PKTRAM phys 0x%08X" % pktram_phys(0x01019F80))
+    print("  list tail node CA 0x010186A8 -> PKTRAM phys 0x%08X" % pktram_phys(0x010186A8))
+    print("  count 0x10 = 16 pre-allocated 0x1A0-B descriptors (allocator 0xBF128, sub-pool")
+    print("  descriptor array at CA 0x172134, 0x188-B records) - the pool is present and")
+    print("  populated, so the F1 is NOT the descriptor-list init.")
+    print()
     print("D2H liveness (host consumer, no device read):")
     print("  rd_catalog / direct D2H reader: ready pair g4 id1/id2 + HEARTBEAT g4 id4 arrive;")
     print("  g1 id13 count == 0. P9 bit10 is stock-latched (benign); require completion-producer")
@@ -417,6 +438,8 @@ def tables(img):
     print("T1 PPDU descriptor-list init: CA 0x%X (init) <- 0x%X <- device init 0x%X <- 0x%X"
           % (PPDU_INIT, PPDU_INIT_CALLER, DEVICE_INIT, DEVICE_INIT_CALL))
     print("T2 device object: 0x%X + 0x%X*band  (0x%X / 0x%X)" % (DEV_CA, BAND_STRIDE, band_obj(0), band_obj(1)))
+    print("   runtime chain [M]: head 0x01019F80 (PKTRAM phys 0x%08X), tail 0x010186A8 (phys 0x%08X), count 0x10" % (pktram_phys(0x01019F80), pktram_phys(0x010186A8)))
+    print("   allocator 0xBF128: sub-pool descriptor array CA 0x%X, 0x188-B records; 32-B blocks in PKTRAM" % POOL_DESC_BASE_VAL)
     print("T3 list: next +0x66C, prev +0x670, count +0x674, name +0x67C, desc size 0x1A0 (boot) / 0x198 (reserve)")
     print("T4 RX consumer: 0x%X (pop 0x%X at 0xBA0C0; per-frame bl 0xB9780 at 0xBA48A)" % (CRX_BUILDER, RX_QUEUE_POP))
     print("T5 CRX gate: ctx [chip+0x1A00] 0x%X | fwd flag info[+6] 0x%X | total<=0x680 0x%X" % (RX_CTX_ADD, CRX_FWD_LOAD, CRX_CAP_CMP))

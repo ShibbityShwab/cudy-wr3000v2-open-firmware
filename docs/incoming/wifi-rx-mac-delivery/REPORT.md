@@ -3,7 +3,7 @@
 **Lane:** `wifi-rx-mac-delivery` (task-220).  HOST-ONLY static decode of the pinned
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`; **CA = file offset + 0x40000**).
 Grades: **[V]** re-derived here by `tools/fw_rx_mac_delivery_re.py` (`--selftest`
-84/84 PASS); **[V\*]** committed earlier lane; **[M]** bench-measured earlier; **[I]**
+87/87 PASS); **[V\*]** committed earlier lane; **[M]** bench-measured earlier; **[I]**
 inference; **[U]** needs a device read / not locatable in this image.
 Companions: [README.md](README.md), [TABLES.md](TABLES.md), [PROBES.md](PROBES.md),
 [FIRE-RECIPE.md](FIRE-RECIPE.md), [tools/](tools/), [evidence/](evidence/).
@@ -203,7 +203,27 @@ rest are properties of the received frame / the firmware's own state.
   host-populated structure, and the corrected probe (name word at obj+0x67C) confirms only
   that the boot init ran - which the cross-lane data already expects.
 
-### 4.1 Datapath counter words inside the device object (probe targets)
+### 4.1 Runtime chain (bench [M] datum) - the pool is present and populated
+
+The task context / ../wifi-ppdu-init probe pass measured the corrected list on the bench:
+
+| item | bench value | meaning |
+| --- | --- | --- |
+| obj+0x67C name word | 0x001060F7 | the boot init ran (ppdu-init P2) |
+| obj+0x66C list next (head node) | **0x01019F80** | a descriptor node in **PKTRAM** (CA 0x01xxxxxx) |
+| obj+0x670 list prev (tail node) | **0x010186A8** | the tail node |
+| obj+0x674 count | **0x10** | 16 pre-allocated 0x1A0-B descriptors |
+
+Conversion: PKTRAM phys = 0x40000000 + 0x1D8000 + (CA - 0x01000000), so the head node is
+phys 0x401F1F80 and the tail phys 0x401F06A8.  The descriptors are allocated at boot by
+**0xBF128** (sub-pool descriptor array at CA **0x172134**, 0x188-B records, blocks of
+0x1A0 = 8-B header + 0x198 payload) and pre-filled by 0xC016C.  **Consequence:** the
+descriptor pool is present, populated and device-visible on the bench boot, so the F1 is
+not the list init and not "no descriptors" - the list waits for a completed PPDU; the
+missing layer is the completion producer described in sec. 0/3.  **[M] bench values,
+[V] allocator decode.**
+
+### 4.2 Datapath counter words inside the device object (probe targets)
 
 | word | site | semantics [I] |
 | --- | --- | --- |

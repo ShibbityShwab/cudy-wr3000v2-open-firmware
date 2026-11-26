@@ -2,8 +2,9 @@ READ-ONLY probe pack (Lead fires; conversions committed in ppdu-init PROBES)
 firmware RAM phys = CA + 0x406B8000; device IO phys = CA + 0x3B8000
 
   P1   device obj band0 name ptr    CA 0x17526C     phys 0x4082D26C w=4  0x001060F7 = device init + PPDU list init ran
-  P2   device obj band0 list next   CA 0x17525C     phys 0x4082D25C w=4  self ptr 0x17525C when list is empty/initialised
-  P3   device obj band0 list count  CA 0x175264     phys 0x4082D264 w=4  preallocated descriptor count
+  P2   device obj band0 list next   CA 0x17525C     phys 0x4082D25C w=4  bench [M] head node 0x01019F80 (PKTRAM); self ptr only if empty
+  P3   device obj band0 list count  CA 0x175264     phys 0x4082D264 w=4  bench [M] 0x10 = the 16 PKTRAM descriptors are present
+  P11  band0 list prev (+0x670)     CA 0x175260     phys 0x4082D260 w=4  bench [M] tail 0x010186A8 (PKTRAM phys 0x401F06A8)
   P4   device obj band0 name ptr b1 CA 0x176094     phys 0x4082E094 w=4  0x001060F7 if band 1 object also inited
   P5   RX-path counter cc5          CA 0x1758B5     phys 0x4082D8B5 w=1  u8 bumped when a received frame is over the 0x680 cap (0xBA12E)
   P6   RX-path counter 1ada         CA 0x1766CA     phys 0x4082E6CA w=1  u8 bumped in the descriptor handler when a negative frame status is seen (0xBAF2A)
@@ -11,6 +12,14 @@ firmware RAM phys = CA + 0x406B8000; device IO phys = CA + 0x3B8000
   P8   device obj band1 counter 1ad4 CA 0x1774EC     phys 0x4082F4EC w=1  band-1 mirror of P7
   P9   MAC live bank status         CA -            phys 0x40408000 w=4  read via the bench's committed iATU map (CA 0x40050000 -> phys 0x40408000): bit10 = rx_ppdu_desc class
   P10  MAC config mask              CA -            phys 0x403F8048 w=4  CA 0x40040048 -> phys 0x403F8048: 0xfffffcc1 stock/vendor value (bit10 masked)
+
+
+PPDU descriptor chain (bench [M] datum, task context / rx-ppdu-init):
+  list head node CA 0x01019F80 -> PKTRAM phys 0x401F1F80
+  list tail node CA 0x010186A8 -> PKTRAM phys 0x401F06A8
+  count 0x10 = 16 pre-allocated 0x1A0-B descriptors (allocator 0xBF128, sub-pool
+  descriptor array at CA 0x172134, 0x188-B records) - the pool is present and
+  populated, so the F1 is NOT the descriptor-list init.
 
 D2H liveness (host consumer, no device read):
   rd_catalog / direct D2H reader: ready pair g4 id1/id2 + HEARTBEAT g4 id4 arrive;

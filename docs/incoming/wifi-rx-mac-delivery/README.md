@@ -14,22 +14,24 @@ nodes - the SMAC RX-completion -> descriptor -> node path - is the missing layer
 entry is not locatable in this image ([U]) and the bench shape (frames=0, no host write,
 intermittent page loss) matches "intake never fed / consumer faulted at the first frame".
 This lane delivers the decode, the corrected D2H route model, the read-only probe pack
-(device-object counters + PPDU list + MAC live bank) and the fire/escalation recipe.
+(device-object counters + PPDU list + MAC live bank) and the fire/escalation recipe.  The
+PPDU descriptor pool is present **and populated** (bench: 16 descriptors, chain in PKTRAM:
+head 0x01019F80, tail 0x010186A8, count 0x10), so the F1 is not the list init.
 
 ## Deliverables
 
 | path | what |
 | --- | --- |
 | [REPORT.md](REPORT.md) | the decode: D2H source selection, the RX consumer 0xB9780, the per-frame gates, the PPDU descriptor pool, where the path breaks, candidate host states |
-| [TABLES.md](TABLES.md) | every address/opcode/callsite: T1-T9, the names table, the counter words, the conversion constants |
-| [PROBES.md](PROBES.md) | **read-only probe pack P1-P10** (device-object counters, PPDU list self-check, MAC live bank) + the decision table |
+| [TABLES.md](TABLES.md) | every address/opcode/callsite: T1-T11, the names table, the counter words, the conversion constants |
+| [PROBES.md](PROBES.md) | **read-only probe pack P1-P11** (device-object counters, PPDU list self-check, MAC live bank) + the decision table |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | R0 preconditions, R1 probe-during-auth, R2 stock control, R3 escalation; PASS/FAIL/STOP |
-| [tools/fw_rx_mac_delivery_re.py](tools/fw_rx_mac_delivery_re.py) | stdlib re-derivation tool: `--selftest` **84/84 PASS**, `--decode`, `--tables`, `--probes` |
+| [tools/fw_rx_mac_delivery_re.py](tools/fw_rx_mac_delivery_re.py) | stdlib re-derivation tool: `--selftest` **87/87 PASS**, `--decode`, `--tables`, `--probes` |
 | [evidence/](evidence/) | selftest/decode/tables/probes transcripts (host-only) |
 
 ## Quick start (host, no device)
 
-    python3 tools/fw_rx_mac_delivery_re.py --selftest   # 84 checks, exit 0
+    python3 tools/fw_rx_mac_delivery_re.py --selftest   # 87 checks, exit 0
     python3 tools/fw_rx_mac_delivery_re.py --decode     # the chain
     python3 tools/fw_rx_mac_delivery_re.py --probes     # the read-only pack
 

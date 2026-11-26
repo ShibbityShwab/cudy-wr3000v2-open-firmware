@@ -33,8 +33,8 @@ re-confirms the delivery channel is alive in this boot (the lane's premise).
 | # | item | CA | phys | width | expect / meaning |
 | ---: | --- | ---: | ---: | ---: | --- |
 | P1 | band-0 device-object name word | 0x0017526C | 0x4082D26C | 4 | **0x001060F7** = the PPDU-list init ran (precondition / self-check) |
-| P2 | band-0 list next (+0x66C) | 0x0017525C | 0x4082D25C | 4 | 0x0017525C self-pointer when empty |
-| P3 | band-0 list count (+0x674) | 0x00175264 | 0x4082D264 | 4 | count of pre-allocated descriptors |
+| P2 | band-0 list next (+0x66C) | 0x0017525C | 0x4082D25C | 4 | bench [M] head node **0x01019F80** (PKTRAM phys 0x401F1F80); self-pointer only if the list is empty |
+| P3 | band-0 list count (+0x674) | 0x00175264 | 0x4082D264 | 4 | bench [M] **0x10** = the 16 pre-allocated PKTRAM descriptors are present |
 | P4 | band-1 name word (+0x67C) | 0x00176094 | 0x4082E094 | 4 | 0x001060F7 iff band 1 object inited |
 | P5 | datapath counter +0xCC5 (u8) | 0x001758B5 | 0x4082D8B5 | 1 | bump = a received frame exceeded the 0x680 CRX cap (0xBA12E) |
 | P6 | datapath counter +0x1ADA (u8) | 0x001766CA | 0x4082E6CA | 1 | bump = a per-frame negative status (0xBAF2A path) |
@@ -42,6 +42,7 @@ re-confirms the delivery channel is alive in this boot (the lane's premise).
 | P8 | band-1 flag +0x1AD4 (u8) | 0x001774EC | 0x4082F4EC | 1 | band-1 mirror of P7 |
 | P9 | MAC live-bank status | - | 0x40408000 | 4 | CA 0x40050000 via iATU: bit 10 = rx_ppdu_desc class (stock-latched, benign) |
 | P10 | MAC config mask | - | 0x403F8048 | 4 | CA 0x40040048: 0xfffffcc1 stock/vendor value (bit 10 masked) |
+| P11 | band-0 list prev (+0x670) | 0x00175260 | 0x4082D260 | 4 | bench [M] tail node 0x010186A8 (PKTRAM phys 0x401F06A8) |
 
 Notes:
 * P5-P8 are read as u8; a **+1 or more** between the two passes is the signal.  An

@@ -20,6 +20,9 @@ PASS reserve entry: movs r3,#0 (0xB52F0) (got 0x2300 want 0x2300)
 PASS reserve: add.w r7,r0,#0x678 (list lock) (got 0x67cf want 0x67cf)
 PASS reserve: mov.w r3,#0x198 (descriptor size) (got 0x73cc want 0x73cc)
 PASS reserve: bl -> memset(desc,0x198,0) (got 0xc1e0c want 0xc1e0c)
+PASS allocator 0xBF128: sub-pool descriptor base 0x00172134 (got 0x172134 want 0x172134)
+PASS allocator: mov.w r2,#0x188 (sub-pool stride) (got 0xf44f want 0xf44f)
+PASS allocator: 0x188 immediate encoding (got 0x72c4 want 0x72c4)
 PASS reserve: ldr.w r3,[r5,#0x670] (list tail) (got 0x3670 want 0x3670)
 PASS reserve: str.w r4,[r5,#0x670] (link tail) (got 0x4670 want 0x4670)
 PASS reserve: ldr.w r3,[r5,#0x674] (count) (got 0x3674 want 0x3674)
@@ -91,4 +94,4 @@ PASS thread table: HCC TX Thread (got 'HCC TX Thread' want 'HCC TX Thread')
 PASS thread table: HCC RX Thread (got 'HCC RX Thread' want 'HCC RX Thread')
 PASS thread table: HCC OAM Thread (got 'HCC OAM Thread' want 'HCC OAM Thread')
 
-== RESULT: 84/84 PASS, 0 FAIL ==
+== RESULT: 87/87 PASS, 0 FAIL ==

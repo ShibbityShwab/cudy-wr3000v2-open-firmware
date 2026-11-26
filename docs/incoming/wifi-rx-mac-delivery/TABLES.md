@@ -2,7 +2,7 @@
 
 **Lane:** wifi-rx-mac-delivery (task-220).  CA = file offset + 0x40000 of
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`).  Every row below is
-asserted by `tools/fw_rx_mac_delivery_re.py --selftest` (84/84 PASS) from the raw image.
+asserted by `tools/fw_rx_mac_delivery_re.py --selftest` (87/87 PASS) from the raw image.
 Grades: **[V]** byte-verified here; **[V\*]** committed earlier lane; **[I]** inference;
 **[U]** unknown/device read required.
 
@@ -174,3 +174,13 @@ recovered from it.  This is why the RX producer entry is [U].
 | +0xCC5 (u8) | 0x1758B5 / 0x4082D8B5 | 0x1766DD / 0x4082E6DD |
 | +0x1AD4 (u8) | 0x1766C4 / 0x4082E6C4 | 0x1774EC / 0x4082F4EC |
 | +0x1ADA (u8) | 0x1766CA / 0x4082E6CA | 0x1774F2 / 0x4082F4F2 |
+
+## T11 - PPDU descriptor pool: allocator and the bench runtime chain [V decode, M runtime]
+
+| item | value |
+| --- | --- |
+| allocator | CA 0xBF128: sub-pool descriptor array base literal CA 0xBF240 = **0x00172134**, sub-pool record stride **0x188** (0xBF144-0xBF146), block = size+8 header (0x1A0 -> 0x198 payload) |
+| bench list chain (obj+0x66C/+0x670) | head node **0x01019F80**, tail node **0x010186A8** (PKTRAM CAs) |
+| bench count (obj+0x674) | **0x10** = 16 descriptors |
+| PKTRAM phys | 0x40000000 + 0x1D8000 + (CA - 0x01000000): head 0x401F1F80, tail 0x401F06A8 |
+| meaning | the pool is present + populated on the bench boot -> F1 is not the list init and not "no descriptors"; the list waits for a completed PPDU from the SMAC RX producer |
