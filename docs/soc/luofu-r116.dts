@@ -940,4 +940,25 @@
 		acp-gate = <0x10100174 0x4000000 0x0>;	/* ACP gate bit 26 */
 		status = "disabled";
 	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		status = "okay";
+
+		led-status { label = "oem:green:status"; gpios = <&porta 24 1>; default-state = "on"; };
+		led-wan { label = "oem:green:wan"; gpios = <&porta 25 1>; };
+		led-lan { label = "oem:green:lan"; gpios = <&porta 3 1>; };
+		led-internet { label = "oem:green:internet"; gpios = <&porta 2 1>; };
+		led-wifi2 { label = "oem:green:wifi"; gpios = <&porta 0 1>; };
+		led-wifi5 { label = "oem:green:wifi5g"; gpios = <&porta 1 1>; };
+	};
+
+	gpio-keys-polled {
+		compatible = "gpio-keys-polled";
+		poll-interval = <20>;	/* the vendor 0x14 */
+		status = "okay";
+
+		reset { label = "reset"; gpios = <&porta 22 1>; linux,code = <0x198>; };
+		wps { label = "wps"; gpios = <&porta 23 1>; linux,code = <0x211>; };
+	};
 };
