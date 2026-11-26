@@ -1,0 +1,129 @@
+image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B, sha256 7fc87e2051e8...)
+objdump: build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-objdump ; 342693 instructions decoded
+
+g0-id1 config keys: table A CA 0x10c23c (217 rows) / table B CA 0x103bf8 (88 rows), worker = row u32 & ~1
+
+key   worker  set      vendor emitter (local, [V*])   decode
+0x0000 0x0840b4 stock-only hmac_config_set_mac_addr         
+0x0005 0x082878 stock-only (unresolved emitter)             
+0x000B 0x0a09f0 stock-only hmac_config_set_uapsden          
+0x003C 0x0811b8 stock-only hmac_config_set_shpreamble       
+0x0052 0x042044 stock-only hmac_config_set_freq/priv_iter_vap_set_channel
+0x0064 0x0449e4 ladder  -                                
+0x0065 0x046394 ladder  -                                
+0x0067 0x045f74 ladder  -                                
+0x0069 0x0839b4 stock-only hmac_set_mode_event              
+0x006F 0x081c44 stock-only hmac_config_set_he_gi            
+0x0073 0x084920 stock-only hmac_config_vap_state_syn        
+0x0078 0x0a5824 stock-only hmac_config_11i_add_key/install_rekey
+0x00D8 0x081038 ladder  -                                
+0x00F7 0x045a30 stock-only hmac_config_set_country          
+0x011E 0x0a1a58 stock-only hmac_config_acs                  
+0x0124 0x0841b8 ladder  -                                
+0x0127 0x084da4 ladder  -                                
+0x015D 0x0b2410 stock-only hmac_40M_intol_sync_event        
+0x01CF 0x084d14 stock-only hmac_config_set_mib_by_bw        
+0x01EE 0x04213c stock-only (unresolved emitter)             
+0x01F7 0x0b5b9c ladder  -                                
+0x0242 0x04c524 ladder  -                                
+0x0243 0x08419c ladder  -                                
+0x025F 0x082850 stock-only hmac_config_set_cus_rf           
+0x02BD 0x0438f0 stock-only hmac_11v_cfg_bsst_switch         
+0x03E4 0x084260 stock-only hmac_config_down_vap/check_ap_channel_follow_sta
+0x07D9 0x04366c stock-only hmac_config_ch_status_sync       
+0x07E7 0x0b58fc stock-only hmac_dfs_cac_start/stop/cac_sync_state/timeout
+0x07E8 0x0429b0 stock-only hmac_chan_tx_cali_sync           
+
+the 0x84xxx-family cluster (handler in 0x81C44..0x84DA4):
+  key 0x0069 -> CA 0x839b4
+  key 0x03E4 -> CA 0x84260
+  key 0x035A -> CA 0x844dc
+  key 0x0000 -> CA 0x840b4
+  key 0x0005 -> CA 0x82878
+  key 0x0073 -> CA 0x84920
+  key 0x011F -> CA 0x848cc
+  key 0x07D2 -> CA 0x83e24
+  key 0x07D5 -> CA 0x83f4c
+  key 0x00D6 -> CA 0x84430
+  key 0x00E3 -> CA 0x84354
+  key 0x00E4 -> CA 0x842ac
+  key 0x0077 -> CA 0x83e70
+  key 0x07D3 -> CA 0x82f50
+  key 0x0068 -> CA 0x82164
+  key 0x006E -> CA 0x845a0
+  key 0x0033 -> CA 0x847d4
+  key 0x0034 -> CA 0x84740
+  key 0x0035 -> CA 0x836fc
+  key 0x0036 -> CA 0x84664
+  key 0x0037 -> CA 0x82184
+  key 0x0072 -> CA 0x83c98
+  key 0x00B2 -> CA 0x83b7c
+  key 0x007F -> CA 0x84528
+  key 0x00BB -> CA 0x83764
+  key 0x0243 -> CA 0x8419c
+  key 0x0140 -> CA 0x83818
+  key 0x034B -> CA 0x82110
+  key 0x006F -> CA 0x81c44
+  key 0x0124 -> CA 0x841b8
+  key 0x01CF -> CA 0x84d14
+  key 0x0127 -> CA 0x84da4
+  key 0x013A -> CA 0x84520
+  key 0x020C -> CA 0x83de0
+  key 0x07D7 -> CA 0x83ef4
+  key 0x0362 -> CA 0x82024
+  key 0x0364 -> CA 0x81fa0
+  key 0x0221 -> CA 0x837a0
+  key 0x025E -> CA 0x83780
+  key 0x025F -> CA 0x82850
+  key 0x0261 -> CA 0x82824
+  key 0x02AD -> CA 0x84c3c
+  key 0x0336 -> CA 0x84070
+  key 0x033C -> CA 0x84bac
+  key 0x033D -> CA 0x84b1c
+  key 0x033E -> CA 0x84aac
+  key 0x0343 -> CA 0x81eb4
+  key 0x13D2 -> CA 0x81f30
+  key 0x016E -> CA 0x837ac
+  key 0x13EE -> CA 0x84868
+  key 0x13EF -> CA 0x821e0
+  key 0x0FDC -> CA 0x84a44
+  key 0x0100 -> CA 0x83480
+  key 0x00A9 -> CA 0x827b4
+  key 0x00AC -> CA 0x82afa
+  key 0x00EB -> CA 0x82f90
+  key 0x0325 -> CA 0x82ddc
+  key 0x00AF -> CA 0x82bc8
+  key 0x00BD -> CA 0x82af4
+  key 0x00DE -> CA 0x82a70
+  key 0x00D1 -> CA 0x83694
+  key 0x00D2 -> CA 0x82364
+  key 0x00D3 -> CA 0x81e1c
+  key 0x00F9 -> CA 0x8336c
+  key 0x00FC -> CA 0x829d6
+  key 0x0128 -> CA 0x8313c
+  key 0x0306 -> CA 0x8268c
+  key 0x0308 -> CA 0x81cbc
+  key 0x0146 -> CA 0x81dbc
+  key 0x0145 -> CA 0x81e5c
+  key 0x019A -> CA 0x829b8
+  key 0x01ED -> CA 0x823e0
+  key 0x016A -> CA 0x83200
+  key 0x034C -> CA 0x81d48
+  key 0x034D -> CA 0x82748
+  key 0x0333 -> CA 0x828c0
+  key 0x033B -> CA 0x83206
+  key 0x07E4 -> CA 0x822ec
+  key 0x07E5 -> CA 0x82268
+  key 0x07E6 -> CA 0x83084
+
+ISR common bodies writing [chain A base + 0xE4] (the +228 word):
+  CA 0xae474  str.w -> ctx+228  (ctx = [band_object+672])
+  CA 0xaead8  str.w -> ctx+228  (ctx = [band_object+672])
+  CA 0xaebb0  str.w -> ctx+228  (ctx = [band_object+672])
+  CA 0xb53f8  str.w -> ctx+228  (ctx = [band_object+672])
+  CA 0xb5420  str.w -> ctx+228  (ctx = [band_object+672])
+
+the chain A base ([obj+672]) at boot, per band:
+  band0 obj 0x174bf0 -> +672 = 0x40042000 (literal seat 0xd20f4)
+  band1 obj 0x175a18 -> +672 = 0x40062000 (literal seat 0xd20f8)
+  RAM-block attach (obj+640): 0x114f18, same for both bands

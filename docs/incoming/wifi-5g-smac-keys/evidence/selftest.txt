@@ -1,0 +1,145 @@
+image: /home/shibbityshwab/recovery-extract/lib/firmware/hi_wifi/FIRMWARE.bin (928920 B, sha256 7fc87e2051e8...)
+objdump: build/linux-kbuild/toolchain/bin/arm-none-linux-gnueabihf-objdump ; 342693 instructions decoded
+
+=== A. identity ===
+PASS   1  firmware length == 928920 B
+PASS   2  firmware sha256 == 7fc87e20...311b
+
+=== B. the g0-id1 config dispatcher CA 0x43D58 ===
+PASS   3  dispatcher prologue
+PASS   4  key = u16 hdr+20
+PASS   5  table A literal == 0x10C23C
+PASS   6  table A byte bound 1736 (217 rows)
+PASS   7  table B literal == 0x103BF8
+PASS   8  table B byte bound 704 (88 rows)
+PASS   9  matched row: worker = row[+4]
+PASS  10  NULL worker rejected
+PASS  11  payload pointer hdr+24
+PASS  12  vap selector byte hdr+22
+PASS  13  indirect call
+PASS  14  every live table row has pad 0 and a Thumb (odd) worker
+PASS  15  both tables end with the NULL sentinel row key 0x1451
+
+=== C. key -> firmware worker (34 keys) ===
+PASS  16  key 0x0000 -> worker 0x840b4
+PASS  17  key 0x0005 -> worker 0x82878
+PASS  18  key 0x000B -> worker 0xa09f0
+PASS  19  key 0x003C -> worker 0x811b8
+PASS  20  key 0x0052 -> worker 0x42044
+PASS  21  key 0x0064 -> worker 0x449e4
+PASS  22  key 0x0065 -> worker 0x46394
+PASS  23  key 0x0067 -> worker 0x45f74
+PASS  24  key 0x0069 -> worker 0x839b4
+PASS  25  key 0x006F -> worker 0x81c44
+PASS  26  key 0x0073 -> worker 0x84920
+PASS  27  key 0x0078 -> worker 0xa5824
+PASS  28  key 0x00D8 -> worker 0x81038
+PASS  29  key 0x00F7 -> worker 0x45a30
+PASS  30  key 0x011E -> worker 0xa1a58
+PASS  31  key 0x0124 -> worker 0x841b8
+PASS  32  key 0x0127 -> worker 0x84da4
+PASS  33  key 0x015D -> worker 0xb2410
+PASS  34  key 0x01CF -> worker 0x84d14
+PASS  35  key 0x01EE -> worker 0x4213c
+PASS  36  key 0x01F7 -> worker 0xb5b9c
+PASS  37  key 0x0242 -> worker 0x4c524
+PASS  38  key 0x0243 -> worker 0x8419c
+PASS  39  key 0x025F -> worker 0x82850
+PASS  40  key 0x02BD -> worker 0x438f0
+PASS  41  key 0x03E4 -> worker 0x84260
+PASS  42  key 0x07D9 -> worker 0x4366c
+PASS  43  key 0x07E7 -> worker 0xb58fc
+PASS  44  key 0x07E8 -> worker 0x429b0
+PASS  45  A row   5 == key 0x0069
+PASS  46  A row   8 == key 0x03E4
+PASS  47  A row   9 == key 0x0052
+PASS  48  A row  17 == key 0x0000
+PASS  49  A row  18 == key 0x0005
+PASS  50  A row  20 == key 0x0073
+PASS  51  A row  23 == key 0x07D9
+PASS  52  A row  46 == key 0x003C
+PASS  53  A row  52 == key 0x000B
+PASS  54  A row  78 == key 0x0078
+PASS  55  A row  92 == key 0x00F7
+PASS  56  A row  94 == key 0x07E7
+PASS  57  A row  96 == key 0x07E8
+PASS  58  A row 106 == key 0x006F
+PASS  59  A row 109 == key 0x01CF
+PASS  60  A row 115 == key 0x015D
+PASS  61  A row 121 == key 0x01EE
+PASS  62  A row 138 == key 0x02BD
+PASS  63  A row 147 == key 0x025F
+PASS  64  B row  35 == key 0x011E
+PASS  65  20 stock-only keys = stock 25 minus the 9 ladder keys
+PASS  66  stock-only key 0x0005 present in tables
+PASS  67  stock-only key 0x01EE present in tables
+
+=== D. the 0x84xxx handler family ===
+PASS  68  family worker 0x840b4 is a real Thumb prologue
+PASS  69  family worker 0x82878 is a real Thumb prologue
+PASS  70  family worker 0x839b4 is a real Thumb prologue
+PASS  71  family worker 0x84920 is a real Thumb prologue
+PASS  72  family worker 0x84d14 is a real Thumb prologue
+PASS  73  family worker 0x84260 is a real Thumb prologue
+PASS  74  set_mac_addr prologue
+PASS  75  set_mac_addr reads per-chip ptr +1196
+PASS  76  set_mac_addr posts per-chip msg CA 0xF4744
+PASS  77  set_mac_addr calls chain writer CA 0xBD038
+PASS  78  set_mac_addr calls chain writer CA 0xBC830
+PASS  79  set_mac_addr second band guard
+PASS  80  vap_state_syn state byte store
+PASS  81  vap_state_syn state-4 band-start guard
+PASS  82  vap_state_syn band start call
+PASS  83  set_mode_event prologue
+
+=== E. per-band object +672 / SMAC device chain A ===
+PASS  84  wrapper RAM var has exactly the 14 ISR-wrapper load sites
+PASS  85  band accessor stride 3624
+PASS  86  band accessor base literal == 0x174bf0
+PASS  87  band accessor mla
+PASS  88  band1 object = band0 + stride
+PASS  89  SMAC init region length 7272
+PASS  90  SMAC init band-region base literal
+PASS  91  only direct caller of SMAC init
+PASS  92  band loop: count byte base+14
+PASS  93  band loop: enter body
+PASS  94  per-band selector byte obj+0x11D
+PASS  95  selector read
+PASS  96  selector==0 -> chain A band0 base
+PASS  97  selector==1 -> chain A band1 base
+PASS  98  chain A literal @0d2044 == 0x40042000
+PASS  99  chain A literal @0d2094 == 0x40062000
+PASS 100  chain A store +608 @0d2046
+PASS 101  chain A store +612 @0d204e
+PASS 102  chain A store +616 @0d2056
+PASS 103  chain A store +620 @0d205e
+PASS 104  chain A store +624 @0d2066
+PASS 105  chain A store +628 @0d206e
+PASS 106  chain A store +632 @0d2076
+PASS 107  chain A store +636 @0d207e
+PASS 108  band0 chain A base load feeds the shared stores
+PASS 109  band1 chain A base load feeds the shared stores
+PASS 110  object relation: r4 = obj+0x40, so +608 == obj+672, +576 == obj+640
+PASS 111  RAM-block attach store +576 @0d2ca2
+PASS 112  RAM-block attach store +584 @0d2ca6
+PASS 113  RAM-block attach store +580 @0d2cac
+PASS 114  RAM-block attach store +588 @0d2cb0
+PASS 115  RAM-block attach store +592 @0d2cb8
+PASS 116  RAM-block attach store +596 @0d2cbe
+PASS 117  RAM-block attach store +600 @0d2cc4
+PASS 118  attach never targets +672 (only +576..+600)
+PASS 119  0x114F18 (RAM block) has the 5 image literal seats the record lists
+PASS 120  ISR ctx store +228 @0ae474
+PASS 121  ISR ctx store +228 @0aead8
+PASS 122  ISR ctx store +228 @0aebb0
+PASS 123  ISR ctx store +228 @0b53f8
+PASS 124  ISR ctx store +228 @0b5420
+PASS 125  0x00A00096 is NOT an image constant (status is hardware/ISR)
+
+=== F. candidates ===
+PASS 126  DFS CAC handler body loads the band-1 SMAC sub-base literals
+PASS 127  no stock-only handler inlines +672 / RAM-block / chain-base access (attach is boot-only)
+PASS 128  chain A band0 base is loaded only by the boot init site 0xD2044
+PASS 129  chain A band1 base is loaded only by the boot init site 0xD2094
+
+RESULT: 129/129 checks PASS
