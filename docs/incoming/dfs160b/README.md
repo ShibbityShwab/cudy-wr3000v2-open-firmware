@@ -41,9 +41,9 @@ facts and does not carry vendor bytes:
 
 | deliverable | state |
 | --- | --- |
-| lane opened, sources pinned | DONE (this commit) |
-| portable model + host selftest | IN PROGRESS |
-| driver integration patch + build | PENDING |
+| lane opened, sources pinned | DONE |
+| portable model + host selftest | DONE: src/hi5622_dfsb.{h,c} + src/dfs160b_selftest.c, 269 checks / 0 failures, evidence/HOST-TESTS.txt |
+| driver integration patch + build | IN PROGRESS (next) |
 | fire recipe + report/tables | PENDING |
 
 ## Standing rules
