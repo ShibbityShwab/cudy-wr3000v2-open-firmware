@@ -44,7 +44,11 @@ device read.  This lane **corrects** one claim of
    earlier step in that body returned an error (two `bne.w` abort branches
    before the call); (H3) the boot-entry registration/first-init order differed.
    No captured stock H2D family is a trigger - the init is not message-driven.
-   **[I], with the corrective probe as the discriminator.**
+   **[I], with the corrective probe as the discriminator.**  Note that
+   `../wifi-smac-start` (task-215) independently measured a per-band field
+   this same loop writes (band-1 +672 = 0x40062000 boot default) on our bench
+   boot, i.e. the boot body **did** run; the corrected probe should therefore
+   find the PPDU list **present**, and this hypothesis set is a fallback only.
 6. **Candidate host-visible action: none is authorised by this decode.** The
    per-lane stock-only g0-id1 keys (`wifi-smac-start`) and the captured
    families (`wifi-f1-from-capture`) are post-boot H2D handling, not this

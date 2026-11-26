@@ -22,7 +22,10 @@ boot.  This alone settles the F1 question for the descriptor list:
 * **P2 == 0x001060F7** -> the list was initialised; the f1-thread "list never
   initialised" claim is retired by the corrected object.  Do not fire anything
   for the list; move the F1 residual to the firmware RX consumer / first-PPDU
-  path (the f1-thread sec. 6 residual).
+  path (the f1-thread sec. 6 residual).  This is the expected outcome: the
+  sibling lane `../wifi-smac-start` measured a per-band +672 value that the
+  same 0xD1B68 loop writes on our bench boot, so the loop (and therefore the
+  0xC016C call before its end) ran.
 * **P2 == 0** -> record P1/P6/P7; go to rung 1.
 
 ## 2. Rung 1 - stock control (read-only)

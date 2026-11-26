@@ -49,7 +49,18 @@ device read.  Everything below is read-only; nothing here authorises a write.
 5. **Corrected self-check:** `u32[0x174BF0+0x67C]` must be 0x001060F7
    (phys 0x4082D26C) and head/prev 0x0017525C (phys 0x4082D25C/0x4082D260);
    band 1 object is 0x175A18 (name at 0x00176094).  See PROBES P2-P7.
-6. **If the corrected probe still shows the list absent**, the differences to
+6. **Cross-lane corroboration that the boot init DID run on our bench boot:**
+   the sibling lane `../wifi-smac-start` (task-215) decoded the *same*
+   CA 0xD1B68 from the SMAC side (same single caller 0x48314, same 7,272-byte
+   region 0x174BE0, same stride 0xE28) and measured on the bench that the
+   band-1 object's +672 pointer holds the **boot default 0x40062000** (band 0
+   holds the attached RAM block 0x114F18).  Those are the values 0xD1B68 writes
+   in the per-band loop **before** the 0xC016C call at 0xD3BAC - so the loop ran
+   on our boot and the PPDU-list init should also have run.  This independently
+   supports the object correction (verdict 4) and retires "the list was never
+   initialised" as the F1 cause unless the corrected probe contradicts it.
+   **[V*] sibling-lane bench datum + [V] chain order.**
+7. **If the corrected probe still shows the list absent**, the differences to
    chase are firmware-internal and ranked H1 gate byte, H2 the body never
    reaching 0x48314 (earlier failure), H3 boot registration order - not a
    missing H2D message (REPORT sec. 6).  **[I]**
@@ -163,6 +174,15 @@ initialized".**  The corrected read-only check is P2/P3 in PROBES.md.
 get per-module contexts; several of those contexts have their own fields at +0x66C
 etc., which is why an offset-only scan is ambiguous.  The PPDU list is
 identified by its debug-name literal and its init site, not by an offset.)
+
+Cross-lane confirmation of the object base: `../wifi-smac-start` (task-215)
+decoded the same 0xD1B68 (same single caller 0x48314, region 0x174BE0, stride
+0xE28, per-band object 0x174BF0+0xE28*band) and quotes the band-1 object as
+**0x175A18**, which is exactly `get_device(1)` from CA 0xF4F48 - so the
+band-object arithmetic this lane uses is the same one the bench SMAC
+differential already exercised.  Its measured band-0/band-1 +672 values
+(0x114F18 vs 0x40062000) are written by this same loop, i.e. the boot body ran
+on our boot; the descriptor-list init is in that loop.
 
 ## 6. Why it does not run on our host-only boot - candidates
 
