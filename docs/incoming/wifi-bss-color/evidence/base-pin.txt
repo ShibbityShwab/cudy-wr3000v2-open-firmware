@@ -1,0 +1,7 @@
+# Base pin - the IMAGE #3 module source tree (HOST-ONLY, local, never committed)
+# Snapshot /tmp/wifi-image-3-module: 97 entries (the 64-param image #3 module a717c86d
+# per ../../wifi-image-3-final/README.md). Hashes of every base file this lane touches:
+8fbc8e1e180e3cd139aac0f4c28e6e8e0a8d314b62f6e917907b8a5b6523eca7  hi5622_scan.c
+b4f98773547d0d7643be7c401d7d25cd40eae896b6ac49383647177f1731087e  Kbuild
+de2d78b5da48d9774099a7e03adc522a431a1ee8a029a70005393ae353273b9b  hi5622_he_caps.c
+# base module_param surface: 64 -> patched surface: 65 (+bss_color)

@@ -56,5 +56,21 @@ on-air colour (the beacon's HE Operation IE is firmware-built).
 
 ## Status
 
-DECODE COMPLETE. Implementation/build/fire-recipe: see the section below (updated by the
-commits of this lane).
+**DECODE + IMPLEMENTATION + HOST BUILD + HOST TESTS COMPLETE.** The fire is the Lead's,
+attended ([FIRE-RECIPE.md](FIRE-RECIPE.md)); this lane never contacted the router.
+
+* implementation: portable builder/validator + fail-closed `bss_color` knob +
+  `hi5622_bss_color_post_ap()` wired into `hi5622_scan_op_start_ap`, patch against the
+  image #3 module tree ([BUILD-NOTES.md](BUILD-NOTES.md));
+* module artifact: stripped **382,404 B** sha256 `d87fbdcb...dcb`, **65 params**
+  (+ `bss_color`), 0 warnings, .text identical after strip;
+* host tests: **29/29 PASS**, byte-exact KATs incl. the captured vendor frame
+  ([evidence/host-tests.txt](evidence/host-tests.txt));
+* fire expectation: dmesg `cfg80211: BSS Color 25 posted to firmware (g0 id36
+  hmac_scan_config_bss_color, bitmap 0x0000000002000000, chip=0, 20 B)` and the on-air HE
+  Operation differential (firmware-built IE; unchanged 25 = firmware-constant).
+
+## Fire in one line (Lead)
+
+`bss_color=1` (runtime echo) + 2.4 GHz HE AP + hostapd `he_bss_color=25` ->
+see [FIRE-RECIPE.md](FIRE-RECIPE.md) (preconditions, exact G0-G6 gates, STOP rules).

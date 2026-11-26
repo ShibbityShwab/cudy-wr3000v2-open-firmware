@@ -72,7 +72,18 @@ a bit >= 64 impossible (u64) - builder API rejects colour > 63; AP path rejects 
 | hostapd | 2026.08 `driver_nl80211.c:6203`: sends the nested attr when `params->freq->he_enabled` and `nl80211_attr_supported()` (`attr <= nl80211_maxattr`), i.e. any modern kernel - hostapd `he_bss_color=N` arrives in our start_ap |
 | our knob | `bss_color=0` off (default, fail closed); `1` = post once per start_ap from the cfg80211 colour [D] |
 
-## T6. Failure/status codes in the vendor paths [V]
+## T6. The implemented artifact (image #3 module base) [V]
+
+| item | value |
+| --- | --- |
+| base | image #3 module source tree (64-param module a717c86d; evidence/base-pin.txt) |
+| patch | patches/0001-bss-color.patch, 13,322 B, 5 files (2 new, 2 edits) |
+| knob | `bss_color` uint 0644 default 0; 0=off, 1=post AP HE BSS colour, >1 refused (no frame) |
+| posting point | `hi5622_scan_op_start_ap`, after the AP config / VAP start; failure logged, never aborts |
+| artifact | stripped 382,404 B sha256 d87fbdcb...dcb; 65 params; 0 warnings; .text strip-identical |
+| host tests | 29/29 PASS (captured frame K1 + he_bss_color=25 K2 + validation/policy) |
+
+## T7. Failure/status codes in the vendor paths [V]
 
 * builder: 0 success, **100 (0x64)** on alloc/buf/memcpy/tx failure and on NULL args; logs
   via oam_error_log* (line numbers 0x145/0x14D/0x154/0x16E/0x175).

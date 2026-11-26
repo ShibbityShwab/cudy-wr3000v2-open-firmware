@@ -1,0 +1,6 @@
+hi5622_bss_color selftest (lane wifi-bss-color, task-233)
+PASS K1 captured stock frame (20 B byte-exact)
+PASS K2 he_bss_color=25 / chip 0 (20 B byte-exact)
+PASS K3 colour 1 / chip 4 (20 B byte-exact)
+PASS K4 colour 63 / chip 15 (20 B byte-exact)
+29 checks, 0 failed -> PASS

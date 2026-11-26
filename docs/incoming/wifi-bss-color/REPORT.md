@@ -141,6 +141,20 @@ firmware-internal [U] and is observable only differentially on air.
   own BSS colour state (the on-air HE Operation IE is firmware-built: color 25 on image #3;
   see ../wifi-ax-he-caps and ../wifi-ax-advanced T9). The fire recipe grades the on-air
   differential, not an assumed write.
+### 4.1 What this lane built and proved host-side
+
+* `patches/0001-bss-color.patch` against the image #3 module tree: new
+  `hi5622_bss_color.{c,h}` (portable 20-byte builder/validator + bitmap/colour policy +
+  `bss_color` module param 0644 default 0 + `hi5622_bss_color_post_ap()`), one call in
+  `hi5622_scan_op_start_ap` after the AP config, and the Kbuild line.
+* Kernel build on the image #3 base: **0 warnings**, stripped artifact 382,404 B sha256
+  `d87fbdcb...dcb`, 65 params, vermagic 6.18.60, .text identical after strip
+  (evidence/build-artifact.txt).
+* Host tests: 29/29 PASS, including the captured stock frame byte-exact (K1) and the
+  hostapd `he_bss_color=25` vector (K2) - evidence/host-tests.txt.
+* Fire rung: FIRE-RECIPE.md (runtime knob enable -> hostapd fixture with he_bss_color=25 ->
+  dmesg post line + frame_post counter + on-air HE Operation differential).
+
 * **Not done here (and why):** hooking our scan-completion path to post the observed-colour
   bitmap. Our scan path is a separate provider/offload lane; wiring it without a bench
   differential would claim an unverified mapping. The builder accepts any bitmap, so that
