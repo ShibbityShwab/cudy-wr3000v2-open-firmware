@@ -1,0 +1,9 @@
+patching file hi5622_cfg80211.h
+patching file hi5622_cfg80211_ops.c
+patching file hi5622_mgmt.c
+patching file hi5622_monitor.c
+patching file hi5622_monitor.h
+patching file hi5622_monitor_logic.c
+patching file hi5622_monitor_logic.h
+patching file hi5622_sta_ops.c
+patching file Kbuild

@@ -1,0 +1,543 @@
+diff -ruN pristine/hi5622_cfg80211.h patched-clean/hi5622_cfg80211.h
+--- pristine/hi5622_cfg80211.h	2026-11-26 11:48:14.492186626 +0700
++++ patched-clean/hi5622_cfg80211.h	2026-11-26 15:54:33.718077110 +0700
+@@ -98,6 +98,18 @@
+ 	struct hi5622_data_tx		*data_tx;
+ 	bool				reg_scheduled;
+ 	bool				ready_logged;
++	/* monitor-mode local mirror (monitor2 lane, task-246): metadata-only
++	 * chandef + delivery counters; monitor=0 keeps everything inert. */
++	struct cfg80211_chan_def	mon_chandef;
++	bool				mon_valid;
++	u32				mon_rx_mgmt;
++	u32				mon_rx_data;
++	u32				mon_drop_no_dev;
++	u32				mon_drop_down;
++	u32				mon_drop_busy;
++	u32				mon_drop_bad_len;
++	u32				mon_rt_fail;
++	u32				mon_drop_nomem;
+ };
+ 
+ /* The op table (hi5622_cfg80211_ops.c); referenced by wiphy_new_nm(). */
+diff -ruN pristine/hi5622_cfg80211_ops.c patched-clean/hi5622_cfg80211_ops.c
+--- pristine/hi5622_cfg80211_ops.c	2026-11-26 11:48:14.492281035 +0700
++++ patched-clean/hi5622_cfg80211_ops.c	2026-11-26 15:54:25.780402577 +0700
+@@ -51,6 +51,7 @@
+ #include "hi5622_sta.h"
+ #include "hi5622_sta_ops.h"
+ #include "hi5622_data_tx.h"
++#include "hi5622_monitor.h"
+ 
+ /* ---------------------------------------------------------------------
+  * nl80211 iftype -> portable model iftype
+@@ -168,8 +169,10 @@
+ 	wdev->netdev = dev;
+ 	dev->ieee80211_ptr = wdev;
+ 	SET_NETDEV_DEV(dev, wiphy_dev(wiphy));
+-	if (type == NL80211_IFTYPE_MONITOR)
++	if (type == NL80211_IFTYPE_MONITOR) {
+ 		dev->type = ARPHRD_IEEE80211_RADIOTAP;
++		hi5622_monitor_iface_created(c);
++	}
+ 
+ 	mutex_lock(&c->lock);
+ 	if (c->removing) {
+@@ -506,6 +509,9 @@
+ 	.add_virtual_intf	= hi5622_cfg11_add_virtual_intf,
+ 	.del_virtual_intf	= hi5622_cfg11_del_virtual_intf,
+ 	.change_virtual_intf	= hi5622_cfg11_change_virtual_intf,
++	/* monitor2 lane (task-246): monitor channel is a metadata-only store;
++	 * -EOPNOTSUPP at monitor=0 and no firmware tune ever. */
++	.set_monitor_channel	= hi5622_monitor_op_set_channel,
+ 	.get_station		= hi5622_cfg11_get_station,
+ 	.dump_station		= hi5622_cfg11_dump_station,
+ 	/* wifi-sta-ops lane (task-149): AP client station lifecycle.  The
+diff -ruN pristine/hi5622_mgmt.c patched-clean/hi5622_mgmt.c
+--- pristine/hi5622_mgmt.c	2026-11-26 11:48:14.493067345 +0700
++++ patched-clean/hi5622_mgmt.c	2026-11-26 15:54:25.783402564 +0700
+@@ -35,6 +35,7 @@
+ #include "hi5622_mgmt.h"
+ #include "hi5622_mgmt_logic.h"
+ #include "hi5622_sta_ops_logic.h"
++#include "hi5622_monitor.h"
+ 
+ /* Management-frame TX carrier (wifi-ap-mgmt, task-143).  Default 0 keeps the
+  * .mgmt_tx op exactly as fail-closed as the bench-proven image: hostapd's
+@@ -199,6 +200,9 @@
+ 		return;
+ 	}
+ 	mgmt_state.rx_events++;
++	/* monitor mirror runs before the AP-policy gate, so it does not depend
++	 * on mgmt_rx (monitor=1 is itself the enable). */
++	hi5622_monitor_rx_mgmt(ctx, &rx);
+ 	if (!hi5622_mgmt_rx)
+ 		return;		/* count only (fail-closed default) */
+ 	c = ctx->cfg;
+diff -ruN pristine/hi5622_monitor.c patched-clean/hi5622_monitor.c
+--- pristine/hi5622_monitor.c	1970-01-01 07:00:00.000000000 +0700
++++ patched-clean/hi5622_monitor.c	2026-11-26 15:54:13.883451965 +0700
+@@ -0,0 +1,187 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_monitor.c - local-mirror monitor mode (cfg80211 monitor iface +
++ * radiotap delivery) for the Hi5622V100 clean-room driver.
++ *
++ * ORIGINAL clean-room code (monitor2 lane, shared task task-246, 2026-11-26).
++ * See hi5622_monitor.h for the semantics; the portable byte-vector logic is
++ * hi5622_monitor_logic.c (host-tested by tools/monitor_selftest.c).
++ *
++ * Hard rules honoured here:
++ *   - no firmware write from any monitor path (channel set is metadata only);
++ *   - monitor>1 is refused, monitor=0 (default) is inert;
++ *   - never blocks the RX path (mutex_trylock + bounded copy only).
++ */
++#include <linux/etherdevice.h>
++#include <linux/if_ether.h>
++#include <linux/if_packet.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/skbuff.h>
++#include <linux/types.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_cfg80211.h"
++#include "hi5622_driver.h"
++#include "hi5622_mgmt_logic.h"
++#include "hi5622_monitor.h"
++#include "hi5622_monitor_logic.h"
++
++/* monitor mode: 0 = off (default, fail-closed), 1 = local mirror.
++ * This is the only knob; there is deliberately no "promiscuous" value. */
++static unsigned int hi5622_monitor_mode;
++module_param_named(monitor, hi5622_monitor_mode, uint, 0644);
++MODULE_PARM_DESC(monitor,
++		 "monitor mode: 0=off (default), 1=local mirror of received frames (no firmware write); >1 refused");
++
++int hi5622_monitor_op_set_channel(struct wiphy *wiphy, struct net_device *dev,
++				  struct cfg80211_chan_def *chandef)
++{
++	struct hi5622_cfg80211 *c;
++	unsigned int m = READ_ONCE(hi5622_monitor_mode);
++
++	(void)dev;
++	if (!wiphy || !chandef || !chandef->chan)
++		return -EINVAL;
++	c = wiphy_priv(wiphy);
++	if (!c)
++		return -EINVAL;
++	/* monitor=0 keeps the old honest behaviour; monitor>1 is refused. */
++	if (!himon_mode_ok(m) || m != HIMON_LOCAL_MIRROR)
++		return -EOPNOTSUPP;
++	if (!c->wiphy_registered)
++		return -ENODEV;
++
++	mutex_lock(&c->lock);
++	c->mon_chandef = *chandef;
++	c->mon_valid = true;
++	mutex_unlock(&c->lock);
++
++	dev_info(wiphy_dev(wiphy),
++		 "monitor: channel set %u MHz width %d (metadata only - no firmware tune)\n",
++		 chandef->chan->center_freq, (int)chandef->width);
++	return 0;
++}
++
++void hi5622_monitor_iface_created(struct hi5622_cfg80211 *c)
++{
++	unsigned int m = READ_ONCE(hi5622_monitor_mode);
++
++	if (!c || !c->ctx || !c->ctx->pdev)
++		return;
++	dev_info(&c->ctx->pdev->dev,
++		 "monitor: monitor iface created (mode=%u %s; mirror=%s, capture needs the F1)\n",
++		 m, himon_mode_name(m),
++		 m == HIMON_LOCAL_MIRROR && himon_mode_ok(m) ? "enabled" : "disabled");
++}
++
++/* Copy one 802.11 MPDU to the first monitor netdev as radiotap + MPDU.
++ * Runs in the HCC service thread; trylock only, no retry, no firmware I/O. */
++static void hi5622_monitor_mirror(struct hi5622_pci *ctx, const u8 *frame,
++				  u32 len, u16 freq, int have_chan, int rssi,
++				  int have_rssi, bool is_mgmt)
++{
++	struct hi5622_cfg80211 *c;
++	struct wireless_dev *wdev = NULL;
++	struct net_device *dev;
++	struct sk_buff *skb;
++	u8 rt[HIMON_RT_MAX];
++	size_t rt_len;
++	unsigned int i;
++	unsigned int m = READ_ONCE(hi5622_monitor_mode);
++
++	if (!ctx || !frame || len == 0u)
++		return;
++	if (!himon_mode_ok(m) || m != HIMON_LOCAL_MIRROR)
++		return;
++	c = READ_ONCE(ctx->cfg);
++	if (!c || !c->wiphy_registered)
++		return;
++	if (!mutex_trylock(&c->lock)) {
++		c->mon_drop_busy++;
++		return;
++	}
++	for (i = 0; i < HI5622_CFG_MAX_VAPS; i++) {
++		if (c->vap_wdev[i] &&
++		    c->vap_wdev[i]->iftype == NL80211_IFTYPE_MONITOR) {
++			wdev = c->vap_wdev[i];
++			break;
++		}
++	}
++	if (!wdev) {
++		c->mon_drop_no_dev++;
++		goto out_unlock;
++	}
++	dev = wdev->netdev;
++	if (!dev || !netif_running(dev)) {
++		c->mon_drop_down++;
++		goto out_unlock;
++	}
++	if (len > HIMON_MAX_FRAME) {
++		c->mon_drop_bad_len++;
++		goto out_unlock;
++	}
++	/* The data sink carries the MPDU only: fall back to the chandef the
++	 * operator stored with SET_CHANNEL (metadata), never a guess. */
++	if (!have_chan && c->mon_valid && c->mon_chandef.chan) {
++		freq = (u16)c->mon_chandef.chan->center_freq;
++		have_chan = 1;
++	}
++	rt_len = himon_rt_build(rt, sizeof(rt), freq, have_chan, rssi,
++				have_rssi);
++	if (!rt_len) {
++		c->mon_rt_fail++;
++		goto out_unlock;
++	}
++	skb = dev_alloc_skb((unsigned int)(rt_len + len));
++	if (!skb) {
++		c->mon_drop_nomem++;
++		goto out_unlock;
++	}
++	skb_put_data(skb, rt, rt_len);
++	skb_put_data(skb, frame, len);
++	if (is_mgmt)
++		c->mon_rx_mgmt++;
++	else
++		c->mon_rx_data++;
++	dev_hold(dev);
++	mutex_unlock(&c->lock);
++
++	skb->dev = dev;
++	skb->protocol = htons(ETH_P_802_2);
++	skb->pkt_type = PACKET_OTHERHOST;
++	skb->ip_summed = CHECKSUM_UNNECESSARY;
++	skb_reset_mac_header(skb);
++	netif_rx(skb);
++	dev_put(dev);
++	dev_info_ratelimited(&ctx->pdev->dev,
++			     "monitor: mirrored %s frame (%u MHz, len %u, rssi %d)\n",
++			     is_mgmt ? "mgmt" : "data",
++			     have_chan ? (unsigned int)freq : 0u, len, rssi);
++	return;
++
++out_unlock:
++	mutex_unlock(&c->lock);
++}
++
++void hi5622_monitor_rx_mgmt(struct hi5622_pci *ctx,
++			    const struct himg_rx_frame *rx)
++{
++	if (!rx || !rx->frame || rx->frame_len == 0u)
++		return;
++	/* The decoded mgmt event carries the channel frequency and the vendor
++	 * RSSI byte; forward them as radiotap metadata when plausible. */
++	hi5622_monitor_mirror(ctx, rx->frame, rx->frame_len, rx->freq, 1,
++			      (rx->rssi <= 0 && rx->rssi >= -120) ?
++			      (int)rx->rssi : 0,
++			      (rx->rssi <= 0 && rx->rssi >= -120), 1);
++}
++
++void hi5622_monitor_rx_data(struct hi5622_pci *ctx, const u8 *mpdu, u32 len)
++{
++	/* No per-frame metadata on this sink: radiotap channel comes from the
++	 * stored chandef when present (R1), else the 8-byte R0 header. */
++	hi5622_monitor_mirror(ctx, mpdu, len, 0, 0, 0, 0, 0);
++}
+diff -ruN pristine/hi5622_monitor.h patched-clean/hi5622_monitor.h
+--- pristine/hi5622_monitor.h	1970-01-01 07:00:00.000000000 +0700
++++ patched-clean/hi5622_monitor.h	2026-11-26 15:54:13.882451970 +0700
+@@ -0,0 +1,47 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_monitor.h - local-mirror monitor mode integration for the Hi5622V100
++ * clean-room driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (monitor2 lane, shared task task-246, 2026-11-26).
++ * Materialises the cfg80211 monitor design documented by the monitor-mode lane
++ * (task-241); no vendor source/object/firmware bytes are reproduced.
++ *
++ * It answers exactly the two cfg80211 gaps the IMAGE #3 driver had:
++ *   1. .set_monitor_channel (metadata-only chandef store; NEVER a firmware
++ *      tune), fail-closed at monitor=0;
++ *   2. radiotap delivery of the frames that already reach the two existing RX
++ *      sinks (mgmt D2H event and the completion-ring data path).
++ * The capture is a *mirror of what the AP VAP receives*, not promiscuous
++ * mode; the true sniffer needs a firmware switch the vendor driver does not
++ * have.  The mirror is a no-op until the F1 RX gate (host-bound g1 id13 copy)
++ * is fixed, because the sinks themselves are silent until then.
++ */
++#ifndef _HI5622_MONITOR_H
++#define _HI5622_MONITOR_H
++
++#include <linux/types.h>
++
++struct cfg80211_chan_def;
++struct hi5622_cfg80211;
++struct hi5622_pci;
++struct himg_rx_frame;
++struct net_device;
++struct wiphy;
++
++/* cfg80211 ops implementation (registered as .set_monitor_channel). */
++int hi5622_monitor_op_set_channel(struct wiphy *wiphy, struct net_device *dev,
++				  struct cfg80211_chan_def *chandef);
++
++/* One-shot status line when the monitor interface is created. */
++void hi5622_monitor_iface_created(struct hi5622_cfg80211 *c);
++
++/* Mirror hooks: called by the two existing RX sinks BEFORE their own policy
++ * gates, so the mirror does not depend on mgmt_rx/eapol_rx.  Both take the cfg
++ * lock with mutex_trylock only (HCC service thread; a busy lock drops the
++ * mirror frame and counts it, never blocks the RX path). */
++void hi5622_monitor_rx_mgmt(struct hi5622_pci *ctx,
++			    const struct himg_rx_frame *rx);
++void hi5622_monitor_rx_data(struct hi5622_pci *ctx, const u8 *mpdu, u32 len);
++
++#endif /* _HI5622_MONITOR_H */
+diff -ruN pristine/hi5622_monitor_logic.c patched-clean/hi5622_monitor_logic.c
+--- pristine/hi5622_monitor_logic.c	1970-01-01 07:00:00.000000000 +0700
++++ patched-clean/hi5622_monitor_logic.c	2026-11-26 15:53:51.884544027 +0700
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_monitor_logic.c - portable local-mirror monitor logic (host-testable).
++ *
++ * ORIGINAL clean-room code (monitor2 lane, task-246, 2026-11-26).
++ * See hi5622_monitor_logic.h for the semantics and the pinned byte vectors.
++ * No vendor material is reproduced.
++ */
++#include "hi5622_monitor_logic.h"
++
++int himon_mode_ok(uint32_t mode)
++{
++	return mode == HIMON_OFF || mode == HIMON_LOCAL_MIRROR;
++}
++
++const char *himon_mode_name(uint32_t mode)
++{
++	switch (mode) {
++	case HIMON_OFF:
++		return "off";
++	case HIMON_LOCAL_MIRROR:
++		return "local-mirror";
++	default:
++		return "invalid";
++	}
++}
++
++int himon_chan_to_freq(uint32_t band, uint32_t channel, uint16_t *freq)
++{
++	uint32_t mhz;
++
++	if (!freq)
++		return -1;
++	if (band == 0u) {
++		if (channel >= 1u && channel <= 13u)
++			mhz = 2407u + 5u * channel;
++		else if (channel == 14u)
++			mhz = 2484u;
++		else
++			return -1;
++	} else if (band == 1u) {
++		/* 5 GHz UNII-1..UNII-3/ISM centre channels (36..177 step 4
++		 * plus the common 5 MHz-indexed values); a simple static map,
++		 * no regulatory decision is made here. */
++		if (channel < 36u || channel > 177u)
++			return -1;
++		mhz = 5000u + 5u * channel;
++	} else {
++		return -1;
++	}
++	if (mhz > 0xffffu)
++		return -1;
++	*freq = (uint16_t)mhz;
++	return 0;
++}
++
++static void himon_put_le16(uint8_t *p, uint16_t v)
++{
++	p[0] = (uint8_t)(v & 0xffu);
++	p[1] = (uint8_t)((v >> 8) & 0xffu);
++}
++
++static void himon_put_le32(uint8_t *p, uint32_t v)
++{
++	p[0] = (uint8_t)(v & 0xffu);
++	p[1] = (uint8_t)((v >> 8) & 0xffu);
++	p[2] = (uint8_t)((v >> 16) & 0xffu);
++	p[3] = (uint8_t)((v >> 24) & 0xffu);
++}
++
++size_t himon_rt_build(uint8_t *buf, size_t cap, uint16_t freq,
++		      int have_chan, int rssi, int have_rssi)
++{
++	size_t len = 8u;
++	size_t off = 8u;
++	uint32_t present = 0u;
++
++	if (!buf)
++		return 0u;
++	if (have_chan && have_rssi)
++		len = 13u;
++	else if (have_chan)
++		len = 12u;
++	if (cap < len)
++		return 0u;
++
++	/* radiotap fixed part: version 0, pad, it_len, it_present */
++	buf[0] = 0u;
++	buf[1] = 0u;
++	himon_put_le16(&buf[2], (uint16_t)len);
++	if (have_chan && have_rssi) {
++		present = 0x00000008u;		/* IEEE80211_RADIOTAP_CHANNEL */
++		present |= 0x00000808u;		/* IEEE80211_RADIOTAP_DBM_ANTSIGNAL */
++	} else if (have_chan) {
++		present = 0x00000008u;
++	}
++	himon_put_le32(&buf[4], present);
++
++	if (!have_chan)
++		return len;	/* R0: no per-frame channel metadata */
++
++	himon_put_le16(&buf[off], freq);
++	off += 2u;
++	himon_put_le16(&buf[off], 0u);	/* channel flags: unknown, never guessed */
++	off += 2u;
++	if (have_rssi) {
++		buf[off] = (uint8_t)(int8_t)rssi;
++		off += 1u;
++	}
++	return len;
++}
+diff -ruN pristine/hi5622_monitor_logic.h patched-clean/hi5622_monitor_logic.h
+--- pristine/hi5622_monitor_logic.h	1970-01-01 07:00:00.000000000 +0700
++++ patched-clean/hi5622_monitor_logic.h	2026-11-26 15:55:09.096224999 +0700
+@@ -0,0 +1,70 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_monitor_logic.h - portable, kernel-free logic for the local-mirror
++ * monitor mode of the Hi5622V100 clean-room driver (Cudy WR3000 v2.0).
++ *
++ * ORIGINAL clean-room code (monitor2 lane, shared task task-246, 2026-11-26).
++ * Materialises the monitor-mode design first committed as documentation by the
++ * monitor-mode lane (task-241) / MONITOR-MODE/CFG80211-MONITOR.md.
++ *
++ * This file has NO kernel dependencies (stdint/stddef only) so the exact byte
++ * vectors below can be asserted by a host compiler without a kernel tree.
++ * No vendor source/object/firmware bytes are reproduced.
++ *
++ * v1 semantics (deliberate, fail-closed):
++ *   - monitor=0 (off)     : the monitor netdev is inert, set channel is
++ *                           -EOPNOTSUPP, nothing is mirrored;
++ *   - monitor=1 (mirror)  : frames that already reach the two existing RX
++ *                           sinks are copied to the first monitor netdev with
++ *                           a radiotap header; NO firmware write, NO channel
++ *                           tune - the mirror follows the AP;
++ *   - monitor>1           : refused, mirroring disabled.
++ * This is NOT a promiscuous sniffer: true promiscuous mode needs a decoded
++ * hi5622 firmware switch that does not exist in the vendor driver.
++ */
++#ifndef _HI5622_MONITOR_LOGIC_H
++#define _HI5622_MONITOR_LOGIC_H
++
++/* kernel build: <linux/types.h> provides size_t + uint8_t/uint16_t/uint32_t;
++ * host build: the C library headers do.  No other kernel dependency. */
++#ifdef __KERNEL__
++#include <linux/types.h>
++#else
++#include <stddef.h>
++#include <stdint.h>
++#endif
++
++#define HIMON_OFF		0u	/* default, fail-closed */
++#define HIMON_LOCAL_MIRROR	1u
++
++/* RX MPDU sanity cap used by the data path (0x618 = 1560 B). */
++#define HIMON_MAX_FRAME		0x618u
++/* Largest radiotap header this builder produces (R2 = 13 B fixed+fields). */
++#define HIMON_RT_MAX		13u
++
++/* 1 = mode allowed by policy (0 or 1), 0 = refused. */
++int himon_mode_ok(uint32_t mode);
++/* "off" / "local-mirror" / "invalid"; never NULL. */
++const char *himon_mode_name(uint32_t mode);
++
++/* Channel -> centre frequency (MHz). band 0 = 2.4 GHz, band 1 = 5 GHz.
++ * 0 = mapped, -1 = not a channel this band plan can map. */
++int himon_chan_to_freq(uint32_t band, uint32_t channel, uint16_t *freq);
++
++/* Radiotap header builder (version 0, no FCS, no TX flags).
++ * have_chan selects the CHANNEL field (u16 freq + u16 flags = 0); have_rssi
++ * additionally selects DBM_ANTSIGNAL (s8 rssi).  have_rssi without have_chan
++ * degrades to the R0 8-byte header (no per-frame channel metadata available).
++ *
++ * Pinned vectors (asserted by tools/monitor_selftest.c):
++ *   R0                     = 00 00 08 00 00 00 00 00
++ *   R1 @2412 MHz           = 00 00 0c 00 08 00 00 00 | 6c 09 | 00 00
++ *   R2 @2437 MHz rssi -62  = 00 00 0d 00 08 08 00 00 | 85 09 | 00 00 | c2
++ *
++ * Returns the header length in bytes, or 0 when refused (NULL buf, cap too
++ * small).  Never writes past cap.
++ */
++size_t himon_rt_build(uint8_t *buf, size_t cap, uint16_t freq,
++		      int have_chan, int rssi, int have_rssi);
++
++#endif /* _HI5622_MONITOR_LOGIC_H */
+diff -ruN pristine/hi5622_sta_ops.c patched-clean/hi5622_sta_ops.c
+--- pristine/hi5622_sta_ops.c	2026-11-26 11:48:14.493637606 +0700
++++ patched-clean/hi5622_sta_ops.c	2026-11-26 15:54:25.786402552 +0700
+@@ -35,6 +35,7 @@
+ #include "hi5622_sta_frames.h"
+ #include "hi5622_sta_ops.h"
+ #include "hi5622_sta_ops_logic.h"
++#include "hi5622_monitor.h"
+ 
+ /* 0 = fail closed (default), 1 = enable the cfg80211 station ops. */
+ unsigned int hi5622_sta_ops_enable;
+@@ -477,7 +478,12 @@
+ 	size_t eth_len = 0;
+ 	int rc;
+ 
+-	if (!ctx || !ctx->cfg || !hi5622_eapol_rx || !mpdu || len == 0u)
++	if (!ctx || !ctx->cfg || !mpdu || len == 0u)
++		return;
++	/* monitor mirror (monitor2 lane): independent of the AP-policy gate
++	 * below; the mirror makes its own monitor=1 / trylock decisions. */
++	hi5622_monitor_rx_data(ctx, mpdu, len);
++	if (!hi5622_eapol_rx)
+ 		return;
+ 	c = ctx->cfg;
+ 	if (!c->sta_ops_ap_dev)
+diff -ruN pristine/Kbuild patched-clean/Kbuild
+--- pristine/Kbuild	2026-11-26 11:48:14.515458884 +0700
++++ patched-clean/Kbuild	2026-11-26 15:54:25.788402544 +0700
+@@ -39,6 +39,7 @@
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+ 		 hi5622_mgmt_logic.o hi5622_mgmt.o \
++		 hi5622_monitor_logic.o hi5622_monitor.o \
+ 		 hi5622_data_tx_logic.o hi5622_data_tx.o \
+ 		 hi5622_ba.o
+ 

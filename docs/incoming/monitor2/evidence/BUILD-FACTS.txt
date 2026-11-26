@@ -1,0 +1,19 @@
+== patched build (monitor=0/1 param, +new files) ==
+size_bytes: 1471772
+8e7974170ca125eec3a06ac564c8c9810c14a1094aa95b551d2aff783e94832a  out/artifacts/hi5622_wifi.monitor.ko
+6.18.60 SMP mod_unload ARMv7 p2v8 
+depends: cfg80211
+params: 65
+monitor param: 1
+warnings/errors: 0
+
+== unpatched control build (same tree/config) ==
+size_bytes: 1441668
+79be4a0a2df67ebe550b82fa1d8e693afceb31381dcfd0a6f9b493642db66e19  out/artifacts/hi5622_wifi.control.ko
+6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 64
+warnings/errors: 0
+
+== params diff (patched vs control) ==
+5a6
+> monitor
