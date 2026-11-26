@@ -1,0 +1,179 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/hisilicon,luofu-switch.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu internal Ethernet switch
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC contains an internal Ethernet switch. The wired data
+  path is MAC -> internal switch -> PHY -> RJ45: the five GEMAC instances are
+  the MAC side, the switch owns the queue/egress decision and the
+  classification/forwarding tables, and the host side of the data path is the
+  separate PIE packet engine.
+
+  There is no DSA-style CPU-port tag in the recovered model and every wired
+  port already has its own netdev, so the switch is described as a generic
+  Ethernet switch with an "ethernet-ports" node (switchdev model, not DSA).
+  Each port child names the node that provides its netdev through the
+  "ethernet" phandle.
+
+  The switch register space is described by 15 windows of 512 KiB each: five
+  queue-manager windows ("dp", "ips", "fam", "eqm", "eps") and ten
+  classification/forwarding windows ("prbs", "pfe_glb", "pa", "ifc", "l2",
+  "napt", "mcc", "opp", "pub", "pe"). The vendor devicetree describes the same
+  block as two separate nodes; they are one switch and are combined here. The
+  vendor "queue" (4 MiB) and "flow" (1 MiB) regions are DDR memory consumed by
+  the engine, not MMIO windows, and which base is live after the bootloader
+  devicetree fixups is not established, so they are deliberately not modelled.
+
+  The Linux driver is a draft: it validates these resources and the port
+  model, then refuses to probe until the register, queue and port-id model has
+  been verified on the hardware. The node must stay disabled until then.
+
+properties:
+  compatible:
+    const: hisilicon,luofu-switch
+
+  reg:
+    minItems: 15
+    maxItems: 15
+    description:
+      The 15 switch register windows, 512 KiB each; the names are given by
+      reg-names.
+
+  reg-names:
+    items:
+      - const: dp
+      - const: ips
+      - const: fam
+      - const: pe
+      - const: eqm
+      - const: eps
+      - const: prbs
+      - const: pfe_glb
+      - const: pa
+      - const: ifc
+      - const: l2
+      - const: napt
+      - const: mcc
+      - const: opp
+      - const: pub
+
+  clocks:
+    maxItems: 2
+    description: Gate clocks of the queue-manager and parser sub-blocks.
+
+  clock-names:
+    items:
+      - const: lsw_dp_clk
+      - const: lsw_pfe_clk
+
+  resets:
+    maxItems: 4
+    description: Reset lines of the two sub-blocks from the CRG.
+
+  reset-names:
+    items:
+      - const: dp_logic
+      - const: dp_srst
+      - const: pfe_logic
+      - const: pfe_srst
+
+  ethernet-ports:
+    type: object
+    description: The ports of the internal switch.
+    properties:
+      '#address-cells':
+        const: 1
+      '#size-cells':
+        const: 0
+    patternProperties:
+      '^ethernet-port@[0-9a-f]+$':
+        type: object
+        $ref: /schemas/net/ethernet-switch-port.yaml#
+        properties:
+          reg:
+            maxItems: 1
+            description: |
+              Devicetree port index used to order the switch ports. It is not
+              the recovered hardware port id: the mapping between the MAC port
+              numbers and the switch's internal port ids is not established.
+          ethernet:
+            $ref: /schemas/types.yaml#/definitions/phandle
+            description: |
+              Phandle to the Ethernet controller node that provides this
+              port's netdev (a GEMAC node on this board).
+        required:
+          - reg
+          - ethernet
+        unevaluatedProperties: false
+    required:
+      - '#address-cells'
+      - '#size-cells'
+    additionalProperties: false
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+  - ethernet-ports
+
+allOf:
+  - $ref: /schemas/net/ethernet-switch.yaml#
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+
+    crg: system-controller@14880000 {
+        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+        reg = <0x14880000 0x1000>;
+        #clock-cells = <1>;
+        #reset-cells = <2>;
+    };
+
+    ethernet-switch@11000000 {
+        compatible = "hisilicon,luofu-switch";
+        reg = <0x11000000 0x80000>, <0x11080000 0x80000>,
+              <0x11100000 0x80000>, <0x11180000 0x80000>,
+              <0x11200000 0x80000>, <0x11280000 0x80000>,
+              <0x11380000 0x80000>, <0x12000000 0x80000>,
+              <0x12080000 0x80000>, <0x12100000 0x80000>,
+              <0x12180000 0x80000>, <0x12280000 0x80000>,
+              <0x12380000 0x80000>, <0x12400000 0x80000>,
+              <0x12480000 0x80000>;
+        reg-names = "dp", "ips", "fam", "pe", "eqm", "eps", "prbs",
+                    "pfe_glb", "pa", "ifc", "l2", "napt", "mcc", "opp", "pub";
+        clocks = <&crg LUOFU_CLK_LSW_DP>, <&crg LUOFU_CLK_LSW_PFE>;
+        clock-names = "lsw_dp_clk", "lsw_pfe_clk";
+        resets = <&crg 0x30 0x0>, <&crg 0x30 0x1>,
+                 <&crg 0x30 0x3>, <&crg 0x30 0x4>;
+        reset-names = "dp_logic", "dp_srst", "pfe_logic", "pfe_srst";
+        status = "disabled";
+
+        ethernet-ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            ethernet-port@0 {
+                reg = <0>;
+                ethernet = <&gmac1>;
+            };
+
+            ethernet-port@1 {
+                reg = <1>;
+                ethernet = <&gmac2>;
+            };
+        };
+    };

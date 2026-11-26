@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/soc/hisilicon/hisilicon,luofu-boot-selector.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu A/B boot selector
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC boots one of two complete firmware pairs, "A"
+  (kernela + rootfsa) and "B" (kernelb + rootfsb).  The bootloader selects
+  the pair from its environment (bootflag) and keeps a 32-bit record of the
+  selected pair in the SYSCTRL page: the low byte of that cell reads 0x10
+  while pair A is recorded and 0x11 while pair B is recorded.  Before Linux
+  starts, the loader stores the opposite pair's value in the cell, and a
+  boot that reaches userspace has to re-record the running pair; if the
+  recorded value contradicts the environment on the next boot, the loader
+  re-stamps the environment and boots the other pair (its failover path).
+
+  Only the low byte of the cell is interpreted.  The upper 24 bits are
+  unmeasured and are preserved by any write.  A value of 0 means the cell
+  was cleared by a true power-on; the loader then initialises it from the
+  environment.  The kernel must not reset the cell across a software
+  reboot, and userspace has to be able to re-record the running pair and to
+  move the cell to the other measured value.
+
+  The cell is shared with the machine-restart driver, which writes the value
+  it read back before resetting, and with the bootloader.  The SYSCTRL page
+  is therefore modelled as a syscon and this node only references it; it has
+  no register range of its own.
+
+properties:
+  compatible:
+    const: hisilicon,luofu-boot-selector
+
+  hisilicon,sysctrl:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      phandle to the SYSCTRL syscon node that holds the boot-selector cell
+
+  hisilicon,selector-offset:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      Offset of the 32-bit boot-selector cell inside the SYSCTRL page.  On
+      the R116 board (Cudy WR3000 v2.0) the measured offset is 0xc08.  The
+      low byte is written with a read-modify-write; the upper 24 bits are
+      preserved.
+
+required:
+  - compatible
+  - hisilicon,sysctrl
+  - hisilicon,selector-offset
+
+additionalProperties: false
+
+examples:
+  - |
+    sysctrl: system-controller@10100000 {
+        compatible = "hisilicon,luofu-sysctrl", "syscon";
+        reg = <0x10100000 0x1000>;
+    };
+
+    boot-selector {
+        compatible = "hisilicon,luofu-boot-selector";
+        hisilicon,sysctrl = <&sysctrl>;
+        hisilicon,selector-offset = <0x0c08>;
+    };

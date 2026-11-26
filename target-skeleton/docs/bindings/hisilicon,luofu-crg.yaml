@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/clock/hisilicon,luofu-crg.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu CRG clock and reset controller
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The CRG (Clock Reset Generator) of the HiSilicon Hi5671Y "luofu" SoC is a
+  4 KiB system-controller page. Several independent functions are interleaved
+  in it:
+
+  - 0x14, 0x20: clock gate enable bits, one bit per gate output (this driver);
+  - 0x2c, 0x30, 0x34: reset control bits, one bit per reset line (this driver);
+  - 0x50, 0x64, 0x70, 0x100: watchdog registers (child node, separate driver).
+
+  One MMIO region cannot be owned by two drivers, so the node is described as a
+  "syscon" + "simple-mfd" system controller: the CRG driver owns the clock and
+  reset providers, and the watchdog child obtains the same register map through
+  the syscon instead of mapping the page a second time.
+
+  The clock outputs are gate clocks. Their register/bit geometry is driver
+  data; the devicetree ABI is the single-cell index defined in
+  include/dt-bindings/clock/hisilicon,luofu-crg.h. Gate parents are not modelled
+  yet (the driver parents every gate on the board APB clock); that is a
+  documented driver limitation, not part of the binding.
+
+  The reset specifier is two cells: the CRG page register offset of the reset
+  word and the bit number. Only the three reset words are accepted; a specifier
+  can therefore never write the watchdog, soft-reset, mux or PLL words.
+
+properties:
+  compatible:
+    items:
+      - const: hisilicon,luofu-crg
+      - const: syscon
+      - const: simple-mfd
+
+  reg:
+    maxItems: 1
+
+  '#clock-cells':
+    const: 1
+    description: |
+      The single cell is a gate clock index from
+      include/dt-bindings/clock/hisilicon,luofu-crg.h.
+
+  '#reset-cells':
+    const: 2
+    description: |
+      First cell: CRG page register offset of the reset word (0x2c, 0x30 or
+      0x34). Second cell: bit number within that word (0..31).
+
+  watchdog:
+    type: object
+    $ref: /schemas/watchdog/hisilicon,luofu-wdt.yaml#
+    description:
+      Watchdog whose registers are interleaved into the CRG page. It has no
+      reg of its own and shares this node's syscon regmap.
+
+required:
+  - compatible
+  - reg
+  - '#clock-cells'
+  - '#reset-cells'
+
+additionalProperties: false
+
+examples:
+  - |
+    bus {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        system-controller@14880000 {
+            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+            reg = <0x14880000 0x1000>;
+            #clock-cells = <1>;
+            #reset-cells = <2>;
+
+            watchdog {
+                compatible = "hisilicon,luofu-wdt";
+                timeout-sec = <30>;
+            };
+        };
+    };

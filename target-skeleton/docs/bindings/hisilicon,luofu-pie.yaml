@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/hisilicon,luofu-pie.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu PIE packet engine
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC contains a packet engine that owns the DMA rings,
+  the NAPI instances and the per-port context table of the wired data path.
+  The GEMAC instances are phylink front ends; frames reach the engine through
+  the internal switch, whose egress port/qid map is programmed separately.
+
+  The engine is coherent-DMA only: it allocates coherent rings and buffers
+  and performs no cache maintenance, so the node must carry dma-coherent.
+
+  The register window is 64 KiB at 0x10a70000.  Four interrupt lines exist
+  and each one serves a pair of channels: 0/7, 1/6, 2/5 and 3/4.  On this
+  board only channels 0-3 carry wired traffic; the other half of each pair is
+  the Wi-Fi offload path.
+
+  The Linux driver is a draft: it validates these resources, builds the ring
+  bookkeeping and refuses to start the engine until the register and channel
+  model has been verified against a read-only inventory of the running
+  hardware.  The node must stay disabled until then.
+
+properties:
+  compatible:
+    const: hisilicon,luofu-pie
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    minItems: 4
+    maxItems: 4
+    description:
+      Four per-vector interrupt lines.  Each vector serves the channel pair
+      given by the same-positioned interrupt name.
+
+  interrupt-names:
+    items:
+      - const: ch0-7
+      - const: ch1-6
+      - const: ch2-5
+      - const: ch3-4
+    description:
+      Channel pair serviced by each vector; channels 4-7 are the Wi-Fi
+      offload path and are not used by the wired packet engine.
+
+  clocks:
+    maxItems: 1
+    description: Gate clock of the engine from the CRG.
+
+  resets:
+    maxItems: 1
+    description: Reset line of the engine from the CRG (two-cell form).
+
+  dma-coherent: true
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - interrupt-names
+  - clocks
+  - resets
+  - dma-coherent
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+
+    crg: system-controller@14880000 {
+        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+        reg = <0x14880000 0x1000>;
+        #clock-cells = <1>;
+        #reset-cells = <2>;
+    };
+
+    pie@10a70000 {
+        compatible = "hisilicon,luofu-pie";
+        reg = <0x10a70000 0x10000>;
+        interrupts = <0 0x58 4>, <0 0x59 4>, <0 0x5a 4>, <0 0x5b 4>;
+        interrupt-names = "ch0-7", "ch1-6", "ch2-5", "ch3-4";
+        clocks = <&crg LUOFU_CLK_PIE>;
+        resets = <&crg 0x30 0x19>;
+        dma-coherent;
+        status = "disabled";
+    };

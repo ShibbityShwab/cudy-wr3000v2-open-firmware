@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/power/reset/hisilicon,luofu-reboot.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu machine restart
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC is restarted by saving the SYSCTRL A/B boot selector
+  and issuing the CRG software-reset command.  There is no ARM architectural
+  reset that takes the whole chip down.  Both blocks are syscon nodes shared
+  with other functions (the SYSCTRL page also carries the reset-info record,
+  the CRG page also carries the clock/reset and watchdog registers), so this
+  node only references them and has no register range of its own.
+
+  The reset sequence itself is prototype-quality: the boot selector encoding
+  is measured, while the CRG command pair is derived from the vendor
+  devicetree and has not been verified on hardware.
+
+properties:
+  compatible:
+    const: hisilicon,luofu-reboot
+
+  hisilicon,sysctrl:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      phandle to the SYSCTRL syscon node that holds the A/B boot selector
+
+  hisilicon,crg:
+    $ref: /schemas/types.yaml#/definitions/phandle
+    description:
+      phandle to the CRG syscon node that holds the software-reset command
+      register and the watchdog
+
+required:
+  - compatible
+  - hisilicon,sysctrl
+  - hisilicon,crg
+
+additionalProperties: false
+
+examples:
+  - |
+    bus {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        sysctrl: system-controller@10100000 {
+            compatible = "hisilicon,luofu-sysctrl", "syscon";
+            reg = <0x10100000 0x1000>;
+        };
+
+        crg: system-controller@14880000 {
+            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+            reg = <0x14880000 0x1000>;
+            #clock-cells = <1>;
+            #reset-cells = <2>;
+        };
+
+        reboot {
+            compatible = "hisilicon,luofu-reboot";
+            hisilicon,sysctrl = <&sysctrl>;
+            hisilicon,crg = <&crg>;
+        };
+    };

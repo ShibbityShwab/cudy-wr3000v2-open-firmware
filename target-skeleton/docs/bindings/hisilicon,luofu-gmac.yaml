@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/hisilicon,luofu-gmac.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu gigabit ethernet MAC
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC has five gigabit MAC instances. Instance 0 is an
+  RGMII port that the board does not use; instances 1..4 are GMII ports into
+  the internal switch (ports 9..12). Each instance has its own gate clock and
+  two reset lines from the CRG, and attaches to one PHY on the shared MDIO bus
+  through the standard phy-mode/phy-handle properties.
+
+  The register window is the MAC control/status block. The transmit and
+  receive ring DMA programming model of this controller is not documented yet;
+  the Linux driver is a partial port that only validates these resources and
+  refuses to register a network device. The nodes are therefore disabled until
+  the data path is implemented.
+
+allOf:
+  - $ref: ethernet-controller.yaml#
+
+properties:
+  compatible:
+    const: hisilicon,luofu-gmac
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+    description: MAC gate clock from the CRG.
+
+  resets:
+    maxItems: 2
+    description: MAC logic reset and MAC core reset, both from the CRG.
+
+  reset-names:
+    items:
+      - const: mac-logic
+      - const: mac
+
+  phy-mode:
+    enum:
+      - gmii
+      - rgmii
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - resets
+  - reset-names
+  - phy-mode
+  - phy-handle
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+
+    crg: system-controller@14880000 {
+        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+        reg = <0x14880000 0x1000>;
+        #clock-cells = <1>;
+        #reset-cells = <2>;
+    };
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        phy4: ethernet-phy@4 {
+            compatible = "ethernet-phy-ieee802.3-c22";
+            reg = <4>;
+            max-speed = <1000>;
+        };
+    };
+
+    ethernet@14480000 {
+        compatible = "hisilicon,luofu-gmac";
+        reg = <0x14480000 0x10000>;
+        phy-mode = "gmii";
+        phy-handle = <&phy4>;
+        clocks = <&crg LUOFU_CLK_GMAC3>;
+        resets = <&crg 0x30 0x13>, <&crg 0x30 0x14>;
+        reset-names = "mac-logic", "mac";
+    };

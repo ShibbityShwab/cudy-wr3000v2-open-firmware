@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/mtd/hisilicon,luofu-fmc.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu FMC SPI-NAND flash controller
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The FMC (Flash Memory Controller) of the HiSilicon Hi5671Y "luofu" SoC
+  drives an SPI-NAND flash die.  It is a SPI-MEM controller: this node is a
+  SPI bus and the flash die is its child, handled by the generic SPI-NAND
+  stack.
+
+  The controller has a register file and a memory-mapped data window.  Page
+  transfers are performed by the controller's DMA engine, command and status
+  accesses by its command engine; completion is polled because the block has
+  no interrupt wiring on this SoC.
+
+allOf:
+  - $ref: /schemas/spi/spi-controller.yaml#
+
+properties:
+  compatible:
+    const: hisilicon,luofu-fmc
+
+  reg:
+    items:
+      - description: FMC register file
+      - description: memory-mapped flash data window
+
+  reg-names:
+    items:
+      - const: regs
+      - const: window
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    items:
+      - const: sfc_clk
+
+  resets:
+    maxItems: 1
+
+  reset-names:
+    items:
+      - const: sfc_rst
+
+required:
+  - compatible
+  - reg
+  - reg-names
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+  - '#address-cells'
+  - '#size-cells'
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    crg: system-controller@14880000 {
+        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+        reg = <0x14880000 0x1000>;
+        #clock-cells = <1>;
+        #reset-cells = <2>;
+    };
+
+    spi@10a20000 {
+        compatible = "hisilicon,luofu-fmc";
+        reg = <0x10a20000 0x1000>, <0x1c000000 0x100000>;
+        reg-names = "regs", "window";
+        clocks = <&crg 0>;	/* LUOFU_CLK_SFC, see the CRG binding */
+        clock-names = "sfc_clk";
+        resets = <&crg 0x2c 0x0>;
+        reset-names = "sfc_rst";
+
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        flash@1 {
+            compatible = "spi-nand";
+            reg = <1>;
+            spi-max-frequency = <50000000>;
+            spi-tx-bus-width = <4>;
+            spi-rx-bus-width = <4>;
+
+            partitions {
+                compatible = "fixed-partitions";
+                #address-cells = <1>;
+                #size-cells = <1>;
+
+                partition@0 {
+                    label = "esbc";
+                    reg = <0x0 0x40000>;
+                };
+            };
+        };
+    };

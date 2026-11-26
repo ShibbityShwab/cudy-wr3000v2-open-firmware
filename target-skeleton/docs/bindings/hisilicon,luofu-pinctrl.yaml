@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/pinctrl/hisilicon,luofu-pinctrl.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu peripheral pin controller
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The peripheral pin controller of the HiSilicon Hi5671Y "luofu" SoC selects
+  the peripheral function of each SoC pin and configures its electrical
+  properties.  It owns two register windows: the mux window, which carries the
+  function-select bits of all pins, and the pin configuration window, which
+  carries one 32-bit configuration word per pin.
+
+  There are 37 pins, 24 pin groups and 24 functions.  The group and function
+  names are the names the pin controller's own tables use; every function
+  belongs to exactly one group and every group to exactly one function.
+
+  Pin configuration states use the generic bindings.  A state node contains
+  one or more child nodes: a child carrying "function" and "groups" selects a
+  pin function, and a child carrying pin configuration properties (with
+  "pins" or "groups") configures the electrical properties of the pins.  The
+  driver implements only the parameters it can decode: bias-pull-up,
+  bias-pull-down, drive-strength, input-schmitt-enable, input-enable and the
+  output level; other generic pin configuration properties must not be used.
+
+properties:
+  compatible:
+    const: hisilicon,luofu-pinctrl
+
+  reg:
+    items:
+      - description: mux register window
+      - description: pin configuration register window
+
+  reg-names:
+    items:
+      - const: mux
+      - const: cfg
+
+required:
+  - compatible
+  - reg
+  - reg-names
+
+allOf:
+  - $ref: pinctrl.yaml#
+
+additionalProperties: false
+
+patternProperties:
+  '-state$':
+    type: object
+    description:
+      A pin configuration state that a consumer references with
+      pinctrl-names/pinctrl-N.
+    additionalProperties: false
+
+    patternProperties:
+      '-pins$':
+        type: object
+        description:
+          One pin multiplexing and/or pin configuration entry of the state.
+        allOf:
+          - $ref: pinmux-node.yaml#
+          - $ref: pincfg-node.yaml#
+        unevaluatedProperties: false
+        properties:
+          function:
+            enum: [sfc, uart1, uart0, mdio1, spi, i2c, rgmii0,
+                   eth_act_led0, eth_act_led1, eth_act_led2, eth_act_led3,
+                   eth_act_led4, led0_0, led1_0, led0_1, led1_1, clk_test,
+                   avs, phy_clk, usb, jtag_gpio2, jtag_gpio3, jtag_gpio4,
+                   jtag_gpio5]
+          groups:
+            minItems: 1
+            items:
+              enum: [sfc_grp, uart1_grp, uart0_grp, mdio1_grp, spi_grp,
+                     i2c_grp, rgmii0_grp, eth_act_led0_grp,
+                     eth_act_led1_grp, eth_act_led2_grp, eth_act_led3_grp,
+                     eth_act_led4_grp, led0_0_grp, led1_0_grp, led0_1_grp,
+                     led1_1_grp, clk_test_grp, avs_grp, phy_clk_grp,
+                     usb_grp, jtag_gpio2_grp, jtag_gpio3_grp,
+                     jtag_gpio4_grp, jtag_gpio5_grp]
+          pins:
+            minItems: 1
+            items:
+              enum: [pin0, pin1, pin2, pin3, pin4, pin5, pin6, pin7, pin8,
+                     pin9, pin10, pin11, pin12, pin13, pin14, pin15, pin16,
+                     pin17, pin18, pin19, pin20, pin21, pin22, pin23, pin24,
+                     pin25, pin26, pin27, pin28, pin29, pin30, pin31, pin32,
+                     pin33, pin34, pin35, pin36]
+        anyOf:
+          - required: [function, groups]
+          - required: [pins]
+
+examples:
+  - |
+    pinctrl@14900100 {
+        compatible = "hisilicon,luofu-pinctrl";
+        reg = <0x14900100 0x3c>, <0x14940000 0x100>;
+        reg-names = "mux", "cfg";
+
+        mdio1-default-state {
+            mdio1-pins {
+                function = "mdio1";
+                groups = "mdio1_grp";
+            };
+        };
+
+        uart0-default-state {
+            uart0-pins {
+                function = "uart0";
+                groups = "uart0_grp";
+                bias-pull-up;
+            };
+        };
+    };

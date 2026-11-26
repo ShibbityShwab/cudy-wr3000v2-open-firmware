@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/hisilicon,luofu-mdio.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu MDIO bus controller
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" SoC has one MDIO bus controller that serves the PHYs of
+  the internal switch (four populated PHY addresses on this board). The
+  controller is a clause 22 master with a polled handshake and no interrupt;
+  the driver uses the standard MDIO bus API and the PHY children are standard
+  clause 22 devices.
+
+  The MDC rate is fixed by the SoC (there is no frequency divider in the
+  documented register set), so clock-frequency is not described.
+
+  The bus reset and the global and per-PHY resets are lines of the CRG reset
+  controller; this node lists all seven so the MDIO driver can release them
+  before the bus is scanned.
+
+$ref: mdio.yaml#
+
+properties:
+  compatible:
+    const: hisilicon,luofu-mdio
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+    description: Gate clock for the MDIO controller.
+
+  resets:
+    maxItems: 7
+    description:
+      The MDIO controller reset, the global PHY reset and the five per-PHY
+      resets, in that order.
+
+  reset-names:
+    items:
+      - const: mdio
+      - const: gephyall
+      - const: gephy0
+      - const: gephy1
+      - const: gephy2
+      - const: gephy3
+      - const: gephy4
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - resets
+  - reset-names
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/clock/hisilicon,luofu-crg.h>
+
+    crg: system-controller@14880000 {
+        compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+        reg = <0x14880000 0x1000>;
+        #clock-cells = <1>;
+        #reset-cells = <2>;
+    };
+
+    mdio@14000000 {
+        compatible = "hisilicon,luofu-mdio";
+        reg = <0x14000000 0x1000>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+        clocks = <&crg LUOFU_CLK_MDIO>;
+        resets = <&crg 0x30 0x6>, <&crg 0x30 0x1a>,
+                 <&crg 0x30 0x1b>, <&crg 0x30 0x1c>,
+                 <&crg 0x30 0x1d>, <&crg 0x30 0x1e>,
+                 <&crg 0x30 0x1f>;
+        reset-names = "mdio", "gephyall", "gephy0", "gephy1",
+                      "gephy2", "gephy3", "gephy4";
+
+        ethernet-phy@2 {
+            compatible = "ethernet-phy-ieee802.3-c22";
+            reg = <2>;
+            max-speed = <1000>;
+        };
+    };

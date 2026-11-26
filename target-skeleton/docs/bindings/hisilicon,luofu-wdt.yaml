@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/watchdog/hisilicon,luofu-wdt.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: HiSilicon Luofu watchdog
+
+maintainers:
+  - ShibbityShwab <18537102+ShibbityShwab@users.noreply.github.com>
+
+description: |
+  The Hi5671Y "luofu" watchdog is one function of the CRG (Clock Reset
+  Generator) system-controller page: its set-timeout (0x50), enable (0x64),
+  clear/ping (0x70) and status (0x100) registers are interleaved with the CRG
+  clock-gate and reset bits. The node therefore has no reg of its own and must
+  be a child of the hisilicon,luofu-crg system controller; the driver uses the
+  parent syscon regmap instead of claiming a second MMIO region.
+
+  The driver is polled: the block has an interrupt output (SPI 2 on this
+  board), but its status semantics are not established and the node does not
+  claim the interrupt. The 1..512 s timeout limits are driver data.
+
+allOf:
+  - $ref: watchdog.yaml#
+
+properties:
+  compatible:
+    const: hisilicon,luofu-wdt
+
+  reg: false
+
+required:
+  - compatible
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    bus {
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        system-controller@14880000 {
+            compatible = "hisilicon,luofu-crg", "syscon", "simple-mfd";
+            reg = <0x14880000 0x1000>;
+            #clock-cells = <1>;
+            #reset-cells = <2>;
+
+            watchdog {
+                compatible = "hisilicon,luofu-wdt";
+                timeout-sec = <30>;
+            };
+        };
+    };
