@@ -4,7 +4,7 @@
 `FIRMWARE.bin` (928,920 B, sha256 `7fc87e20...c3ef311b`; **CA = file offset + 0x40000**).
 Companions: [README.md](README.md), [TABLES.md](TABLES.md), [PROBES.md](PROBES.md),
 [FIRE-RECIPE.md](FIRE-RECIPE.md), [tools/](tools/), [evidence/](evidence/).
-Tool: `--selftest` **146/146 PASS**; every address/constant below is asserted by it.
+Tool: `--selftest` **151/151 PASS**; every address/constant below is asserted by it.
 
 **Prior context (cited, not redone):** the F1 of 2026-11-26 measured the SMAC ISR producer
 (`band_obj+0xCC0` +105, other-source counter +51, PPDU-list unlink runs; band0 object CA

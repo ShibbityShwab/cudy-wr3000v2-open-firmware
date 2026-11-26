@@ -1,7 +1,7 @@
 # TABLES - the post path, the builders, the routing structures and the host conversion
 
 **Lane:** wifi-rx-d2h-post (task-226). CA = file offset + 0x40000. Every row below is asserted
-by `tools/fw_rx_d2h_post_re.py --selftest` (146/146 PASS). Grades: [V] re-derived here,
+by `tools/fw_rx_d2h_post_re.py --selftest` (151/151 PASS). Grades: [V] re-derived here,
 [V\*] committed earlier lane, [I] inference, [U] needs a device read.
 
 ## T1 - hcc_msg_tx CA 0x102760 (queue enqueue) [V]

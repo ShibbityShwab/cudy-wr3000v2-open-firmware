@@ -31,7 +31,7 @@ in one read-only pass (see [PROBES.md](PROBES.md)).
 | [TABLES.md](TABLES.md) | instruction-level tables, builder field tables, dest/group/queue layout, host conversion, host D2H acceptance |
 | [PROBES.md](PROBES.md) | read-only probe pack P0/P12-P19 (queue/item counters, band-object dest byte, CRX side) + decision matrix |
 | [FIRE-RECIPE.md](FIRE-RECIPE.md) | the one attended read pass and the four-way decision |
-| [tools/fw_rx_d2h_post_re.py](tools/fw_rx_d2h_post_re.py) | stdlib re-derivation tool, `--selftest` **146/146 PASS** |
+| [tools/fw_rx_d2h_post_re.py](tools/fw_rx_d2h_post_re.py) | stdlib re-derivation tool, `--selftest` **151/151 PASS** |
 | [evidence/](evidence/) | selftest, decode, tables, probes output |
 
 ## Reproduction
