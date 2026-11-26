@@ -1,0 +1,47 @@
+== probe pack R7 ==
+P0 $D/boot page word                ctx-rel   0x86807FEF (golden)
+P0 $D/status state / mask           ctx-rel   state 1 / mask 0
+P1 notify object ptr u32[0x172130]  CA 0x00172130 BO 0x0082a130 PH 0x4082a130  4B 0x0010C0F4 (hcc msg object, [I])
+P1 D2H bitmap out[0]                CA 0x40039010 BO 0x003f1010 PH 0x403f1010  4B 0x00000000 idle
+P1 D2H bitmap out[1]                CA 0x40039014 BO 0x003f1014 PH 0x403f1014  4B 0x00000000 idle
+P1 D2H doorbell                     CA 0x40101434 BO 0x004b9434 PH 0x404b9434  4B 0x00000000 idle
+P1 D2H ack / re-arm                 CA 0x40101438 BO 0x004b9438 PH 0x404b9438  4B 0 / 0 (host writes)
+P1 H2D pending out[0]               CA 0x40039010 BO 0x003f1010 PH 0x403f1010  4B 0
+P1 H2D doorbell out[2]              CA 0x400392d4 BO 0x003f12d4 PH 0x403f12d4  4B 0
+P1 gate word                        CA 0x4000010c BO 0x003b810c PH 0x403b810c  4B 0x0000CECE
+P1 G object +0xB4 armed             CA 0x0010c1a8 BO 0x007c41a8 PH 0x407c41a8  4B 0x00000000 idle
+P1 G object +0xB8 pending           CA 0x0010c1ac BO 0x007c41ac PH 0x407c41ac  4B 0x00000000 idle
+P1 G object +0x9C out0 ptr          CA 0x0010c190 BO 0x007c4190 PH 0x407c4190  4B device-IO CA (0x4003xxxx)
+P1 G object +0xA4 doorbell ptr      CA 0x0010c198 BO 0x007c4198 PH 0x407c4198  4B device-IO CA (0x4010xxxx)
+P2 host cfg +0x20 free-ring base    CA 0x40040020 BO 0x003f8020 PH 0x403f8020  4B host DMA window
+P2 host cfg +0x28 cmpl-ring base    CA 0x40040028 BO 0x003f8028 PH 0x403f8028  4B host DMA window
+P2 host cfg +0x34 cmpl depth-1      CA 0x40040034 BO 0x003f8034 PH 0x403f8034  4B 0xFFF
+P2 host cfg +0x40 cmpl consumer     CA 0x40040040 BO 0x003f8040 PH 0x403f8040  4B 0
+P2 host cfg +0x48 status mask       CA 0x40040048 BO 0x003f8048 PH 0x403f8048  4B 0xFFFFFCC1 (bit10 masked)
+P2 live +0x00 MAC status            CA 0x40050000 BO 0x00408000 PH 0x40408000  4B 0x182 idle / 0x582 frames
+P2 live +0x08 norm free rptr        CA 0x40050008 BO 0x00408008 PH 0x40408008  4B 0x20 (init prefetch)
+P2 live +0x0C small free rptr       CA 0x4005000c BO 0x0040800c PH 0x4040800c  4B 0x20 (init prefetch)
+P2 live +0x10 cmpl wptr             CA 0x40050010 BO 0x00408010 PH 0x40408010  4B 0
+P2 live +0x24..+0x30                CA 0x40050024 BO 0x00408024 PH 0x40408024  4B 0x00800000/0x01800800/0x02801000/0x03801800
+P3 DR0 block +0x00 enable           CA 0x4003a590 BO 0x003f2590 PH 0x403f2590  4B 1
+P3 DR0 groupA base (+0x10)          CA 0x4003a5a0 BO 0x003f25a0 PH 0x403f25a0  4B PKTRAM node base (0x01xxxxxx)
+P3 DR0 groupA prd/cns (+0x18/+0x1C) CA 0x4003a5a8 BO 0x003f25a8 PH 0x403f25a8  4B 3 / 3 idle stock
+P3 DR0 groupB base (+0x30)          CA 0x4003a5c0 BO 0x003f25c0 PH 0x403f25c0  4B host DMA window
+P3 DR0 groupB prd/cns (+0x38/+0x3C) CA 0x4003a5c8 BO 0x003f25c8 PH 0x403f25c8  4B 3 / 3 idle stock
+P3 SR0 block +0x00 enable           CA 0x4003a400 BO 0x003f2400 PH 0x403f2400  4B 1
+P3 SR0 groupA base                  CA 0x4003a410 BO 0x003f2410 PH 0x403f2410  4B host DMA window
+P3 ETE status / DR0 send            CA 0x4003a874 BO 0x003f2874 PH 0x403f2874  4B 0 idle; send word 0x4003AC00
+P4 ctx table u32 (chip0)            CA 0x00171458 BO 0x00829458 PH 0x40829458  4B pointer, 0x0012xxxx..0x001Bxxxx
+P4 ctx offset u16                   CA 0x00171504 BO 0x00829504 PH 0x40829504  2B small offset
+P4 ctx+0x66C list next              ctx-rel   == ctx+0x66C if empty
+P4 ctx+0x670 list prev              ctx-rel   == ctx+0x66C if empty
+P4 ctx+0x674 count                  ctx-rel   0 if no descriptors
+P4 ctx+0x67C name ptr               ctx-rel   0x001060f7 (the self-check)
+P4 ctx+0x4AA EDCA cksum             ctx-rel   0x0000 after the fire (zero payload)
+P4 ctx+0x533 EDCA flags             ctx-rel   0x00 predicted for the zero payload
+P4 ctx+0x0DB EDCA bit2              ctx-rel   payload[2]-derived; 0 for the zero payload
+P4 ctx+0x4B8 band object ptr        ctx-rel   nonzero on a live band; bandobj+0x1A00 != 0
+P5 band0 SMAC status/enable         CA 0x4010820c BO 0x004c020c PH 0x404c020c  4B 0x40 / 0xF
+P5 band0 SMAC TRX                   CA 0x4010e150 BO 0x004c6150 PH 0x404c6150  4B 0x33/0xFF/0xFF
+P5 band1 SMAC status/enable         CA 0x4010c200 BO 0x004c4200 PH 0x404c4200  4B 0x1630 / 0x1039 or 0x1029 after the R5 start
+two-step: PKTRAM CA = 0x4003A5A0 value; BO = 0x1D8000 + (CA - 0x01000000); ctx = u32[0x00171458] + u16[0x00171504]

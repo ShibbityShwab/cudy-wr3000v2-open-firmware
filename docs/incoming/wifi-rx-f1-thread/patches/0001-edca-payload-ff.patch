@@ -1,0 +1,24 @@
+From: wifi-rx-f1-thread lane (task-216)
+Subject: [PATCH] h2d_frames: make the g0-id29 EDCA payload byte-exact (0xff tail)
+
+The stock host builder hmac_edca_opt_timeout_fn zeroes the 60-byte payload and
+then sets payload[20..59] = 0xff (wifi-f1-from-capture TABLES-families sec. 2.1).
+The firmware handler reads payload[0..19] only, so this hunk is conformance-only;
+it makes the frame byte-identical to the captured stock records.
+
+Applies to the driver tree's copy of h2d_frames.c (the copy must contain the
+committed h2d_build_g0_id1d_edca_opt body; check with
+  grep -n "h2d_build_g0_id1d_edca_opt" h2d_frames.c
+before applying).  Host tests re-run unchanged.
+
+diff --git a/h2d_frames.c b/h2d_frames.c
+--- a/h2d_frames.c
++++ b/h2d_frames.c
+@@ -495,5 +495,7 @@ int h2d_build_g0_id1d_edca_opt(struct h2d_frame *f, u8 dst, u8 fa, u8 fb,
+ 	f->fc = fc;
+ 	f->payload_len = 0x3cu;
++	/* stock hmac_edca_opt_timeout_fn: memset(payload,0,60); memset(payload+20,0xff,40) */
++	memset(f->payload + 20u, 0xff, 40u);
+ 	f->policy = H2D_F_EXACT;
+ 	e = h2d_check_semantics(f, H2D_VF_TRANSPORT | H2D_VF_FIRMWARE |
+ 				  H2D_VF_HANDLER | H2D_VF_POLICY);

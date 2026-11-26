@@ -1,0 +1,38 @@
+== A. the firmware thread descriptor table ==
+CA 0x0010cfc8: thread blocks, stride 0x30 (name[16] + 8 words)
+  HCC TX Thread  CA 0x0010cfc8 id=0 stack=256 prio=3 0x1c=0xff 0x20=0x00 0x24=0xff entry=0x000c515f arg=0x00000000
+  HCC RX Thread  CA 0x0010cff8 id=1 stack=256 prio=3 0x1c=0xff 0x20=0x00 0x24=0xff entry=0x00102553 arg=0x00000000
+  HCC OAM Thread CA 0x0010d028 id=2 stack=256 prio=4 0x1c=0xff 0x20=0xff 0x24=0xff entry=0x000c515f arg=0x00000000
+  literal-word xrefs to each block: TX @ 0x00103fd4: ['0x103fd4']; RX: []; OAM: []
+  -> the RX/OAM names have no literal reference anywhere in the image; only the TX block has one (an init/exception table word).
+  RX thread entry body CA 0x00102552: host-message queue processor:
+    - calls the HCC group/id dispatch CA 0x000fd7e8 (bl at 0x00102644) and the resolver CA 0x000fd4c8 (bl at 0x00102612)
+    - walks a mutex-protected message list (0xFDF8E/0xFDF50 lock/unlock, 0x1024BC spin, 0x1024EA pop, 0x102530 splice) and invokes per-message callbacks
+  -> the 'RX Thread' named by fw-f1-capture is the HCC *host-message* receive thread (H2D), not a Wi-Fi MAC RX thread.
+== B. the HCC D2H publish path ==
+  notify fn CA 0x000c6170: first test 'cmp r1,#0xa' (id<=10) at 0x000c6170; object pointer literal at 0x000c61dc = 0x00172130
+    caller 0x000c6224 -> notify id 6 (movs r1,#6 at 0x000c6220)
+    caller 0x000c6998 -> notify id 5 (movs r1,#5 at 0x000c6994)
+  node-fill helper CA 0x000c192a, call sites: ['0xc621c', '0xc6254']
+  notify callers: ['0xc6224', '0xc6998']
+  the object's idle words (contract, committed): G object 0x0010c0f4  +0xB4 armed=0x00000000  +0xB8 pending=0x00000000
+  -> delivery conditions decoded earlier (phase43): channel enable (firmware-owned), out[1] drained, notify id<=10, gate 0x4000010C==0xCECE.  All are satisfied on our boot (the g4 id1/id2 ready pair is received); this path is not F1.
+== C. the firmware-owned PPDU descriptor list ==
+  debug name: CA 0x001060f7 = '&pst_device->st_device_alloced_ppdu_dscr_list.st_spin_lock'
+  literal word 0x001060f7 at CA 0x000c0484 (pool word 0x000c0484 = 0x001060f7)
+  load site CA 0x000c02be: 'ldr r3,[pc,#0x1c4]' -> 0x000c0484
+  init function CA 0x000c016c (bytes 2de9f74f), caller CA 0x000d3bac -> 0x000c016c
+  struct fields on the init object: next=+0x66c prev=+0x670 count=+0x674 name_ptr=+0x67c (stores at 0x000c02b2/0x000c02b6/0x000c02d0/0x000c02c2)
+  0x1a0-byte descriptor allocator: bl 0x000bf128 at 0x000c0402
+  list-append / count-increment sites: 0x000c043a..0x000c0450
+  -> PPDU-descriptor list of the device/per-chip context; the runtime address is a probe (see --probes P4), not an image CA.
+== D. the g0-id29 EDCA handler effect (re-derived) ==
+  hook CA 0x00068c0a: calls the per-chip ctx resolver CA 0x000961ae (bl at 0x00068c12)
+  RF-chain gate: ldr [ctx+0x4B8]; add 0x1A00; ldr -> must be nonzero (bytes at 0x68C2C..0x68C3C)
+  writes ctx+0x4aa (u16 checksum of payload[0..19]) at 0x00068c74, ctx+0x533 (u8 per-AC flags) at 0x00068c94, ctx+0x0db bit2 at 0x00068d16
+  stock payload = 20 x 00 + 40 x ff -> predicted checksum 0x0000; the handler is installed via the hook slot G+0x378 (no direct BL caller: [])
+== E. per-chip module context (the probe formula) ==
+  resolver CA 0x000961ae: mov r1,r0; movs r0,#0; b.w 0xFE578
+  CA 0x943AC(0) returns CA 0x00170e28 (literal at 0x943C8)
+  ctx = u32[0x00171458] + u16[0x00171504]   (chip 0; the image's only chip)
+  self-check after init: u32[ctx+0x67C] must equal 0x001060f7
