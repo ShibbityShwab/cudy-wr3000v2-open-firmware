@@ -1,0 +1,39 @@
+appie2 decode notes - anchors used (host-only, local gitignored disassembly)
+
+Inputs (local, gitignored, never committed): wifi.dis.txt / wifi.nm.txt, produced from the
+vendor driver hi5622v100_wifi.ko in the local recovery extract. Only link-time addresses,
+symbol names and decoded field layouts are quoted here - no vendor bytes.
+
+Tooling used to re-derive the anchors:
+  grep -n '<symbol>' wifi.nm.txt                    # symbol -> section-relative address
+  readelf -S -W hi5622v100_wifi.ko                  # section table (all sections start at 0)
+  readelf -r -W hi5622v100_wifi.ko                  # relocations (which rodata words are fn ptrs)
+  ctypes/struct file reads of the .ko sections      # resolved reloc addends, table rows
+  wifi.dis.txt (objdump -dr style)                  # instruction-level anchors quoted below
+
+Anchors (function CAs are section-relative .text addresses; all sections start at 0, so a
+symbol must be resolved against its own section from readelf -s before reading bytes):
+
+  wal_ioctl_set_vendor_ie            0x11820c   WEXT priv-ioctl 0x8eec handler
+  wal_send_cfg_event                 0x126c98   cfg-event send shim (sync=1)
+  wal_send_cfg_event_msg_tx          0x126c1c   -> hcc_msg_tx (imported, platform transport)
+  wal_alloc_cfg_event                0x126ab0   envelope allocation / header fill
+  wal_check_and_release_msg_resp     0x109370   sync response release
+  hmac_config_set_vendor_ie          0x060a6c   hmac consumer entry (thunk target)
+  hmac_config_set_app_ie_to_vap      0x060298   0x7f strip, type-7 path, mirror then post
+  mac_vap_save_app_ie                0x02ac18   host-mirror slot save
+  hmac_config_h2d_send_app_ie        0x0600cc   g0 id 0x20 frame builder/sender
+  wal_main_init                      0x12386c   registers g_st_wal_drv_func_hook via OAM
+  g_st_wal_drv_func_hook             bss 0x35808  4 handlers {memory, reg, config, globalvar}
+  wal_recv_config_cmd                0x0fd604   OAM config-cmd receiver -> local dispatch
+  wal_config_process_pkt             0x0fcb94   parses the local envelope payload records
+  wal_config_process_entry           0x0fc714   12-byte-row event dispatch, +4/+8 handler slots
+  wal_recv_cfg_cmd_rsp               0x0fd474   status report through OAM-SDT hooks
+  g_ast_board_wid_op_debug           rodata 0x24980, 170 rows x 12 B
+  production host row table          rodata 0x85f8, 290 rows x 12 B (count from movw #290)
+  row for event 0x0276               id 0x0276, +4 handler 0, +8 = wal_config_set_vendor_ie
+                                     (index 123 of the 0x85f8 table; also row in the debug copy)
+
+Relocation cross-check that fixes the row layout: the table relocations that point at .text
+land on row_base+8 for rows whose id is at row_base+0, so a row is {u16 id; u16 pad; u32 h4;
+u32 h8}; wal_config_process_entry selects h8 when its mode argument is 3 and h4 when it is 4.

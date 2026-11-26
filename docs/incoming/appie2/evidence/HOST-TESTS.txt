@@ -1,0 +1,72 @@
+appie2 host KAT - clean-room WEXT set_vendor_ie call-order replica (task-244)
+host-only: no kernel, no modules, no device, no network, no vendor bytes.
+
+regenerate:
+  cd opensource/docs/incoming/appie2 && ./tools/run-host-tests.sh
+
+compiler: $(cc --version | head -1)
+compile flags: -std=c99 -O2 -Wall -Wextra -Werror -pedantic
+
+appie2 replica selftest (host-only, no kernel, no device)
+model: WEXT 0x8eec -> cfg event 0x0276 -> g2/id0 host envelope -> dispatch -> mirror+post
+PASS  1 parse: valid 0x8eec request accepted
+PASS  2 parse: ie_len carried
+PASS  3 parse: type carried
+PASS  4 parse: mode is 0 on the WEXT path
+PASS  5 parse: wrong cmd 0x8ee3 refused
+PASS  6 parse: ie_len 497 refused (496-byte field)
+PASS  7 parse: type 20 refused (slot table is 0..19)
+PASS  8 parse: short userspace buffer refused
+PASS  9 strip: empty userspace arg refused
+PASS 10 strip: request parsed for the stripped fixture
+PASS 11 strip: 0x7f IE found and removed
+PASS 12 strip: 0x7f IE length 5 (2 + 3)
+PASS 13 strip: ie_len reduced by the 0x7f IE
+PASS 14 strip: first remaining IE is the 0xdd IE
+PASS 15 body: built
+PASS 16 body: u16 event = 0x0276 SET_VENDOR_IE
+PASS 17 body: u16 len = 0x01f8
+PASS 18 body: ie_len low byte
+PASS 19 body: type carried
+PASS 20 body: mode 0
+PASS 21 body: pad byte zero
+PASS 22 body: pad byte zero
+PASS 23 body: IE blob starts at offset 12
+PASS 24 envelope: request parsed
+PASS 25 envelope: body built without the 0x7f strip step
+PASS 26 envelope: built
+PASS 27 envelope: group 2 in the low nibble
+PASS 28 envelope: id low byte 0
+PASS 29 envelope: id high byte 0
+PASS 30 envelope: 0x5a5a HCC tag
+PASS 31 envelope: hdr[3] = ctx[0]
+PASS 32 envelope: hdr[2] = ctx[1]
+PASS 33 envelope: hdr[1] high nibble = ctx[2] & 0xf
+PASS 34 envelope: payload rpc tag 1
+PASS 35 envelope: payload msg_len 0x01fc
+PASS 36 envelope: sequence byte 0
+PASS 37 envelope: sequence byte 3
+PASS 38 envelope: 508-byte body carried at hdr+28
+PASS 39 envelope: fixed total length 536
+PASS 40 dispatch: event 0x0276 resolves in mode 3
+PASS 41 dispatch: mode 3 slot is set_vendor_ie
+PASS 42 dispatch: mode 4 slot is empty -> fail closed
+PASS 43 dispatch: decoy row with both slots, mode 4 resolves
+PASS 44 dispatch: mode 4 chooses the +4 slot
+PASS 45 dispatch: neighbouring 0x02de row maps to its handler
+PASS 46 dispatch: unknown event id refused
+PASS 47 dispatch: unknown mode refused
+PASS 48 sequence: full vendor call order runs
+PASS 49 sequence: dispatched to set_vendor_ie
+PASS 50 sequence: exactly one host-mirror save
+PASS 51 sequence: exactly one H2D app-IE post
+PASS 52 sequence: mirror save precedes the H2D post
+PASS 53 sequence: the group-2/id-0 envelope is host-internal (never tx'd)
+PASS 54 sequence: malformed IE blob refused before any effect
+PASS 55 sequence: refusal leaves the H2D counter at 0
+PASS 56 determinism: request parsed
+PASS 57 determinism: identical body on repeat builds
+PASS 58 determinism: identical envelope on repeat builds
+PASS 59 determinism: sequence change alters the envelope
+----
+59 passed, 0 failed
