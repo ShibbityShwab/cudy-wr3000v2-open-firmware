@@ -1,0 +1,1456 @@
+diff --git a/Kbuild b/Kbuild
+index 5bdb394..c6e85db 100644
+--- a/Kbuild
++++ b/Kbuild
+@@ -36,6 +36,7 @@ hi5622_wifi-y := main.o transport.o ete.o d2h.o hcc.o service.o \
+ 		 hi5622_band_cfg.o hi5622_band5g.o hi5622_vapmsg5g.o hi5622_beacon5g.o \
+ 		 hi5622_desc_table.o hi5622_band_start.o hi5622_dfs_mode.o \
+ 		 hi5622_dfs_set.o hi5622_vap_start_g0.o \
++		 hi5622_dfs160.o hi5622_dfs_cac.o \
+ 		 hi5622_key_frames.o hi5622_keys.o \
+ 		 hi5622_sta_logic.o hi5622_sta_frames.o hi5622_sta.o \
+ 		 hi5622_sta_ops_logic.o hi5622_sta_ops.o \
+diff --git a/cfg80211-provider.symvers b/cfg80211-provider.symvers
+index eda925b..5a89bc8 100644
+--- a/cfg80211-provider.symvers
++++ b/cfg80211-provider.symvers
+@@ -10,3 +10,4 @@
+ 0x00000000	cfg80211_bss_iter	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	cfg80211_mgmt_tx_status_ext	cfg80211	EXPORT_SYMBOL	
+ 0x00000000	cfg80211_rx_mgmt_ext	cfg80211	EXPORT_SYMBOL	
++0x00000000	cfg80211_cac_event	cfg80211	EXPORT_SYMBOL	
+diff --git a/hi5622_ap_frames.c b/hi5622_ap_frames.c
+index a6a82ab..850614c 100644
+--- a/hi5622_ap_frames.c
++++ b/hi5622_ap_frames.c
+@@ -9,6 +9,7 @@
+  * synthesizes frames from them and refuses malformed input.
+  */
+ #include "hi5622_ap_frames.h"
++#include "hi5622_dfs160.h"
+ 
+ /* ------------------------------------------------------------------ */
+ /* small helpers                                                      */
+@@ -407,8 +408,10 @@ int haf_sequence_at(unsigned int index, u8 carrier, enum haf_frame_id *out_id)
+ }
+ 
+ /* 4-byte module-channel body (worker CA 0x841B8 [V]):
+- *   [0] band (context +0x11), [1] vendor mac_vap+2 [I] (context +0x12),
+- *   [2] channel number (context +0x10), [3] unused by the worker. */
++ *   [0] band (context +0x11), [1] BANDWIDTH SELECTOR (context +0x12;
++ *   20M=0/40M=1/80M=2/160M=3 - the decode-corrected meaning of the byte),
++ *   [2] channel number (context +0x10), [3] unused by the worker.
++ *   The legacy path keeps the old vap_id byte (BW_LEGACY). */
+ static int haf_build_body_chan(u8 *body, size_t cap,
+ 			     const struct haf_ap_params *p)
+ {
+@@ -416,8 +419,12 @@ static int haf_build_body_chan(u8 *body, size_t cap,
+ 		return -ENOSPC;
+ 	if (p->band > 1u || p->vap_id > 0x0fu || p->channel == 0u)
+ 		return -EINVAL;
++	if (p->bandwidth != HI5622_DFS160_BW_LEGACY &&
++	    p->bandwidth > HI5622_DFS160_BW_MAX)
++		return -EINVAL;
+ 	body[0] = (u8)p->band;
+-	body[1] = p->vap_id;
++	body[1] = p->bandwidth == HI5622_DFS160_BW_LEGACY ?
++		  p->vap_id : p->bandwidth;
+ 	body[2] = p->channel;
+ 	body[3] = 0u;
+ 	return 0;
+diff --git a/hi5622_ap_frames.h b/hi5622_ap_frames.h
+index a177e11..33a52fd 100644
+--- a/hi5622_ap_frames.h
++++ b/hi5622_ap_frames.h
+@@ -174,6 +174,8 @@ struct haf_ap_params {
+ 	u8	vap_id;		/* WAL hdr[3] VAP id for this frame class */
+ 	u8	iftype;		/* 2 = AP for the WAL VAP-add family */
+ 	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz (vendor band hint) */
++	u8	bandwidth;	/* 0x0124 body[1] selector (HI5622_DFS160_BW_*)
++				 * or HI5622_DFS160_BW_LEGACY = keep vap_id */
+ 	u8	channel;	/* channel number for the beacon-static channel
+ 				 * frame (0 = not a channel-frame request) */
+ 	u8	hidden_ssid;	/* 1 = hide SSID (zero-length SSID element) */
+diff --git a/hi5622_cfg80211.c b/hi5622_cfg80211.c
+index f5d7582..252a530 100644
+--- a/hi5622_cfg80211.c
++++ b/hi5622_cfg80211.c
+@@ -49,6 +49,7 @@
+ #include "hi5622_sta_ops.h"
+ #include "hi5622_data_tx.h"
+ #include "hi5622_band5g.h"
++#include "hi5622_dfs_cac.h"
+ 
+ /* ---------------------------------------------------------------------
+  * Module parameters (host-only bench experiments; defaults are the safe
+@@ -224,6 +225,11 @@ static const struct ieee80211_channel hi5622_channels_5g[] = {
+ 	HI5622_CH5G(132, 5660, HI5622_DFS),
+ 	HI5622_CH5G(136, 5680, HI5622_DFS),
+ 	HI5622_CH5G(140, 5700, HI5622_DFS),
++	/* lane dfs160 (task-240): the ch144 gap restored - the vendor band-1
++	 * table CA 0x117AD4 carries ch144 (5720 MHz) and it is part of the
++	 * init'able DFS set 52-64 U 100-144 (the 160 MHz segment 100-128 ends
++	 * at 128; ch144 is the DFS-list completion). */
++	HI5622_CH5G(144, 5720, HI5622_DFS),
+ };
+ 
+ static const struct ieee80211_rate hi5622_rates_5g[] = {
+@@ -725,6 +731,12 @@ int hi5622_cfg80211_init(struct hi5622_pci *ctx)
+ 		wiphy_free(wiphy);
+ 		return ret;
+ 	}
++	/* lane dfs160 (task-240): the DFS/CAC runtime; a NULL object leaves
++	 * the radar-detect ops at -EOPNOTSUPP (fail closed, no frame). */
++	c->dfs_cac = hi5622_dfs_cac_create(ctx);
++	if (!c->dfs_cac)
++		dev_warn(&ctx->pdev->dev,
++			 "cfg80211: dfs_cac runtime allocation failed - the DFS/CAC ops stay -EOPNOTSUPP (fail closed)\n");
+ 	ctx->cfg = c;
+ 	dev_info(&ctx->pdev->dev,
+ 		 "cfg80211: wiphy allocated for endpoint %s (%u band(s): %s%s%s; wiphy registration is gated on the HCC ready handshake; scan/AP wiring M2/M3)\n",
+@@ -757,6 +769,10 @@ void hi5622_cfg80211_remove(struct hi5622_pci *ctx)
+ 	c->removing = true;
+ 	mutex_unlock(&c->lock);
+ 	cancel_work_sync(&c->reg_work);
++	/* lane dfs160 (task-240): stop the CAC timer BEFORE any netdev
++	 * teardown (the callback may report a cfg80211 CAC event). */
++	hi5622_dfs_cac_destroy(c->dfs_cac);
++	c->dfs_cac = NULL;
+ 	/* wifi-data-tx (task-150): stop the completion work and return the pool
+ 	 * before any VAP netdev is unregistered (no TX may race the teardown). */
+ 	hi5622_data_tx_remove(c);
+@@ -857,6 +873,13 @@ static ssize_t cfg80211_status_show(struct device *dev,
+ 		if (m > 0)
+ 			n += m;
+ 	}
++	if (n < 4096) {
++		int m = hi5622_dfs_cac_status_line(c, hi5622_ht_bw,
++						  tmp + n, 4096 - (size_t)n);
++
++		if (m > 0)
++			n += m;
++	}
+ 	ret = sysfs_emit(buf,
+ 			 "wifi-cfg80211 M0-M3 (scan/AP wiring): auto=%u band_force=%d band=%s bands=%u band5g=%u\n%s",
+ 			 hi5622_cfg11_auto, hi5622_band_force,
+diff --git a/hi5622_cfg80211.h b/hi5622_cfg80211.h
+index 40577b3..ffee1b9 100644
+--- a/hi5622_cfg80211.h
++++ b/hi5622_cfg80211.h
+@@ -65,6 +65,8 @@ struct hi5622_sta_ctx {
+ 
+ /* Per-endpoint cfg80211 state; embedded in the wiphy private area
+  * (wiphy_new_nm(sizeof_priv = sizeof(struct hi5622_cfg80211))). */
++struct hi5622_dfs_cac;
++
+ struct hi5622_cfg80211 {
+ 	struct hi5622_pci		*ctx;
+ 	struct wiphy			*wiphy;
+@@ -96,6 +98,9 @@ struct hi5622_cfg80211 {
+ 	/* wifi-data-tx (task-150): peer-aware host -> AP data TX state (in-flight
+ 	 * frame pool + bounded completion work); NULL when data_tx=0 (fail closed). */
+ 	struct hi5622_data_tx		*data_tx;
++	/* lane dfs160 (task-240): the DFS/CAC runtime (cfg80211 radar-detect
++	 * ops + host CAC timer + the AP-start DFS gate); NULL = fail closed. */
++	struct hi5622_dfs_cac		*dfs_cac;
+ 	bool				reg_scheduled;
+ 	bool				ready_logged;
+ };
+diff --git a/hi5622_cfg80211_ops.c b/hi5622_cfg80211_ops.c
+index 02774a3..46b3c5d 100644
+--- a/hi5622_cfg80211_ops.c
++++ b/hi5622_cfg80211_ops.c
+@@ -46,6 +46,7 @@
+ #include "hi5622_cfg80211.h"
+ #include "hi5622_driver.h"
+ #include "hi5622_scan.h"
++#include "hi5622_dfs_cac.h"
+ #include "hi5622_keys.h"
+ #include "hi5622_mgmt.h"
+ #include "hi5622_sta.h"
+@@ -541,4 +542,10 @@ const struct cfg80211_ops hi5622_cfg11_ops = {
+ 	.disconnect		= hi5622_cfg11_disconnect,
+ 	/* Host-side-accepted SET_BEACON (see above; no firmware write yet). */
+ 	.change_beacon		= hi5622_cfg11_change_beacon,
++	/* lane dfs160 (task-240): the cfg80211 DFS/CAC ops.  Both remain
++	 * -EOPNOTSUPP at dfs_cac=0 (the default) and fail closed on the live
++	 * ARM precheck; the AP-start DFS gate keeps a DFS AP from beaconing
++	 * before the CAC finished on that channel. */
++	.start_radar_detection	= hi5622_dfs_cac_op_start,
++	.end_cac		= hi5622_dfs_cac_op_end,
+ };
+diff --git a/hi5622_dfs160.c b/hi5622_dfs160.c
+new file mode 100644
+index 0000000..b2c2d9e
+--- /dev/null
++++ b/hi5622_dfs160.c
+@@ -0,0 +1,385 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_dfs160.c - 5 GHz 160 MHz width selector + DFS/CAC/NOL model
++ * (lane dfs160 / shared task task-240, 2026-11-26).  Clean-room, portable
++ * C99: the same file compiles in the 6.18.60 kernel module and in the host
++ * selftest.  Constants are decoded protocol facts (see the header and
++ * ../wifi-5g-160-dfs/TABLES.md); no vendor source/object/firmware bytes.
++ */
++#include "hi5622_dfs160.h"
++
++#ifdef __KERNEL__
++#include <linux/kernel.h>
++#include <linux/string.h>
++#else
++#include <stdio.h>
++#include <string.h>
++#endif
++
++/* ===================================================================
++ * 1. 160 MHz width selector
++ * =================================================================== */
++
++int hi5622_dfs160_width_selector(u32 width, u8 *sel)
++{
++	u8 out;
++
++	switch (width) {
++	case HI5622_DFS160_WIDTH_20NOHT:
++	case HI5622_DFS160_WIDTH_20:
++		out = HI5622_DFS160_BW_20;
++		break;
++	case HI5622_DFS160_WIDTH_40:
++		out = HI5622_DFS160_BW_40;
++		break;
++	case HI5622_DFS160_WIDTH_80:
++		out = HI5622_DFS160_BW_80;
++		break;
++	case HI5622_DFS160_WIDTH_160:
++		out = HI5622_DFS160_BW_160;
++		break;
++	case HI5622_DFS160_WIDTH_80P80:
++	case HI5622_DFS160_WIDTH_320:
++		/* The vendor wiphy VHT cap 0x00400064 has the 160 MHz bit but
++		 * neither the 160+80+80 nor the 320 MHz bit: refuse instead of
++		 * pretending a width the firmware cannot select. */
++		return -EOPNOTSUPP;
++	default:
++		return -EINVAL;
++	}
++	if (!sel)
++		return -EINVAL;
++	*sel = out;
++	return 0;
++}
++
++int hi5622_dfs160_ccfs1_160(u8 channel, u32 *ccfs1)
++{
++	u32 out;
++
++	if (channel >= 36u && channel <= 64u)
++		out = 50u;		/* 36-64 @ 5250 MHz */
++	else if (channel >= 100u && channel <= 128u)
++		out = 114u;		/* 100-128 @ 5570 MHz */
++	else if (channel >= 149u && channel <= 177u)
++		out = 163u;		/* 149-177 @ 5815 MHz */
++	else
++		return -EOPNOTSUPP;
++	if (!ccfs1)
++		return -EINVAL;
++	*ccfs1 = out;
++	return 0;
++}
++
++int hi5622_dfs160_ccfs1_80(u8 channel, u32 *ccfs1)
++{
++	u32 out;
++
++	if (channel >= 36u && channel <= 48u)
++		out = 42u;
++	else if (channel >= 52u && channel <= 64u)
++		out = 58u;
++	else if (channel >= 100u && channel <= 112u)
++		out = 106u;
++	else if (channel >= 116u && channel <= 128u)
++		out = 122u;
++	else if (channel >= 132u && channel <= 144u)
++		out = 138u;
++	else if (channel >= 149u && channel <= 161u)
++		out = 155u;
++	else if (channel >= 165u && channel <= 177u)
++		out = 171u;
++	else
++		return -EOPNOTSUPP;
++	if (!ccfs1)
++		return -EINVAL;
++	*ccfs1 = out;
++	return 0;
++}
++
++int hi5622_dfs160_width_check(u32 width, u8 channel, u32 ccfs1, u32 ccfs2)
++{
++	u8 sel = HI5622_DFS160_BW_LEGACY;
++	u32 want = 0u;
++	int rc;
++
++	if (!channel)
++		return -EINVAL;
++	rc = hi5622_dfs160_width_selector(width, &sel);
++	if (rc)
++		return rc;	/* 80+80/320 are refused before any centre logic */
++	if (ccfs2)
++		return -EINVAL;	/* no 80+80 support: CCFS2 must be 0 */
++	switch (sel) {
++	case HI5622_DFS160_BW_20:
++		break;		/* no centre required */
++	case HI5622_DFS160_BW_40:
++		/* 40 MHz CCFS1 is optional in cfg80211; accept 0 or the
++		 * derived centre when the channel is in a 40 MHz segment.
++		 * The exact 40 MHz centre check is left to cfg80211. */
++		break;
++	case HI5622_DFS160_BW_80:
++		rc = hi5622_dfs160_ccfs1_80(channel, &want);
++		if (rc)
++			return rc;
++		if (ccfs1 && ccfs1 != want)
++			return -EINVAL;
++		break;
++	case HI5622_DFS160_BW_160:
++		rc = hi5622_dfs160_ccfs1_160(channel, &want);
++		if (rc)
++			return rc;
++		if (ccfs1 != want)
++			return -EINVAL;
++		break;
++	default:
++		return -EOPNOTSUPP;
++	}
++	return 0;
++}
++
++/* ===================================================================
++ * 2. DFS channel set / hours
++ * =================================================================== */
++
++int hi5622_dfs160_chan_freq(u8 channel, u16 *mhz)
++{
++	u16 f;
++
++	if (!channel)
++		return -EINVAL;
++	if (channel == 14u)
++		f = 2484u;
++	else if (channel >= 1u && channel <= 13u)
++		f = (u16)(2407u + 5u * channel);
++	else if (channel == 144u)
++		f = 5720u;
++	else if (channel >= 184u && channel <= 196u)
++		f = (u16)(4000u + 5u * channel);	/* 4920..4980 */
++	else if ((channel >= 36u && channel <= 64u) ||
++		 (channel >= 100u && channel <= 140u) ||
++		 (channel >= 149u && channel <= 165u))
++		f = (u16)(5000u + 5u * channel);
++	else
++		return -EINVAL;
++	if (mhz)
++		*mhz = f;
++	return 0;
++}
++
++int hi5622_dfs160_is_dfs_chan(u8 channel)
++{
++	/* The vendor band-1 table CA 0x117AD4 DFS channels: 52-64 and 100-144.
++	 * ch144 is the "ch144 gap" of our current wiphy list (hi5622_cfg80211.c
++	 * advertises 52-64/100-140 only) and is restored by this lane. */
++	return (channel >= 52u && channel <= 64u) ||
++	       (channel >= 100u && channel <= 144u);
++}
++
++int hi5622_dfs160_is_tdwr_chan(u8 channel)
++{
++	return channel >= 100u && channel <= 128u;
++}
++
++int hi5622_dfs160_is_tdwr_center(u16 center_freq)
++{
++	return center_freq >= 5600u && center_freq <= 5650u;
++}
++
++/* ===================================================================
++ * 3. CAC / NOL timing and state machine
++ * =================================================================== */
++
++int hi5622_dfs160_cac_plan(u8 channel, u16 center_freq, u32 requested_ms,
++			   struct hi5622_dfs160_cac_plan *out)
++{
++	u32 cac_ms;
++
++	if (!out || !channel)
++		return -EINVAL;
++	if (!hi5622_dfs160_is_dfs_chan(channel))
++		return -EOPNOTSUPP;
++	if (!center_freq) {
++		u16 f;
++
++		if (hi5622_dfs160_chan_freq(channel, &f))
++			return -EINVAL;
++		center_freq = f;
++	}
++	memset(out, 0, sizeof(*out));
++	out->channel = channel;
++	if (hi5622_dfs160_is_tdwr_center(center_freq) ||
++	    hi5622_dfs160_is_tdwr_chan(channel))
++		out->tdwr = 1u;
++	cac_ms = out->tdwr ? HI5622_DFS160_CAC_MS_TDWR
++			   : HI5622_DFS160_CAC_MS_DEFAULT;
++	if (requested_ms > cac_ms)
++		cac_ms = requested_ms;	/* hostapd may ask for longer */
++	out->cac_ms = cac_ms;
++	/* The vendor tick arithmetic (hmac_dfs_cac_start): CAC > 59999 ms
++	 * uses a 63000 ms first timer and max = cac_ms/60000 ticks; the
++	 * short path registers one 60000 ms timer.  We always take the
++	 * 63000 ms first timer so the cfg80211 CAC_FINISHED jiffies check
++	 * (start_time + cac_time_ms) can never fire early. */
++	out->first_ms = HI5622_DFS160_CAC_FIRST_MS;
++	out->tick_ms = HI5622_DFS160_CAC_TICK_MS;
++	out->ticks = cac_ms > 59999u ? cac_ms / 60000u : 1u;
++	if (!out->ticks)
++		out->ticks = 1u;
++	out->nol_ms = HI5622_DFS160_NOL_MS;
++	return 0;
++}
++
++void hi5622_dfs160_cac_init(struct hi5622_dfs160_cac *st)
++{
++	if (!st)
++		return;
++	memset(st, 0, sizeof(*st));
++	st->state = HI5622_DFS160_CAC_OFF;
++	st->radar_type = 0xffu;
++}
++
++int hi5622_dfs160_cac_begin(struct hi5622_dfs160_cac *st, u8 channel,
++			    u16 center_freq, u32 requested_ms)
++{
++	struct hi5622_dfs160_cac_plan plan;
++	int rc;
++
++	if (!st)
++		return -EINVAL;
++	if (st->state == HI5622_DFS160_CAC_ARMED)
++		return -EALREADY;
++	rc = hi5622_dfs160_cac_plan(channel, center_freq, requested_ms, &plan);
++	if (rc)
++		return rc;
++	st->channel = channel;
++	st->center_freq = center_freq;
++	st->tdwr = plan.tdwr;
++	st->cac_ms = plan.cac_ms;
++	st->first_ms = plan.first_ms;
++	st->tick_ms = plan.tick_ms;
++	st->ticks = plan.ticks;
++	st->ticks_done = 0u;
++	st->nol_ms = plan.nol_ms;
++	st->nol_end_ms = 0u;
++	st->radar_type = 0xffu;
++	st->plan = plan;
++	st->state = HI5622_DFS160_CAC_ARMED;
++	return 0;
++}
++
++u32 hi5622_dfs160_cac_delay_ms(const struct hi5622_dfs160_cac *st)
++{
++	if (!st || st->state != HI5622_DFS160_CAC_ARMED)
++		return 0u;
++	if (st->ticks_done >= st->ticks)
++		return 0u;	/* the FINISH tick: no re-arm */
++	return st->ticks_done ? st->tick_ms : st->first_ms;
++}
++
++enum hi5622_dfs160_cac_step
++hi5622_dfs160_cac_tick(struct hi5622_dfs160_cac *st)
++{
++	if (!st || st->state != HI5622_DFS160_CAC_ARMED)
++		return HI5622_DFS160_STEP_IDLE;
++	st->ticks_done++;
++	if (st->ticks_done >= st->ticks)
++		return HI5622_DFS160_STEP_FINISH;
++	return HI5622_DFS160_STEP_REARM;
++}
++
++void hi5622_dfs160_cac_finish(struct hi5622_dfs160_cac *st)
++{
++	if (!st)
++		return;
++	st->state = HI5622_DFS160_CAC_FINISHED;
++}
++
++void hi5622_dfs160_cac_abort(struct hi5622_dfs160_cac *st)
++{
++	if (!st)
++		return;
++	st->state = HI5622_DFS160_CAC_ABORTED;
++	st->ticks_done = 0u;
++}
++
++int hi5622_dfs160_cac_radar(struct hi5622_dfs160_cac *st, u8 type, u32 now_ms)
++{
++	if (!st)
++		return -EINVAL;
++	if (type > 8u)
++		return -EINVAL;	/* the vendor counts radar types 0..8 */
++	st->radar_type = type;
++	st->radar_count++;
++	st->state = HI5622_DFS160_CAC_ABORTED;
++	st->nol_end_ms = now_ms + st->nol_ms;
++	return 0;
++}
++
++int hi5622_dfs160_nol_active(const struct hi5622_dfs160_cac *st, u32 now_ms)
++{
++	if (!st || !st->nol_end_ms)
++		return 0;
++	/* Wrapping-safe subtraction on the caller's monotonic clock. */
++	return (int32_t)(st->nol_end_ms - now_ms) > 0;
++}
++
++int hi5622_dfs160_cac_ap_gate(const struct hi5622_dfs160_cac *st, u8 channel,
++			      u16 center_freq, u32 now_ms)
++{
++	u16 want = 0u;
++
++	if (!st || !channel)
++		return -EINVAL;
++	if (!hi5622_dfs160_is_dfs_chan(channel))
++		return 0;	/* non-DFS channel: the gate does not apply */
++	if (hi5622_dfs160_chan_freq(channel, &want) || !want)
++		return -EINVAL;
++	if (center_freq && center_freq != want)
++		return -EINVAL;
++	if (st->state != HI5622_DFS160_CAC_FINISHED)
++		return -EAGAIN;
++	if (st->channel != channel)
++		return -EAGAIN;
++	if (hi5622_dfs160_nol_active(st, now_ms))
++		return -EAGAIN;
++	return 0;
++}
++
++const char *hi5622_dfs160_cac_state_name(u8 state)
++{
++	switch (state) {
++	case HI5622_DFS160_CAC_OFF:		return "off";
++	case HI5622_DFS160_CAC_ARMED:		return "armed";
++	case HI5622_DFS160_CAC_FINISHED:	return "finished";
++	case HI5622_DFS160_CAC_ABORTED:		return "aborted";
++	default:				return "?";
++	}
++}
++
++int hi5622_dfs160_status_line(unsigned int ht_bw, unsigned int dfs_cac,
++			      const struct hi5622_dfs160_cac *st,
++			      int last_rc, unsigned int arms,
++			      unsigned int finishes, unsigned int aborts,
++			      unsigned int refusals, char *buf, size_t len)
++{
++	int n;
++
++	if (!buf || !len)
++		return -EINVAL;
++	n = snprintf(buf, len,
++		     "dfs_cac: ht_bw=%u (%s) dfs_cac=%u (%s) state=%s channel=%u cac_ms=%u ticks=%u/%u nol_ms=%u nol_active=%u radar=%u arms=%u finishes=%u aborts=%u refusals=%u last_rc=%d\n",
++		     ht_bw, ht_bw ? "0x0124 width selector" : "off",
++		     dfs_cac, dfs_cac ? "cfg80211 CAC op" : "off",
++		     st ? hi5622_dfs160_cac_state_name(st->state) : "?",
++		     st ? st->channel : 0u,
++		     st ? st->cac_ms : 0u,
++		     st ? st->ticks_done : 0u, st ? st->ticks : 0u,
++		     st ? st->nol_ms : 0u,
++		     st ? (unsigned int)(st->nol_end_ms ? 1u : 0u) : 0u,
++		     st ? st->radar_type : 0xffu,
++		     arms, finishes, aborts, refusals, last_rc);
++	if (n < 0)
++		return -EINVAL;
++	return (size_t)n < len ? n : (int)(len - 1u);
++}
+diff --git a/hi5622_dfs160.h b/hi5622_dfs160.h
+new file mode 100644
+index 0000000..9ae1387
+--- /dev/null
++++ b/hi5622_dfs160.h
+@@ -0,0 +1,228 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_dfs160.h - 5 GHz 160 MHz width selector + DFS/CAC/NOL model for the
++ * Hi5622V100 clean-room full-MAC driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane dfs160 / shared task task-240, 2026-11-26).
++ * No vendor source, object code or firmware byte is reproduced; every
++ * constant is a decoded protocol fact from the committed decode lanes
++ * ../wifi-5g-160-dfs/ (TABLES T2/T4/T5/T7/T8), ../wifi-5g-dfs-set/
++ * (0x07E7 frame/worker) and ../wifi-5g-cac-context/ (+0x4A0 writer), with
++ * the grade markers kept in that lane's TABLES.md.
++ *
++ * WHAT THIS MODULE DECIDES (pure C99, host-testable):
++ *   1. the 160 MHz WIDTH SELECTOR: the H2D g0-id1 key 0x0124 channel-config
++ *      body is {band, bandwidth, channel, 0}; byte[1] is the vendor bandwidth
++ *      selector (0=20M, 1=40M, 2=80M, 3=160M, the value the firmware worker
++ *      CA 0x841B8 stores at module ctx+0x12 and the band-1 RF branch
++ *      CA 0x40684 feeds to CA 0x101890's descriptor selector).  The
++ *      cfg80211 chandef width maps onto that selector; 80+80 and 320 MHz are
++ *      refused because the vendor wiphy VHT cap 0x00400064 has neither bit.
++ *      The 160 MHz centre (CCFS1) is checked against the IEEE channelisation
++ *      (36-64 -> 50, 100-128 -> 114, 149-177 -> 163).
++ *   2. the DFS CHANNEL SET: 52-64 and 100-144 (the vendor band-1 table
++ *      CA 0x117AD4's DFS channels, including the ch144 entry our channel
++ *      list is missing - "the ch144 gap") and the 5600..5650 MHz TDWR
++ *      window (ch 100-128) that carries the 600000 ms CAC time.
++ *   3. the CAC/NOL TIMING state machine (the HOST-side hmac_dfs_* machinery):
++ *      CAC 60000 ms default / 600000 ms TDWR, the vendor tick arithmetic
++ *      (first timer 63000 ms, then 60000 ms per tick, ticks = cac_ms/60000)
++ *      and the 1800000 ms (30 min) non-occupancy period.  No vendor bytes
++ *      are decoded here; the timing constants are the committed TABLES T4
++ *      values, and the 0x07E7 ARM/CLEAR frame itself is built by the
++ *      sibling hi5622_dfs_set.c (lane wifi-5g-dfs-set).
++ *
++ * The kernel-side wire state machine and the cfg80211 radar-detect ops live
++ * in hi5622_dfs_cac.c (src/); this header is portable so the host selftest
++ * (src/dfs160_selftest.c) exercises every decision without a device.
++ */
++#ifndef HI5622_DFS160_H
++#define HI5622_DFS160_H
++
++#ifdef __KERNEL__
++#include <linux/errno.h>
++#include <linux/types.h>
++#include <linux/stddef.h>
++#else
++#include <errno.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#ifndef HI5622_HOST_TYPES_DEFINED
++#define HI5622_HOST_TYPES_DEFINED
++typedef uint8_t  u8;
++typedef uint16_t u16;
++typedef uint32_t u32;
++#endif
++#endif
++
++/* ===================================================================
++ * 1. The 160 MHz width selector (0x0124 body[1])
++ * =================================================================== */
++
++/* nl80211_chan_width UAPI values (linux/nl80211.h, stable ABI). */
++#define HI5622_DFS160_WIDTH_20NOHT	0u
++#define HI5622_DFS160_WIDTH_20		1u
++#define HI5622_DFS160_WIDTH_40		2u
++#define HI5622_DFS160_WIDTH_80		3u
++#define HI5622_DFS160_WIDTH_160		4u
++#define HI5622_DFS160_WIDTH_80P80	5u
++#define HI5622_DFS160_WIDTH_320		6u
++
++/* The vendor bandwidth selector written to 0x0124 body[1] [V for 0; I 1..3
++ * from the HAL channel-assemble enum order; PROBES P-160a decides 3]. */
++#define HI5622_DFS160_BW_20		0u
++#define HI5622_DFS160_BW_40		1u
++#define HI5622_DFS160_BW_80		2u
++#define HI5622_DFS160_BW_160		3u
++#define HI5622_DFS160_BW_MAX		3u
++/* Sentinel for the legacy path: body[1] keeps the old vap_id byte (the
++ * bench-validated F2/first fire wire bytes are byte-identical then). */
++#define HI5622_DFS160_BW_LEGACY		0xffu
++
++/* Map a cfg80211 chandef width onto the vendor selector.
++ *  0 on success (sel in 0..3);
++ * -EOPNOTSUPP for 80+80 and 320 MHz (the vendor cap has neither bit);
++ * -EINVAL     for NULL/unknown widths. */
++int hi5622_dfs160_width_selector(u32 width, u8 *sel);
++
++/* 160 MHz single-segment CCFS1 (IEEE channelisation [I, IEEE]).
++ * 36-64 -> 50 (5250), 100-128 -> 114 (5570), 149-177 -> 163 (5815).
++ * 0 on success; -EOPNOTSUPP when the channel is not in a 160 MHz segment. */
++int hi5622_dfs160_ccfs1_160(u8 channel, u32 *ccfs1);
++
++/* 80 MHz CCFS1 for the fail-closed 80 MHz centre check: 36-48->42,
++ * 52-64->58, 100-112->106, 116-128->122, 132-144->138, 149-161->155,
++ * 165-177->171.  0 on success; -EOPNOTSUPP outside the 80 MHz segments. */
++int hi5622_dfs160_ccfs1_80(u8 channel, u32 *ccfs1);
++
++/* Full fail-closed start_ap chandef check for the ht_bw=1 path.
++ * Validates the selector width, the centre-frequency arguments and, on
++ * 160 MHz, that ccfs1 is the segment centre and ccfs2 == 0.  Returns 0/-errno.
++ * (cfg80211 validates the chandef first; this is the driver-side belt.) */
++int hi5622_dfs160_width_check(u32 width, u8 channel, u32 ccfs1, u32 ccfs2);
++
++/* ===================================================================
++ * 2. The DFS channel set (the ch144 gap)
++ * =================================================================== */
++
++/* IEEE channel number -> centre frequency in MHz (only the 29 vendor
++ * band-1 channels are known; 0 on success, -EINVAL otherwise). */
++int hi5622_dfs160_chan_freq(u8 channel, u16 *mhz);
++
++/* 1 = the vendor band-1 table channel is a DFS channel (52-64, 100-144). */
++int hi5622_dfs160_is_dfs_chan(u8 channel);
++
++/* 1 = the channel is in the 5600..5650 MHz TDWR window (ch 100-128) - the
++ * 600000 ms CAC time channel class (the vendor adds the 600 s CAC for
++ * frequency - 5600 <= 50). */
++int hi5622_dfs160_is_tdwr_chan(u8 channel);
++
++/* 1 = centre_freq is inside 5600..5650 MHz (the same TDWR rule on MHz). */
++int hi5622_dfs160_is_tdwr_center(u16 center_freq);
++
++/* ===================================================================
++ * 3. CAC / NOL timing and the host state machine
++ * =================================================================== */
++#define HI5622_DFS160_CAC_MS_DEFAULT	60000u		/* UNII-2/2e */
++#define HI5622_DFS160_CAC_MS_TDWR	600000u		/* 5600..5650 MHz */
++#define HI5622_DFS160_CAC_FIRST_MS	63000u		/* vendor first timer */
++#define HI5622_DFS160_CAC_TICK_MS	60000u		/* vendor re-arm tick */
++#define HI5622_DFS160_NOL_MS		1800000u	/* 30 min non-occupancy */
++#define HI5622_DFS160_CAC_MIN_MS	60000u
++
++/* One CAC plan (derived from the channel, the centre frequency and the
++ * cfg80211-provided cac_time_ms; the driver floor is the vendor value). */
++struct hi5622_dfs160_cac_plan {
++	u8	channel;
++	u8	tdwr;		/* 1 = the 560000..5650 window */
++	u32	cac_ms;		/* 60000 or 600000 (or a longer request) */
++	u32	first_ms;	/* 63000 */
++	u32	tick_ms;	/* 60000 */
++	u32	ticks;		/* cac_ms / 60000 (>= 1) */
++	u32	nol_ms;		/* 1800000 */
++};
++
++/* Fill *out for a DFS channel.  The driver floor wins: cac_ms >= 60000 and,
++ * in the TDWR window, >= 600000; a cfg80211 cac_time_ms above the floor is
++ * honoured (hostapd's own value).  Returns 0 or -EINVAL/-EOPNOTSUPP. */
++int hi5622_dfs160_cac_plan(u8 channel, u16 center_freq, u32 requested_ms,
++			   struct hi5622_dfs160_cac_plan *out);
++
++enum hi5622_dfs160_cac_state {
++	HI5622_DFS160_CAC_OFF = 0,	/* no CAC attempted / idle */
++	HI5622_DFS160_CAC_ARMED = 1,	/* 0x07E7{01} posted, timer running */
++	HI5622_DFS160_CAC_FINISHED = 2,	/* CAC complete, 0x07E7{00} posted */
++	HI5622_DFS160_CAC_ABORTED = 3,	/* end_cac / teardown */
++};
++
++struct hi5622_dfs160_cac {
++	u8	state;
++	u8	channel;
++	u8	tdwr;
++	u8	radar_type;	/* last radar type 0..8, 0xff = none */
++	u16	center_freq;
++	u32	cac_ms;
++	u32	first_ms;
++	u32	tick_ms;
++	u32	ticks;
++	u32	ticks_done;
++	u32	nol_ms;
++	u32	nol_end_ms;	/* 0 = no NOL */
++	u32	radar_count;
++	struct hi5622_dfs160_cac_plan plan;
++};
++
++void hi5622_dfs160_cac_init(struct hi5622_dfs160_cac *st);
++
++/* Begin CAC on a DFS channel (the state must be OFF/FINISHED/ABORTED).
++ *  0 ok; -EALREADY when already ARMED; -EINVAL bad args/not a DFS channel. */
++int hi5622_dfs160_cac_begin(struct hi5622_dfs160_cac *st, u8 channel,
++			    u16 center_freq, u32 requested_ms);
++
++/* The delay before the next timer callback: first_ms on the first tick,
++ * tick_ms afterwards.  0 when not ARMED. */
++u32 hi5622_dfs160_cac_delay_ms(const struct hi5622_dfs160_cac *st);
++
++enum hi5622_dfs160_cac_step {
++	HI5622_DFS160_STEP_REARM = 0,	/* timer must be re-armed */
++	HI5622_DFS160_STEP_FINISH = 1,	/* CAC complete: post 0x07E7{00} */
++	HI5622_DFS160_STEP_IDLE = 2,	/* not armed */
++};
++
++/* Advance one timer tick.  FINISH when ticks_done reached ticks. */
++enum hi5622_dfs160_cac_step hi5622_dfs160_cac_tick(struct hi5622_dfs160_cac *st);
++
++/* Terminal transitions (idempotent): FINISHED / ABORTED. */
++void hi5622_dfs160_cac_finish(struct hi5622_dfs160_cac *st);
++void hi5622_dfs160_cac_abort(struct hi5622_dfs160_cac *st);
++
++/* Radar detected: abort a running CAC (a radar hit during CAC invalidates
++ * it) and start the 30 min non-occupancy period.  type is the decoded
++ * radar type 0..8 (the vendor's per-type counters).  now_ms is the caller's
++ * monotonic clock (only used for the NOL end).  0/-EINVAL. */
++int hi5622_dfs160_cac_radar(struct hi5622_dfs160_cac *st, u8 type, u32 now_ms);
++
++/* 1 = the NOL for this channel is still running at now_ms. */
++int hi5622_dfs160_nol_active(const struct hi5622_dfs160_cac *st, u32 now_ms);
++
++/* start_ap gate: the CAC on (channel, center_freq) is finished and no NOL is
++ * running => 0; -EAGAIN otherwise (the AP must not beacon on an unchained
++ * DFS channel); -EINVAL bad args. */
++int hi5622_dfs160_cac_ap_gate(const struct hi5622_dfs160_cac *st, u8 channel,
++			      u16 center_freq, u32 now_ms);
++
++const char *hi5622_dfs160_cac_state_name(u8 state);
++
++/* One read-only sysfs status line (the driver appends it to cfg80211_status):
++ *   dfs_cac: param=N (...) bw=N state=... channel=... cac_ms=... nol_ms=...
++ *            ticks=... radar=... arms=P finishes=F aborts=A refusals=R last_rc=R
++ * Returns the length, clamped like the sibling status lines. */
++int hi5622_dfs160_status_line(unsigned int ht_bw, unsigned int dfs_cac,
++			      const struct hi5622_dfs160_cac *st,
++			      int last_rc, unsigned int arms,
++			      unsigned int finishes, unsigned int aborts,
++			      unsigned int refusals, char *buf, size_t len);
++
++#endif /* HI5622_DFS160_H */
+diff --git a/hi5622_dfs_cac.c b/hi5622_dfs_cac.c
+new file mode 100644
+index 0000000..2e4b6d3
+--- /dev/null
++++ b/hi5622_dfs_cac.c
+@@ -0,0 +1,345 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * hi5622_dfs_cac.c - the kernel-side DFS/CAC runtime for the Hi5622V100
++ * clean-room full-MAC driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane dfs160 / shared task task-240, 2026-11-26).
++ * Wire facts: the H2D g0-id1 key 0x07E7 body {01}=ARM / {00}=CLEAR and the
++ * firmware worker CA 0xB58FC are the committed decode of
++ * ../wifi-5g-dfs-set (TABLES) and ../wifi-5g-cac-context; the CAC/NOL
++ * timings are the committed decode of ../wifi-5g-160-dfs/TABLES T4/T5.  No
++ * vendor source, object code or firmware byte is reproduced.
++ *
++ * The cfg80211 contract (net/wireless/nl80211.c + mlme.c, 6.18):
++ *   - start_radar_detection(...) returning 0 makes cfg80211 mark the wdev
++ *     CAC as started; the driver must later report
++ *     cfg80211_cac_event(NL80211_RADAR_CAC_FINISHED) (or ABORTED);
++ *   - cfg80211_cac_event(FINISHED) WARNs when it arrives before
++ *     start_time + cac_time_ms, so the first timer is 63000 ms (the vendor
++ *     hmac_dfs_cac_start timer is 63000 ms too) and the re-arm tick is
++ *     60000 ms: 60000 ms -> 63 s, 600000 ms -> 63 s + 9 x 60 s = 603 s;
++ *   - end_cac(..) is called by cfg80211 for an abort/teardown; the driver
++ *     only stops its hardware state (the core emits NL80211_RADAR_CAC_ABORTED).
++ *
++ * The 0x07E7 ARM is posted only after the SAME live precheck the AP-start
++ * dfs_set step uses (hi5622_dfs_set_precheck on the hi5622_scan_dfs_set_probe
++ * pack): the firmware ARM worker's started-module gate needs the 0x0065 VAP
++ * start, so on a fresh interface the op fails CLOSED with -EAGAIN and the
++ * probe pack in dmesg - the bench learns exactly which prerequisite is
++ * missing instead of the driver posting a frame the worker would drop.
++ */
++#include <linux/device.h>
++#include <linux/errno.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/netdevice.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/workqueue.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_cfg80211.h"
++#include "hi5622_dfs_cac.h"
++#include "hi5622_dfs160.h"
++#include "hi5622_dfs_set.h"
++#include "hi5622_driver.h"
++#include "hi5622_frame_post.h"
++#include "hi5622_scan.h"
++
++unsigned int hi5622_dfs_cac;
++module_param_named(dfs_cac, hi5622_dfs_cac, uint, 0444);
++MODULE_PARM_DESC(dfs_cac,
++		 "5 GHz DFS: cfg80211 start_radar_detection/end_cac CAC runtime (0=off default = no op, no frame, no AP-start DFS gate; 1=on: probe the live 0x0065/started-module prerequisite, post the H2D key 0x07E7 ARM, run the CAC 60000 ms (600000 ms in the 5600-5650 MHz TDWR window) host timer, report CAC_FINISHED, keep a DFS AP from beaconing before the CAC finished; >1 refused)");
++
++#define HI5622_DFS_CAC_WIRE_MAX	64u
++
++static void hi5622_dfs_cac_work(struct work_struct *work);
++
++static struct device *hi5622_dfs_cac_dev(struct hi5622_dfs_cac *r)
++{
++	return &r->ctx->pdev->dev;
++}
++
++static int hi5622_dfs_cac_post(struct hi5622_dfs_cac *r, u8 body,
++			       const char *name)
++{
++	u8 wire[HI5622_DFS_CAC_WIRE_MAX];
++	size_t len = 0;
++	int rc;
++
++	rc = hi5622_dfs_set_build(wire, sizeof(wire), &len, body);
++	if (rc)
++		return rc;
++	return hi5622_frame_post(r->ctx, wire, len, name, NULL);
++}
++
++/* The timer callback: one vendor CAC tick.  REARM schedules the next tick;
++ * FINISH posts 0x07E7{00} and (only for a cfg80211-owned CAC) reports
++ * NL80211_RADAR_CAC_FINISHED. */
++static void hi5622_dfs_cac_work(struct work_struct *work)
++{
++	struct hi5622_dfs_cac *r = container_of(to_delayed_work(work),
++						struct hi5622_dfs_cac, work);
++	struct device *dev = hi5622_dfs_cac_dev(r);
++	struct hi5622_dfs160_cac *st = &r->model;
++	enum hi5622_dfs160_cac_step step;
++	u32 delay;
++	int rc;
++
++	mutex_lock(&r->lock);
++	if (st->state != HI5622_DFS160_CAC_ARMED) {
++		mutex_unlock(&r->lock);
++		return;
++	}
++	step = hi5622_dfs160_cac_tick(st);
++	if (step == HI5622_DFS160_STEP_REARM) {
++		delay = hi5622_dfs160_cac_delay_ms(st);
++
++		dev_info(dev,
++			 "cfg80211: dfs_cac tick %u/%u on ch%u (next in %u ms)\n",
++			 st->ticks_done, st->ticks, st->channel, delay);
++		if (delay)
++			schedule_delayed_work(&r->work,
++					      msecs_to_jiffies(delay));
++		mutex_unlock(&r->lock);
++		return;
++	}
++	/* CAC complete: disarm the firmware radar detector, then report. */
++	rc = hi5622_dfs_cac_post(r, HI5622_DFS_SET_BODY_CLEAR, "dfs_cac_clear");
++	r->last_rc = rc ? (unsigned int)-rc : 0u;
++	if (rc) {
++		r->aborts++;
++		dev_warn(dev,
++			 "cfg80211: dfs_cac CLEAR not posted (%d) on ch%u - CAC state kept, reporting ABORTED\n",
++			 rc, st->channel);
++		hi5622_dfs160_cac_abort(st);
++	} else {
++		hi5622_dfs160_cac_finish(st);
++		r->finishes++;
++		dev_info(dev,
++			 "cfg80211: dfs_cac CAC FINISHED on ch%u (cac_ms=%u, %u tick(s)) - 0x07E7{00} CLEAR posted\n",
++			 st->channel, st->cac_ms, st->ticks);
++		if (r->requested && r->dev)
++			cfg80211_cac_event(r->dev, &r->chandef,
++					   NL80211_RADAR_CAC_FINISHED,
++					   GFP_KERNEL, r->link_id);
++	}
++	r->requested = 0u;
++	r->dev = NULL;
++	mutex_unlock(&r->lock);
++}
++
++struct hi5622_dfs_cac *hi5622_dfs_cac_create(struct hi5622_pci *ctx)
++{
++	struct hi5622_dfs_cac *r;
++
++	if (!ctx)
++		return NULL;
++	r = kzalloc(sizeof(*r), GFP_KERNEL);
++	if (!r)
++		return NULL;
++	r->ctx = ctx;
++	r->last_rc = (unsigned int)-ENODATA;
++	mutex_init(&r->lock);
++	hi5622_dfs160_cac_init(&r->model);
++	INIT_DELAYED_WORK(&r->work, hi5622_dfs_cac_work);
++	return r;
++}
++
++void hi5622_dfs_cac_destroy(struct hi5622_dfs_cac *r)
++{
++	if (!r)
++		return;
++	cancel_delayed_work_sync(&r->work);
++	mutex_destroy(&r->lock);
++	kfree(r);
++}
++
++int hi5622_dfs_cac_op_start(struct wiphy *wiphy, struct net_device *dev,
++			    struct cfg80211_chan_def *chandef,
++			    u32 cac_time_ms, int link_id)
++{
++	struct hi5622_cfg80211 *c;
++	struct hi5622_dfs_cac *r;
++	struct hi5622_dfs_set_probe probe;
++	struct device *pdev;
++	u8 channel;
++	int rc;
++
++	if (!wiphy || !dev)
++		return -EINVAL;
++	c = wiphy_priv(wiphy);
++	if (!c || !c->dfs_cac)
++		return -EOPNOTSUPP;
++	r = c->dfs_cac;
++	if (hi5622_dfs_cac != 1u)
++		return -EOPNOTSUPP;	/* the default: no DFS service */
++	pdev = hi5622_dfs_cac_dev(r);
++	if (!dev->ieee80211_ptr ||
++	    dev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP) {
++		dev_warn(pdev,
++			 "cfg80211: dfs_cac REFUSED - start_radar_detection is only supported on an AP interface\n");
++		r->refusals++;
++		return -EINVAL;
++	}
++	if (!chandef || !chandef->chan)
++		return -EINVAL;
++	if (chandef->chan->band != NL80211_BAND_5GHZ) {
++		dev_warn(pdev,
++			 "cfg80211: dfs_cac REFUSED - channel %u is not a 5 GHz channel\n",
++			 chandef->chan->hw_value);
++		r->refusals++;
++		return -EINVAL;
++	}
++	channel = (u8)chandef->chan->hw_value;
++	mutex_lock(&r->lock);
++	rc = hi5622_dfs160_cac_begin(&r->model, channel,
++				     chandef->chan->center_freq, cac_time_ms);
++	if (rc) {
++		r->refusals++;
++		r->last_rc = (unsigned int)-rc;
++		dev_warn(pdev,
++			 "cfg80211: dfs_cac REFUSED - CAC on ch%u cannot start (%d): %s (already armed=%d, DFS channel=%d)\n",
++			 channel, rc,
++			 rc == -EALREADY ? "a CAC is already running on this module load" :
++			 rc == -EOPNOTSUPP ? "not a DFS channel" : "bad parameter",
++			 r->model.state == HI5622_DFS160_CAC_ARMED,
++			 hi5622_dfs160_is_dfs_chan(channel));
++		mutex_unlock(&r->lock);
++		return rc == -EALREADY ? -EBUSY : -EINVAL;
++	}
++	/* The live firmware precondition: the SAME fail-closed pack the
++	 * AP-start dfs_set step uses.  The 0x07E7 worker needs a started
++	 * module context (the 0x0065 VAP start writes mctx[0x0E]=1) and the
++	 * band-1 CAC context; without them the frame would be silently
++	 * dropped, so refuse and print the pack. */
++	hi5622_scan_dfs_set_probe(c->ctx, &probe);
++	rc = hi5622_dfs_set_precheck(&probe, HI5622_DFS_SET_MODE_ARM);
++	if (rc) {
++		r->refusals++;
++		r->last_rc = (unsigned int)-rc;
++		hi5622_dfs160_cac_abort(&r->model);
++		dev_warn(pdev,
++			 "cfg80211: dfs_cac ARM REFUSED (%d): %s - live pack mctx=0x%08x band=%u state=%u ec8=%u cac=%u ctx_present=%u b4a0=0x%08x regs=0x%02x (the firmware ARM worker needs the 0x0065 VAP start's started module context; no frame posted)\n",
++			 rc, hi5622_dfs_set_verdict(&probe,
++						    HI5622_DFS_SET_MODE_ARM),
++			 probe.mctx, probe.band, probe.state, probe.ec8,
++			 probe.cac, probe.ctx_present, probe.b4a0,
++			 probe.regs_pattern);
++		mutex_unlock(&r->lock);
++		return -EAGAIN;
++	}
++	rc = hi5622_dfs_cac_post(r, HI5622_DFS_SET_BODY_ARM, "dfs_cac_arm");
++	r->last_rc = rc ? (unsigned int)-rc : 0u;
++	if (rc) {
++		r->refusals++;
++		hi5622_dfs160_cac_abort(&r->model);
++		dev_warn(pdev,
++			 "cfg80211: dfs_cac ARM frame not posted (%d) - no CAC started\n",
++			 rc);
++		mutex_unlock(&r->lock);
++		return rc;
++	}
++	r->dev = dev;
++	r->chandef = *chandef;
++	r->link_id = (unsigned int)link_id;
++	r->requested = 1u;
++	r->arms++;
++	schedule_delayed_work(&r->work,
++			      msecs_to_jiffies(
++				      hi5622_dfs160_cac_delay_ms(&r->model)));
++	dev_info(pdev,
++		 "cfg80211: dfs_cac CAC STARTED on ch%u (%u MHz): 0x07E7{01} ARM posted, cac_ms=%u (tdwr=%u), ticks=%u x %u ms after the %u ms first timer, NOL %u ms - cfg80211 will get CAC_FINISHED after the CAC\n",
++		 r->model.channel, r->model.center_freq, r->model.cac_ms,
++		 r->model.tdwr, r->model.ticks, r->model.tick_ms,
++		 r->model.first_ms, r->model.nol_ms);
++	mutex_unlock(&r->lock);
++	cfg80211_cac_event(dev, chandef, NL80211_RADAR_CAC_STARTED,
++			   GFP_KERNEL, r->link_id);
++	return 0;
++}
++
++void hi5622_dfs_cac_op_end(struct wiphy *wiphy, struct net_device *dev,
++			   unsigned int link_id)
++{
++	struct hi5622_cfg80211 *c;
++	struct hi5622_dfs_cac *r;
++	struct device *pdev;
++	int rc;
++
++	(void)dev;
++	(void)link_id;
++	if (!wiphy)
++		return;
++	c = wiphy_priv(wiphy);
++	if (!c || !c->dfs_cac)
++		return;
++	r = c->dfs_cac;
++	pdev = hi5622_dfs_cac_dev(r);
++	/* Cancel OUTSIDE the lock: the work item takes the same lock. */
++	cancel_delayed_work_sync(&r->work);
++	mutex_lock(&r->lock);
++	if (r->model.state == HI5622_DFS160_CAC_ARMED) {
++		rc = hi5622_dfs_cac_post(r, HI5622_DFS_SET_BODY_CLEAR,
++					 "dfs_cac_clear");
++		r->last_rc = rc ? (unsigned int)-rc : 0u;
++		hi5622_dfs160_cac_abort(&r->model);
++		r->aborts++;
++		dev_info(pdev,
++			 "cfg80211: dfs_cac CAC ABORTED on ch%u (end_cac): 0x07E7{00} CLEAR %s (%d)\n",
++			 r->model.channel, rc ? "post failed" : "posted", rc);
++	}
++	r->requested = 0u;
++	r->dev = NULL;
++	mutex_unlock(&r->lock);
++}
++
++int hi5622_dfs_cac_ap_gate(struct hi5622_cfg80211 *c, u8 channel,
++			   u16 center_freq)
++{
++	struct hi5622_dfs_cac *r;
++	u32 now_ms;
++	int rc;
++
++	if (!c || !channel)
++		return -EINVAL;
++	if (hi5622_dfs_cac != 1u)
++		return 0;	/* feature off: the pre-feature AP path */
++	r = c->dfs_cac;
++	if (!r)
++		return -EIO;
++	now_ms = (u32)jiffies_to_msecs(jiffies);
++	mutex_lock(&r->lock);
++	rc = hi5622_dfs160_cac_ap_gate(&r->model, channel, center_freq, now_ms);
++	mutex_unlock(&r->lock);
++	return rc;
++}
++
++int hi5622_dfs_cac_status_line(struct hi5622_cfg80211 *c, unsigned int ht_bw,
++			       char *buf, size_t len)
++{
++	struct hi5622_dfs_cac *r;
++	int rc;
++
++	if (!c || !buf || !len)
++		return -EINVAL;
++	if (hi5622_dfs_cac != 1u) {
++		r = c->dfs_cac;
++		mutex_lock(&c->lock);
++		rc = hi5622_dfs160_status_line(ht_bw, 0u, r ? &r->model : NULL,
++					       0, 0u, 0u, 0u, 0u, buf, len);
++		mutex_unlock(&c->lock);
++		return rc;
++	}
++	r = c->dfs_cac;
++	if (!r)
++		return -EIO;
++	mutex_lock(&c->lock);
++	rc = hi5622_dfs160_status_line(ht_bw, 1u, &r->model,
++				       (int)r->last_rc, r->arms, r->finishes,
++				       r->aborts, r->refusals, buf, len);
++	mutex_unlock(&c->lock);
++	return rc;
++}
+\ No newline at end of file
+diff --git a/hi5622_dfs_cac.h b/hi5622_dfs_cac.h
+new file mode 100644
+index 0000000..25c0a84
+--- /dev/null
++++ b/hi5622_dfs_cac.h
+@@ -0,0 +1,79 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * hi5622_dfs_cac.h - the kernel-side DFS/CAC runtime: the cfg80211
++ * radar-detect ops (start_radar_detection/end_cac), the host CAC timer and
++ * the fail-closed AP-start DFS gate, for the Hi5622V100 clean-room full-MAC
++ * driver (Cudy WR3000 v2.0, Linux 6.18).
++ *
++ * ORIGINAL clean-room code (lane dfs160 / shared task task-240, 2026-11-26).
++ * The decisions (CAC 60000/600000 ms, the vendor 63 s/60 s tick arithmetic,
++ * the 1800000 ms NOL, the DFS channel set incl. ch144) live in the portable
++ * hi5622_dfs160.c; the 29-byte H2D g0-id1 key 0x07E7 ARM/CLEAR frame is
++ * built by the sibling hi5622_dfs_set.c (lane wifi-5g-dfs-set) and posted
++ * through the one fail-closed hi5622_frame_post() path.
++ *
++ * The runtime is fail closed at every gate:
++ *   - dfs_cac=0 (default): no op, no frame, no AP-start gate - the
++ *     byte-identical pre-feature behaviour;
++ *   - dfs_cac=1: the ops are live; start_radar_detection probes the live
++ *     firmware ARM prerequisites (the hi5622_dfs_set_precheck pack the
++ *     AP-start dfs_set step uses) and returns -EAGAIN instead of posting a
++ *     frame the firmware worker would refuse; the AP-start gate keeps a
++ *     DFS AP from beaconing without a finished CAC on that channel.
++ */
++#ifndef HI5622_DFS_CAC_H
++#define HI5622_DFS_CAC_H
++
++#include <linux/mutex.h>
++#include <linux/types.h>
++#include <linux/workqueue.h>
++#include <net/cfg80211.h>
++
++#include "hi5622_dfs160.h"
++
++struct hi5622_pci;
++struct hi5622_cfg80211;
++struct net_device;
++
++struct hi5622_dfs_cac {
++	struct hi5622_pci	*ctx;
++	struct hi5622_dfs160_cac model;
++	struct delayed_work	work;
++	struct mutex		lock;		/* model + timer + op state */
++	struct net_device	*dev;		/* CAC requester (cfg80211 op) */
++	struct cfg80211_chan_def chandef;	/* the CAC chandef copy */
++	unsigned int		link_id;
++	unsigned int		requested;	/* the cfg80211 op owns the CAC */
++	unsigned int		last_rc;	/* 0 or the last errno */
++	unsigned int		arms;
++	unsigned int		finishes;
++	unsigned int		aborts;
++	unsigned int		refusals;
++};
++
++/* dfs_cac module parameter (0 = off default, 1 = on, >1 refused). */
++extern unsigned int hi5622_dfs_cac;
++
++struct hi5622_dfs_cac *hi5622_dfs_cac_create(struct hi5622_pci *ctx);
++void hi5622_dfs_cac_destroy(struct hi5622_dfs_cac *r);
++
++/* cfg80211 ops (registered only in hi5622_cfg11_ops; both fail closed when
++ * dfs_cac != 1). */
++int hi5622_dfs_cac_op_start(struct wiphy *wiphy, struct net_device *dev,
++			    struct cfg80211_chan_def *chandef,
++			    u32 cac_time_ms, int link_id);
++void hi5622_dfs_cac_op_end(struct wiphy *wiphy, struct net_device *dev,
++			   unsigned int link_id);
++
++/* start_ap fail-closed DFS gate: 0 when the feature is off, when the channel
++ * is not a DFS channel, or when the CAC on that channel finished; -EAGAIN
++ * when dfs_cac=1 and the CAC is not finished (no beacon on an unchecked DFS
++ * channel); -EINVAL/-EIO on bad state. */
++int hi5622_dfs_cac_ap_gate(struct hi5622_cfg80211 *c, u8 channel,
++			   u16 center_freq);
++
++/* The read-only sysfs line appended to cfg80211_status. */
++int hi5622_dfs_cac_status_line(struct hi5622_cfg80211 *c, unsigned int ht_bw,
++			       char *buf, size_t len);
++
++#endif /* HI5622_DFS_CAC_H */
+diff --git a/hi5622_frames_api.h b/hi5622_frames_api.h
+index 62ee80e..06f1464 100644
+--- a/hi5622_frames_api.h
++++ b/hi5622_frames_api.h
+@@ -256,14 +256,21 @@ struct hi5622_vap_start_params {
+  * so both carriers are available; the provider owns the envelope.
+  *
+  * Body (4 B, [V] firmware worker 0x841B8):  [0] band (0=2.4G, 1=5G -> module
+- * ctx +0x11), [1] vendor mac_vap+2 [I] (-> ctx +0x12), [2] channel number
+- * (-> ctx +0x10), [3] unused by the worker.  The worker then programs the
++ * ctx +0x11), [1] the VENDOR BANDWIDTH SELECTOR (20M=0/40M=1/80M=2/160M=3,
++ * decoded in ../wifi-5g-160-dfs/TABLES T2/T7; the old "vendor mac_vap+2"
++ * reading was corrected by that decode) (-> ctx +0x12), [2] channel number
++ * (-> ctx +0x10), [3] unused by the worker.  HI5622_DFS160_BW_LEGACY in
++ * bandwidth keeps the pre-feature vap_id byte for a byte-identical wire.  The worker then programs the
+  * PHY/band channel (CA 0xFDCE4 family) - a zero module-channel context is
+  * what the bench-proven clean-room AP path leaves behind. */
+ struct hi5622_chan_cfg_params {
+ 	u8	band;		/* 0 = 2.4 GHz, 1 = 5 GHz */
+ 	u8	channel;	/* channel number (hw_value), 1..196 */
+-	u8	vap_id;		/* body[1] = vendor mac_vap+2 [I] */
++	u8	vap_id;		/* the legacy body[1] byte (used when bandwidth is
++				 * HI5622_DFS160_BW_LEGACY) */
++	u8	bandwidth;	/* lane dfs160: body[1] vendor bandwidth selector
++				 * (HI5622_DFS160_BW_20..160), or
++				 * HI5622_DFS160_BW_LEGACY = keep vap_id */
+ 	u8	module;		/* g0 hdr[3] module index */
+ 	u8	dst;		/* HCC dst nibble */
+ 	u32	seq;		/* WAL cfg-event sequence [I] */
+diff --git a/hi5622_scan.c b/hi5622_scan.c
+index e3531f2..70f68c1 100644
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -45,6 +45,8 @@
+ #include "hi5622_band_start.h"
+ #include "hi5622_dfs_mode.h"
+ #include "hi5622_dfs_set.h"
++#include "hi5622_dfs160.h"
++#include "hi5622_dfs_cac.h"
+ #include "hi5622_vap_start_g0.h"
+ 
+ /* =====================================================================
+@@ -221,6 +223,23 @@ static int hi5622_dfs_set_last_rc = -ENODATA;	/* never attempted */
+ static unsigned int hi5622_dfs_set_posts;
+ static unsigned int hi5622_dfs_set_refusals;
+ 
++/* lane dfs160 (task-240), FAIL-CLOSED default 0.  The 160 MHz selector:
++ * today the H2D key 0x0124 channel-config body byte[1] carries the VAP index
++ * (0 on the AP path), which the decode proves is really the vendor bandwidth
++ * selector (20M=0, 40M=1, 80M=2, 160M=3) consumed by the firmware worker
++ * CA 0x841B8 (module ctx+0x12) and the band-1 RF branch CA 0x40684 /
++ * CA 0x101890.  With ht_bw=1 the driver derives the selector from the
++ * cfg80211 chandef width and validates the 160 MHz segment centre first
++ * (80+80/320 are refused: the vendor wiphy VHP cap 0x00400064 has neither).
++ *   ht_bw=0 (default) = byte-identical pre-feature wire (legacy vap_id byte);
++ *   ht_bw=1           = write the selector into body[1];
++ *   ht_bw>1           = refused at use time BEFORE any frame. */
++unsigned int hi5622_ht_bw;
++module_param_named(ht_bw, hi5622_ht_bw, uint, 0444);
++MODULE_PARM_DESC(ht_bw,
++		 "5GHz AP start: 160 MHz width selector via H2D key 0x0124 body[1] (0=off default = legacy byte, 1=derive 20/40/80/160 from the cfg80211 chandef width with the 160 MHz segment-centre check, >1 refused)");
++static unsigned int hi5622_ht_bw_refusals;
++
+ /* lane wifi-band1-start-send (task-206), FAIL-CLOSED default 0.  The 5 GHz
+  * (band-1) MAC start is produced by CA 0x4AF0C, and the stock does not reach
+  * it through the VAP-start hook G+0x370 (that slot has no writer): it arms
+@@ -1838,7 +1857,7 @@ static void hi5622_scan_vap_start_g0_probe(struct hi5622_pci *ctx,
+  * fields (+ the four CAC-context words +0x49C/+0x4A0/+0x4A4/+0x4A8) plus
+  * bit0 of the six device registers (read-only; the window is host-readable,
+  * phys = CA + 0x3B8000) and never writes. */
+-static void hi5622_scan_dfs_set_probe(struct hi5622_pci *ctx,
++void hi5622_scan_dfs_set_probe(struct hi5622_pci *ctx,
+ 				      struct hi5622_dfs_set_probe *p)
+ {
+ 	const u32 *regs;
+@@ -2076,6 +2095,7 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
+ 	/* G12 latch: only a confirmed mctx[0x0E] == 1 after the 0x0065 post may
+ 	 * allow the 0x0242 band start (read-only). */
+ 	bool vap_start_g0_ok = false;
++	u8 ht_bw_sel = HI5622_DFS160_BW_LEGACY;
+ 	int rc;
+ 
+ 	if (!s || !s->initialized || !settings || !dev)
+@@ -2298,6 +2318,66 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
+ 		rc = -EINVAL;
+ 		goto out;
+ 	}
++	/* lane dfs160 (task-240): the 160 MHz selector + the DFS AP gate.
++	 * Fail closed BEFORE any frame (no partial ladder on a bad
++	 * parameter) and before the VAP-base latch is touched. */
++	if (hi5622_ht_bw > 1u) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - ht_bw=%u is not a valid width-selector parameter (0=off, 1=derive the 0x0124 body[1] bandwidth from the cfg80211 chandef width; no frame sent)\n",
++			 hi5622_ht_bw);
++		hi5622_ht_bw_refusals++;
++		rc = -EINVAL;
++		goto out;
++	}
++	if (hi5622_ht_bw == 1u) {
++		u8 bwsel = HI5622_DFS160_BW_LEGACY;
++
++		rc = hi5622_dfs160_width_check((u32)p->width,
++					       (u8)p->channel,
++					       settings->chandef.center_freq1,
++					       settings->chandef.center_freq2);
++		if (rc) {
++			dev_warn(wdev_dev,
++				 "cfg80211: start_ap REFUSED - ht_bw=1: chandef width=%u channel=%u centre=%u/%u MHz is not a selectable vendor width (%d; 80+80/320 are unsupported); no frame sent\n",
++				 (unsigned)p->width, (unsigned)p->channel,
++				 settings->chandef.center_freq1,
++				 settings->chandef.center_freq2, rc);
++			hi5622_ht_bw_refusals++;
++			rc = -EOPNOTSUPP;
++			goto out;
++		}
++		rc = hi5622_dfs160_width_selector((u32)p->width, &bwsel);
++		if (rc) {
++			hi5622_ht_bw_refusals++;
++			goto out;
++		}
++		ht_bw_sel = bwsel;
++		dev_info(wdev_dev,
++			 "cfg80211: ht_bw=1 width selector: cfg80211 width=%u -> 0x0124 body[1]=%u (%s), cfg80211 centre=%u/%u MHz\n",
++			 (unsigned)p->width, (unsigned)ht_bw_sel,
++			 ht_bw_sel == HI5622_DFS160_BW_160 ? "160M" :
++			 ht_bw_sel == HI5622_DFS160_BW_80 ? "80M" :
++			 ht_bw_sel == HI5622_DFS160_BW_40 ? "40M" : "20M",
++			 settings->chandef.center_freq1,
++			 settings->chandef.center_freq2);
++	}
++	/* lane dfs160 (task-240): one meaning per module load - the 0x07E7
++	 * frame has exactly one owner. */
++	if (hi5622_dfs_cac == 1u && hi5622_dfs_set != HI5622_DFS_SET_MODE_OFF) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap REFUSED - dfs_cac=1 and dfs_set=%u both own the H2D key 0x07E7; use dfs_set=0 with the cfg80211 CAC runtime (or dfs_set=1 without it); no frame sent\n",
++			 hi5622_dfs_set);
++		rc = -EINVAL;
++		goto out;
++	}
++	rc = hi5622_dfs_cac_ap_gate(c, (u8)p->channel, (u16)p->center_freq);
++	if (rc) {
++		dev_warn(wdev_dev,
++			 "cfg80211: start_ap DFS GATE REFUSED (%d) - a DFS channel must not beacon before the CAC finished on it (dfs_cac=%u - run the cfg80211 CAC first and check the dfs_cac status line); no frame sent\n",
++			 rc, hi5622_dfs_cac);
++		rc = -EAGAIN;
++		goto out;
++	}
+ 	/* Capture the pre-call VAP-base state BEFORE any post.  The firmware
+ 	 * populates module_ctx+0x190 ASYNCHRONOUSLY after vap_add/vap_start, so a
+ 	 * readback immediately after a fresh post is expected to be zero (bench R2
+@@ -2524,6 +2604,9 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
+ 		cp.band = p->band;
+ 		cp.channel = (u8)p->channel;
+ 		cp.vap_id = p->vap_id;
++		/* lane dfs160 (task-240): body[1] = the bandwidth selector when
++		 * ht_bw=1, else the legacy vap_id byte (byte-identical). */
++		cp.bandwidth = ht_bw_sel;
+ 		cp.module = p->module;
+ 		cp.dst = 0u;
+ 		cp.seq = 3u;
+@@ -2548,6 +2631,10 @@ int hi5622_scan_op_start_ap(struct wiphy *wiphy, struct net_device *dev,
+ 		dev_info(wdev_dev,
+ 			 "cfg80211: start_ap beacon_static frame %u/%u 'ap_chan' posted (%zu B, band=%u channel=%u) - vendor order: the firmware module channel context is programmed BEFORE the AP config\n",
+ 			 posted, plan_n, len, p->band, p->channel);
++		if (ht_bw_sel != HI5622_DFS160_BW_LEGACY)
++			dev_info(wdev_dev,
++				 "cfg80211: start_ap beacon_static 'ap_chan' carries the ht_bw=1 bandwidth selector body[1]=%u\n",
++				 (unsigned)ht_bw_sel);
+ 		{
+ 			/* lane wifi-5ghz-beacon (task-175): vendor-synchronous channel
+ 			 * activation.  The vendor waits for the firmware's 0x0124
+diff --git a/hi5622_scan.h b/hi5622_scan.h
+index 888870b..35a470e 100644
+--- a/hi5622_scan.h
++++ b/hi5622_scan.h
+@@ -35,6 +35,7 @@
+ 
+ #include "hi5622_band_cfg.h"
+ #include "hi5622_scan_logic.h"
++#include "hi5622_dfs_set.h"
+ 
+ struct hi5622_pci;
+ struct hi5622_cfg80211;
+@@ -104,6 +105,16 @@ int  hi5622_vap_hcc_add(struct hi5622_cfg80211 *c, u16 slot);
+ int  hi5622_vap_hcc_del(struct hi5622_cfg80211 *c, u16 user_id, const u8 *addr,
+ 			 u8 band, u8 vap_id);
+ 
++/* lane dfs160 (task-240): the live fail-closed 0x07E7 ARM prerequisite
++ * probe (the same read-only pack the AP-start dfs_set step uses; reused
++ * by the cfg80211 start_radar_detection op). */
++void hi5622_scan_dfs_set_probe(struct hi5622_pci *ctx,
++			       struct hi5622_dfs_set_probe *p);
++
++/* lane dfs160 (task-240): the 160 MHz width-selector parameter value
++ * (0 = off; 1 = derive the 0x0124 body[1] selector from the chandef). */
++extern unsigned int hi5622_ht_bw;
++
+ /* Read-only status (sysfs): provider, post gate and scan model. */
+ int  hi5622_scan_status(struct hi5622_cfg80211 *c, char *buf, size_t len);
+ 
+diff --git a/hi5622_vapscan_provider.c b/hi5622_vapscan_provider.c
+index 86e37fe..31fbbe1 100644
+--- a/hi5622_vapscan_provider.c
++++ b/hi5622_vapscan_provider.c
+@@ -364,6 +364,8 @@ static int vapscan_chan_cfg(u8 *wire, size_t cap, size_t *out_len,
+ 	hp.band = p->band;
+ 	hp.channel = p->channel;
+ 	hp.vap_id = p->vap_id;
++	/* lane dfs160 (task-240): the 0x0124 body[1] bandwidth selector. */
++	hp.bandwidth = p->bandwidth;
+ 	hp.module = p->module;
+ 	hp.dst = p->dst;
+ 	f = kmalloc(sizeof(*f), GFP_KERNEL);

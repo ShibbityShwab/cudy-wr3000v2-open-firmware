@@ -1,0 +1,50 @@
+# BUILD evidence - lane dfs160 (task-240), host-only
+# base: wifi-5g-dfs-relax lineage /tmp/dfs-relax-build (the bench-fired A-rung chain)
+# command: tools/build-dfs160.sh (WORK=/tmp/dfs160-work)
+# date: 2026-11-26
+
+== module build ==
+warnings: 0  errors: 0
+  CC [M]  hi5622_dfs160.o
+  CC [M]  hi5622_dfs_cac.o
+  LD [M]  hi5622_wifi.ko
+
+== installed artefact ==
+0313dcfd5b88af683b9c02221d0e38020885a21200480f9ea4b02be2b89a02ff  hi5622_wifi.ko
+b850cb11a760b4e10f68e782b6f9845ab587d1fd44b163941bdd8a18d4037e31  hi5622_wifi.unstripped.ko
+ec2e7d9f603845657942a40a0867eef6a1ee5eabbccc7c212481406bc543783c  .text.bin
+384072 hi5622_wifi.ko
+1494040 hi5622_wifi.unstripped.ko
+165236 .text.bin
+params: 68
+dfs_cac: (uint)
+dfs_set: (uint)
+ht_bw: (uint)
+band_start: (uint)
+vap_start_g0: (uint)
+depends:        cfg80211
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+
+== base pins (the pinned /tmp/dfs-relax-build lineage) ==
+8f97661898373f8b65befcc3a62b6b00407101430e2924d74f142904d518c9e9  Kbuild
+75b12c4dc4b60dc458153497b1fc4cac6927d5ede85b98f5fdb2b8efdbb71273  hi5622_scan.c
+bce2eb14175a28b9776ffeafea7815f1914596be5aef0f0928cc45e6ecae8ec9  hi5622_scan.h
+4400d546f4da045643bad1588b005ca6ad4774ba82d2d80a6d8c4b904e355f3c  hi5622_scan_logic.c
+6af774ef76b730c8f45d621bf338d12b041b96a3792be985df59ac5092a603e8  hi5622_scan_logic.h
+73998e99cf098dbc3e36e12f7c7427b39a1000e46cf97c10a2c48ec250f8e49e  hi5622_cfg80211.h
+81d7084a712b6585afab1b8fa2c8cd550304f2392c4476a7a9b8be1fd6128eb1  hi5622_cfg80211.c
+5bb68c77e7cf04d5b59ae2d35d8b4f65949072a5d34102e596bd4d1067dae6ac  hi5622_cfg80211_ops.c
+393ad0af2d225a8cb66d5edc8292746875e7796507a9ee4dc6eceb9240d80bc3  hi5622_frames_api.h
+07780062a3b4cd2a6da3cbadb461ec26c29a88ed576e477a60519e10f53fe638  hi5622_ap_frames.h
+1bb16d359c5f838b0b4c15510c87f9e0e321f6567d53d924b8abe439bf39885f  hi5622_ap_frames.c
+b66da889342e35fb868c154c49c467dd7a0e1b85df6599b5574ca85513a7b764  hi5622_vapscan_provider.c
+bd18897af88f58d550be31acf430e08af2b82f54e0fcdc780c8f1464e7f94df7  cfg80211-provider.symvers
+
+== lane source pins ==
+fd535a2a7d4f7b82c1cb59ce2f77ba51ba95c3b28901993c39195ea62e36c880  hi5622_dfs160.h
+9ae87d93c4d1df78371b58c93fda036c69056f98b9adec0543662b749e5113c9  hi5622_dfs160.c
+1fda1dba687f60890ac6bc830873211c705c62db83ea764bf32ac1dc3cd50c2d  hi5622_dfs_cac.h
+8b870c964382f9d544873a199266b8cac6883e44d1b53191337a26e9fc3ca96a  hi5622_dfs_cac.c
+
+== patch ==
+98bc135ae4542fe79ce41f6ec34ad7f182ef292aef5517429488b5d68b1ec449  /home/shibbityshwab/Documents/GitHub/cudy-wr3000v2/opensource/docs/incoming/dfs160/patches/0001-dfs160.patch
