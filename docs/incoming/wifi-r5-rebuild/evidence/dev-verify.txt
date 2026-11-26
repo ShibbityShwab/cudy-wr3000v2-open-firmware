@@ -1,0 +1,49 @@
+# independent verification of the rebuilt R5 module
+# verified 2026-11-26T04:55:55Z after tools/reproduce.sh --with-e2-rebuild (host-only, no device)
+
+## deliverables
+stripped:   /tmp/r5-rebuilt/hi5622_wifi.ko
+  24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c  /tmp/r5-rebuilt/hi5622_wifi.ko
+  size: 383240 B
+  params: 65
+unstripped: /tmp/r5-rebuilt/hi5622_wifi.ko.unstripped
+  233df986cfcd2c6a5936a5cab532e9d1986e473b40ca194144f02a2a036a0cfa  /tmp/r5-rebuilt/hi5622_wifi.ko.unstripped
+  size: 1424680 B
+
+## text section (must be identical in both forms)
+  stripped   .text sha256: a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d
+  unstripped .text sha256: a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d
+  cmp: identical
+
+## modinfo / build
+  filename:       /tmp/r5-rebuilt/hi5622_wifi.ko
+  name:           hi5622_wifi
+  vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 
+  cfg80211 symvers lines: 12
+  build log warnings/errors/undefined: 0
+
+## pinned artifact identity (expected 24f7221b..., 383,240 B, 65 params)
+  artifact sha256: MATCH (24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c)
+  artifact size:   MATCH (383240 B)
+  .text sha256:    MATCH (a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d)
+  params:          MATCH (65)
+  unstripped sha:  MATCH (233df986...)
+
+## R5 contract strings present in the module
+  PRESENT: AP config posted BEFORE the 0x0065 VAP start / 0x0242 band start (R5)
+  PRESENT: the firmware beacon template is in place for the TBTT
+  PRESENT: after the 0x0124 channel post (mctx[0x10..0x13] stored) and the AP config frames (R5)
+  PRESENT: after the 0x01F7 mode, the 0x0124 channel post, the AP config frames (R5)
+  PRESENT: G9: mctx[0x440] RF-enable flag is ZERO
+  PRESENT: G11: bandobj+0xEC8 band-up flag is ZERO
+
+## host tests (stage 10 of the committed run; 405 checks)
+  vap_start_g0_selftest: 295 checks, 0 failures
+  r5_order_frame_test: 110 checks, 0 failures
+  tests:     295 C + 110 Python checks, 0 failures
+
+## note
+  The .ko is LOCAL EVIDENCE ONLY and is never committed. The whole-file sha is
+  reproducible at the canonical build path /tmp/r5-build (an out-of-tree WORK
+  path changes a few bytes of build metadata outside .text; .text and params
+  stay identical - see ../wifi-band1-start-send-5/BUILD-NOTES.md).

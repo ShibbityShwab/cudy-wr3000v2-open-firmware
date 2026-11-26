@@ -1,0 +1,18 @@
+== beacon5g base pin OK, r1-band patched base pin OK
+== base artifact pinned: e8b17f7238afce459db61a9ca65b9a0a1336ce232c... (356612 B)
+== 1. pinned r1-band base staged: 89 files
+== 2. apply patches/0001-desc-table-send.patch
+== 3. src/ matches the patched tree (2 files)
+== 4. module build clean (0 warnings/errors)
+== 5. debug-strip keeps .text identical
+== 6. artifact contract PASS (60 params incl desc_table, feature strings, 12 symvers)
+artifact: /tmp/desctable-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 360448 B (stripped); unstripped 1370144 B
+sha256: aac6177ce84c972dafff67061951c2fe28e31a330f636c7a185c1511dfe800e3
+unstripped sha256: 2dc9595d5aaacb4e384e9e348e508d9df40756d687b1bfc59382793fdeb16f07
+text sha256: 6cf0cabd5d1b15b085f06d91f1522805408e8f5033020adaf1375ac4f8b24149
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 60 (r1-band 59 + desc_table)
+chain: pinned r1-band base (356,612 B sha e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4) + patches/0001-desc-table-send.patch
+desc_table: default 0 (off, current behaviour); 1 = post the 68-B 0x00F7 fix frame on a band-1 beacon_static AP before 0x0124; >1 refused
+== DONE - host-built module with the H2D 0x00F7 descriptor-table send (NOT fired)

@@ -1,0 +1,21 @@
+== beacon5g base pin OK, r1-band patched base pin OK
+== base artifact pinned: e8b17f7238afce459db61a9ca65b9a0a1336ce232c... (356612 B)
+== sibling 0x00F7 patch + sources pinned
+== 1. pinned r1-band base staged: 89 files
+== 2. apply sibling patches/0001-desc-table-send.patch (the 0x00F7 step)
+== 3. sibling 0x00F7 step applied (2 portable sources match)
+== 4. apply this lane's patches/0001-dfs-mode-send.patch (the 0x01F7 step)
+== 5. src/ matches the patched tree (2 files)
+== 6. module build clean (0 warnings/errors)
+== 7. debug-strip keeps .text identical
+== 8. artifact contract PASS (61 params incl dfs_mode, feature strings, 12 symvers)
+artifact: /tmp/dfsmode-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 364192 B (stripped); unstripped 1381900 B
+sha256: f540856776e77c00ff1a526582466763bac9a3e63834264099faf3a3a10266ac
+unstripped sha256: 54f164dec9f588c90466034baa5150a9f5e6479c45af32d46e57fc1c292c8786
+text sha256: 3fdcad2ddb1a0c2e81c3ca1dfb1f65058551e09976e3765b5d08081e7b2b6186
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 61 (desc-table-send 60 + dfs_mode)
+chain: pinned r1-band base (356,612 B sha e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4) + sibling 0x00F7 patch + patches/0001-dfs-mode-send.patch
+dfs_mode: default 0 (off, current behaviour); 1 = post the 29-B 0x01F7 mode-3 frame after the 0x00F7 table and before 0x0124; >1 refused
+== DONE - host-built module with the H2D 0x01F7 DFS/RF mode send (NOT fired)

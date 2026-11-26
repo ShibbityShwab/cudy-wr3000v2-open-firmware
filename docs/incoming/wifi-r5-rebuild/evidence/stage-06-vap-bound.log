@@ -1,0 +1,18 @@
+== fired base artifact pinned: e231240292f059e431ede6a2e9a347c357cdc2c371... (371212 B, 63 params)
+== 0x0242 base + lane patch pins OK
+== 1. pinned 0x0242 base staged: 95 files
+== 2. lane patch applied
+== 3. module build clean (0 warnings/errors)
+== 4. debug-strip keeps .text identical
+== 5. artifact contract PASS (64 params, VAP-index gates, 0x0242 lines, 12 symvers)
+artifact: /tmp/vapbound-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 373056 B (stripped); unstripped 1402780 B
+sha256: b8f6fe359c7e6138669c63be426733d4898266cd2da4be965b483bddc9ff5b71
+unstripped sha256: 28e14fb4a5dd8d1c60985ab001b218e94dd32544796a2872306a3a570237c1dd
+text sha256: ff4fb171e16212ee4b7038b15855ac14f402d3e2b30c7ac64d6194955a8ae99c
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 64 (63 fired 0x0242 base + vap_add_index)
+chain: pinned 0x0242 base (/tmp/bandstart-build, artifact e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + patches/0001-vap-add-index.patch
+vap_add_index: read-only uint, default 0 (the single AP); <= 0x12 and == vap_start_module enforced before any frame
+vap_add post: body data[4] + hdr[3] field B = vap_add_index; read-only band-list readback after the post
+== DONE - host-built module with the explicit VAP/module-index contract (NOT fired)

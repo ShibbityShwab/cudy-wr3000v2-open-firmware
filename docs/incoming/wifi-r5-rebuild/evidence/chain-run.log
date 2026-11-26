@@ -1,0 +1,210 @@
+chain: base(0) -> beacon5g(1) -> r1-band(2) -> desc-table(3) -> dfs-mode(4)
+       -> F2 field-B(4b) -> band-start-send(5) -> vap-bound(6) -> g0-start(7)
+       -> r4b-order(8) -> gates(9) -> r5-order(10) = 24f7221b...
+run start: 2026-11-26T04:53:21Z
+=== STAGE 00-e2-base START 2026-11-26T04:53:21Z
+=== STAGE 00-e2-base END 2026-11-26T04:53:33Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/00-e2-base.log
+    | == 3. src/ matches the patched driver sources
+    | == 4. module build clean (0 warnings/errors)
+    | == 5. debug-strip keeps .text identical
+    | == 6. artifact contract PASS (58 params incl vap5g, feature strings, 12 symvers)
+    | == 5 GHz AP module with the vap5g vendor-order patch (host-built, NOT fired)
+    | artifact  : /tmp/wifi-vapmsg5g-artifact/hi5622_wifi.ko (debug-stripped)
+    | size      : 353652 B
+    | sha256    : 13e7bf4c44772011e88903136c0c051d06d9ae5eab3c5e24df1ebb20f2cc1abf
+    | unstripped: 1350292 B
+    | .text sha : e028f4e82961a8d2c13f46d4908a73b38f2301e3f6efaaeff1ff34214c0fe1e5
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params    : 58 (57 ready module + vap5g)
+    | chain     : 5ghz-ready (assoc + band5g) + vap5g order patch
+    | vap5g     : default 0 (fail closed; 1 = vendor order, >1 refused)
+PIN OK  /tmp/wifi-vapmsg5g-artifact/hi5622_wifi.ko  353652 B  58 params  13e7bf4c44772011e88903136c0c051d06d9ae5eab3c5e24df1ebb20f2cc1abf
+=== STAGE 01-beacon5g START 2026-11-26T04:53:33Z
+=== STAGE 01-beacon5g END 2026-11-26T04:53:44Z exit=0 elapsed=11s log=/tmp/r5-rechain-logs/01-beacon5g.log
+    | == 3. src/ matches the patched driver sources
+    | == 4. module build clean (0 warnings/errors)
+    | == 5. debug-strip keeps .text identical
+    | == 6. artifact contract PASS (59 params incl ap_chan_wait_ms, feature strings, 12 symvers)
+    | == 5 GHz AP module with the fail-closed channel-activation gate (host-built, NOT fired)
+    | artifact  : /tmp/beacon5g-artifact/hi5622_wifi.ko (debug-stripped)
+    | size      : 356600 B
+    | sha256    : bc1cc0ead2c5b98a35eea875c353dc7e5bcf2e39b61ba9427408b714ea9a1bbb
+    | unstripped: 1357356 B
+    | .text sha : 80ca20e6d2a06660af1361eef8a982e334da9f61502c6652899b3ed116b6273b
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params    : 59 (E2 vap5g module + ap_chan_wait_ms)
+    | chain     : 5ghz-ready (assoc + band5g) + vap5g order patch + beacon5g gate patch
+    | ap_chan_wait_ms: default 0 (legacy; 1..1000 band-1 wait, >1000 refused)
+PIN OK  /tmp/beacon5g-artifact/hi5622_wifi.ko  356600 B  59 params  bc1cc0ead2c5b98a35eea875c353dc7e5bcf2e39b61ba9427408b714ea9a1bbb
+=== STAGE 02-r1-band START 2026-11-26T04:53:44Z
+=== STAGE 02-r1-band END 2026-11-26T04:53:56Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/02-r1-band.log
+    | == 0. pin the base tree source
+    |    base pinned (hi5622_vapscan_provider.c)
+    | == 1. base tree staged: 89 files
+    | == 2. apply the one-field VAP-start band patch
+    | == 3. patched provider: cfg_a = p->band
+    | == 4. module build clean (0 warnings/errors)
+    | == 5. debug-strip keeps .text identical
+    | == 6. contract PASS: 59 params, ap_chan_wait_ms/vap5g present
+    | artifact: /tmp/r1-band-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4  /tmp/r1-band-artifact/hi5622_wifi.ko
+    | unstripped sha256: 84b5591c7cf9b0a1fd9b28ee9b65e8263628db90fddcbc6f63ffb0a56597429b
+    | size: 356612 B; params: 59
+    | base: pinned beacon tree /tmp/beacon5g-build
+    | patch: patches/0001-vap-start-band.patch
+PIN OK  /tmp/r1-band-artifact/hi5622_wifi.ko  356612 B  59 params  e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4
+=== STAGE 03-desc-table START 2026-11-26T04:53:56Z
+=== STAGE 03-desc-table END 2026-11-26T04:54:07Z exit=0 elapsed=11s log=/tmp/r5-rechain-logs/03-desc-table.log
+    | == 3. src/ matches the patched tree (2 files)
+    | == 4. module build clean (0 warnings/errors)
+    | == 5. debug-strip keeps .text identical
+    | == 6. artifact contract PASS (60 params incl desc_table, feature strings, 12 symvers)
+    | artifact: /tmp/desctable-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 360448 B (stripped); unstripped 1370144 B
+    | sha256: aac6177ce84c972dafff67061951c2fe28e31a330f636c7a185c1511dfe800e3
+    | unstripped sha256: 2dc9595d5aaacb4e384e9e348e508d9df40756d687b1bfc59382793fdeb16f07
+    | text sha256: 6cf0cabd5d1b15b085f06d91f1522805408e8f5033020adaf1375ac4f8b24149
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 60 (r1-band 59 + desc_table)
+    | chain: pinned r1-band base (356,612 B sha e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4) + patches/0001-desc-table-send.patch
+    | desc_table: default 0 (off, current behaviour); 1 = post the 68-B 0x00F7 fix frame on a band-1 beacon_static AP before 0x0124; >1 refused
+    | == DONE - host-built module with the H2D 0x00F7 descriptor-table send (NOT fired)
+PIN OK  /tmp/desctable-artifact/hi5622_wifi.ko  360448 B  60 params  aac6177ce84c972dafff67061951c2fe28e31a330f636c7a185c1511dfe800e3
+=== STAGE 04-dfs-mode START 2026-11-26T04:54:07Z
+=== STAGE 04-dfs-mode END 2026-11-26T04:54:19Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/04-dfs-mode.log
+    | == 5. src/ matches the patched tree (2 files)
+    | == 6. module build clean (0 warnings/errors)
+    | == 7. debug-strip keeps .text identical
+    | == 8. artifact contract PASS (61 params incl dfs_mode, feature strings, 12 symvers)
+    | artifact: /tmp/dfsmode-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 364192 B (stripped); unstripped 1381900 B
+    | sha256: f540856776e77c00ff1a526582466763bac9a3e63834264099faf3a3a10266ac
+    | unstripped sha256: 54f164dec9f588c90466034baa5150a9f5e6479c45af32d46e57fc1c292c8786
+    | text sha256: 3fdcad2ddb1a0c2e81c3ca1dfb1f65058551e09976e3765b5d08081e7b2b6186
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 61 (desc-table-send 60 + dfs_mode)
+    | chain: pinned r1-band base (356,612 B sha e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4) + sibling 0x00F7 patch + patches/0001-dfs-mode-send.patch
+    | dfs_mode: default 0 (off, current behaviour); 1 = post the 29-B 0x01F7 mode-3 frame after the 0x00F7 table and before 0x0124; >1 refused
+    | == DONE - host-built module with the H2D 0x01F7 DFS/RF mode send (NOT fired)
+PIN OK  /tmp/dfsmode-artifact/hi5622_wifi.ko  364192 B  61 params  f540856776e77c00ff1a526582466763bac9a3e63834264099faf3a3a10266ac
+=== STAGE 04b-f2-fieldb START 2026-11-26T04:54:19Z
+=== STAGE 04b-f2-fieldb END 2026-11-26T04:54:19Z exit=0 elapsed=0s log=/tmp/r5-rechain-logs/04b-f2-fieldb.log
+    | == F2 patch pinned: 0530ca45528e0601af5a6f8b8523e3ed8e43cd2237c2361f6cfd03aa3504f926
+    | patching file hi5622_dfs_mode.h
+    | patching file hi5622_desc_table.c
+    |    F2 tree pin OK: hi5622_scan.c 8fbc8e1e180e3cd139aac0f4c28e6e8e0a8d314b62f6e917907b8a5b6523eca7
+    |    F2 tree pin OK: hi5622_scan_logic.c 75b9bdd5fd34bcd3862a7e185fb48bc98f6012c217b04fa5030ced899502f07c
+    |    F2 tree pin OK: hi5622_scan_logic.h b83e74cc5bd834eb981e0dc07f197e6c4c3cdc9bd4eb60107b35b1c973e0766e
+    |    F2 tree pin OK: Kbuild 900fb204ad817e787a0cde9201a02c6dc34d69d893ef0e4f06d140630fcb0759
+    |    F2 tree pin OK: hi5622_dfs_mode.h cd3b76aa75c5153654ca1e981d0f767fc100e7cb8e83406c55a43d0b4ce3c70b
+    |    F2 tree pin OK: hi5622_desc_table.c 5af935f29aa9a329aba365da1753c5edd896b74cfe1c0c50665de13b39797810
+    | == F2 tree: field B = 0x00 in both frame builders (the band-1 context)
+=== STAGE 05-band-start-send START 2026-11-26T04:54:19Z
+=== STAGE 05-band-start-send END 2026-11-26T04:54:30Z exit=0 elapsed=11s log=/tmp/r5-rechain-logs/05-band-start-send.log
+    | == 5. debug-strip keeps .text identical
+    | == 6. artifact contract PASS (63 params incl band_start + band_start_fallback, key immediates, feature strings, 12 symvers)
+    | artifact: /tmp/bandstart-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 371212 B (stripped); unstripped 1399948 B
+    | sha256: e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028
+    | unstripped sha256: 50f105f406474131a244f217ee539cae3794f58bced2f8346e5f5c4fa86a59d7
+    | text sha256: 884f0a35da01194598decd72fa81921188a6d32e00b0a4a3b3cd6078c2aea275
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 63 (F2 61 + band_start + band_start_fallback)
+    | chain: pinned F2 base (364,184 B sha 12427b8675b9151598d66c0b75410752bcc142178908542ff7d82aa54f059468) + patches/0001-band-start-send.patch
+    | band_start: default 0 (off, current behaviour); 1 = post the 33-B 0x0242 sync start after dfs_mode and before ap_chan; >1 refused
+    | band_start_fallback: default 0 (off); 1 = forced-start 0x0242 then the 0x0243 nudge if state[1] != 2; requires band_start=1
+    | keys: 0x0242 (primary 33 B, forced 33 B) + 0x0243 (nudge 29 B), g0 id1, field B = the AP-start module
+    | == DONE - host-built module with the H2D 0x0242 band-1 MAC-start send (NOT fired)
+PIN OK  /tmp/bandstart-artifact/hi5622_wifi.ko  371212 B  63 params  e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028
+=== STAGE 06-vap-bound START 2026-11-26T04:54:30Z
+=== STAGE 06-vap-bound END 2026-11-26T04:54:42Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/06-vap-bound.log
+    | == 3. module build clean (0 warnings/errors)
+    | == 4. debug-strip keeps .text identical
+    | == 5. artifact contract PASS (64 params, VAP-index gates, 0x0242 lines, 12 symvers)
+    | artifact: /tmp/vapbound-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 373056 B (stripped); unstripped 1402780 B
+    | sha256: b8f6fe359c7e6138669c63be426733d4898266cd2da4be965b483bddc9ff5b71
+    | unstripped sha256: 28e14fb4a5dd8d1c60985ab001b218e94dd32544796a2872306a3a570237c1dd
+    | text sha256: ff4fb171e16212ee4b7038b15855ac14f402d3e2b30c7ac64d6194955a8ae99c
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 64 (63 fired 0x0242 base + vap_add_index)
+    | chain: pinned 0x0242 base (/tmp/bandstart-build, artifact e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + patches/0001-vap-add-index.patch
+    | vap_add_index: read-only uint, default 0 (the single AP); <= 0x12 and == vap_start_module enforced before any frame
+    | vap_add post: body data[4] + hdr[3] field B = vap_add_index; read-only band-list readback after the post
+    | == DONE - host-built module with the explicit VAP/module-index contract (NOT fired)
+PIN OK  /tmp/vapbound-artifact/hi5622_wifi.ko  373056 B  64 params  b8f6fe359c7e6138669c63be426733d4898266cd2da4be965b483bddc9ff5b71
+=== STAGE 07-vap-start-g0 START 2026-11-26T04:54:42Z
+=== STAGE 07-vap-start-g0 END 2026-11-26T04:54:54Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/07-vap-start-g0.log
+    | == 4. debug-strip keeps .text identical
+    | == 5. artifact contract PASS (65 params, 0x0065 step + G5/G12 gates, 12 symvers)
+    | artifact: /tmp/g0start-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 382072 B (stripped); unstripped 1422988 B
+    | sha256: bb0434c24b333f889daf6b062b6e771cb5b045e28ad2ef9c9c2c05f2a78c9711
+    | unstripped sha256: 05ca89cc9e348cf3f99270d4c5c94b2dc9e3a09e3ebbbf3cfa290e84b6ea0cc4
+    | text sha256: 3d3b45ffe483a7740c93aa6458a02461bf1226578371350d55df85ea8b972cc3
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 65 (64 send-2 + vap_start_g0)
+    | chain: fired 0x0242 base (e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + send-2 patch (968d70c5c4f13005e6ddee7f1bed2423888c8a58ed7582a7806b8ea031b813fb) + this lane patch (0a8a1c1bda3ebaaf05933b670d996a2962f2679ecf0075237bf6d4adef30fc4c)
+    | vap_start_g0: read-only uint, default 0; <= 1 with beacon_static=1 enforced before any frame; band-1 post only after G1..G13; G12 gates the 0x0242
+    | frame: 40 B g0 id1 key 0x0065 (field B=vap index), body {00,01,01,00,00,00,00,00,00,00,00,00}, total 0x28, node word1 0x00286d2b
+    | patched tree shas: scan=da488e3cd69db6c9d6c9f661806eecf21ccc6f44f4f0dd08ab5571c7d1f95370 logic.c=7e5edbc42a3c4abd2c619672226870fb13db48c3045fd49252b3a200d321326c logic.h=fc4e43d1d55a36f0d92deafd144f4488515515dc4e7e516a1f3f04c1f6c994d8 bstart.h=3fd2c6088af4381736854e5ca1e6c176e0ae659b72a1b9f051f2bd1fef972aea vsg.c=ece5c0d60701d05ce0c1ab5afbb75229cfb2a2734bf9c17fb99706e0eb2e81ff vsg.h=68c2eb79cb77cf33bae6559659b28f8ff58bf6d396e9cd4bec26b7d2e6e4eef8 kbuild=1bb510853b305577d36e19a09507407f8f10d0a3d3531a5b4946a7d9b1fc141d
+    | == DONE - host-built module with the key-0x0065 VAP-start step (NOT fired)
+PIN OK  /tmp/g0start-artifact/hi5622_wifi.ko  382072 B  65 params  bb0434c24b333f889daf6b062b6e771cb5b045e28ad2ef9c9c2c05f2a78c9711
+=== STAGE 08-r4b-order START 2026-11-26T04:54:54Z
+=== STAGE 08-r4b-order END 2026-11-26T04:55:05Z exit=0 elapsed=11s log=/tmp/r5-rechain-logs/08-r4b-order.log
+    | == 7. debug-strip keeps .text identical
+    | == 8. artifact contract PASS (65 params, R4b order strings + plan order, 12 symvers)
+    | artifact: /tmp/r4border-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+    | size: 382188 B (stripped); unstripped 1423196 B
+    | sha256: b9926c1c4201cfe698c9fb6828a0d4e6a4fc45ba620bb49d745859ef7fda1102
+    | unstripped sha256: a9d5d675b68f441b1a28c291a034aa025d71e20a3ad4d6150cd7d6df3516b0ed
+    | text sha256: f2848fdc3db7c0913a208aefd7fc85230817cc143158d9f50ef3529e59cbf6ff
+    | vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+    | params: 65 (64 send-2 + vap_start_g0; unchanged by the reorder)
+    | chain: fired 0x0242 base (e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028, 63 params) + send-2 patch (968d70c5c4f13005e6ddee7f1bed2423888c8a58ed7582a7806b8ea031b813fb) + send-3 patch (0a8a1c1bda3ebaaf05933b670d996a2962f2679ecf0075237bf6d4adef30fc4c) + this order patch (3628899843628984b1373f9c1e2ccd6539aff8920ac3188401a24a83b1c21775)
+    | R4b order: vap_add -> desc_table -> dfs_mode -> ap_chan -> vap_start_g0 -> band_start -> ap_ssid -> ap_cfg -> ap_vap_start
+    | vap_start_g0: read-only uint, default 0; G8 (mctx[0x11]==1) now passes after the ap_chan; G12 (mctx[0x0E]==1) gates the 0x0242; G5 (mctx[0x190]!=0) gates the 0x0065
+    | patched tree shas: scan=ab14fa07f53ef199c503178ce8ae8c0966f6b0cf3ee5b435b2c72e54618b2375 logic.c=ab7b8bac84f8a1f57d3ccd0b2f6ceca730b33aa67d77244b4df9a54ec7a3d97b logic.h=3bfe123919f4d1eb466173b8f3c811cb5f02e3a10f6f5139af8b14f797e4058e bstart.h=443b071d3ce131c21d46c54e9f7f510221cf75d31a39603c8e68907394bd1ddc vsg.h=fe165a82f87b745c54354976e52b387ee1d3d0e537f1806a86aa29712903df21 (vsg.c + kbuild unchanged from send-3)
+    | == DONE - host-built R4b-order module (NOT fired)
+PIN OK  /tmp/r4border-artifact/hi5622_wifi.ko  382188 B  65 params  b9926c1c4201cfe698c9fb6828a0d4e6a4fc45ba620bb49d745859ef7fda1102
+=== STAGE 09-gates START 2026-11-26T04:55:05Z
+=== STAGE 09-gates END 2026-11-26T04:55:17Z exit=0 elapsed=12s log=/tmp/r5-rechain-logs/09-gates.log
+    | vap_start_g0_selftest: 293 checks, 0 failures
+    | r4b_order_frame_test: 93 checks, 0 failures
+    | == DONE - gate-inverted module (host-built, NOT fired)
+    | artifact:  /tmp/vsg-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+    | size:      382376 B (stripped); unstripped 1423132 B
+    | sha256:    9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+    | unstripped: 99eeb5b97594062bfa407b6b9505ab838d7d4f88c5d1c853b785411b77496777
+    | text:      f9ce407d6d60314d07ed996b01bfdbf666764d0a8c91c71c44b1b473371ee550
+    | params:    65 (unchanged)
+    | base:      /tmp/r4border-build + patches/0001-g9-g11-rf-enable-invert.patch
+    | tests:     293 C + 93 Python checks, 0 failures
+PIN OK  /tmp/vsg-artifact/hi5622_wifi.ko  382376 B  65 params  9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+=== STAGE 10-r5-order START 2026-11-26T04:55:17Z
+=== STAGE 10-r5-order END 2026-11-26T04:55:30Z exit=0 elapsed=13s log=/tmp/r5-rechain-logs/10-r5-order.log
+    | vap_start_g0_selftest: 295 checks, 0 failures
+    | r5_order_frame_test: 110 checks, 0 failures
+    | == DONE - R5 order module (host-built, NOT fired)
+    | artifact:  /tmp/r5-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+    | size:      383240 B (stripped); unstripped 1424680 B
+    | sha256:    24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c
+    | unstripped: 233df986cfcd2c6a5936a5cab532e9d1986e473b40ca194144f02a2a036a0cfa
+    | text:      a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d
+    | params:    65 (unchanged)
+    | base:      gate-inverted tree (wifi-vap-start-gates 0001 on /tmp/r4border-build)
+    | base artefact (gate-inverted 9bf1d846...): 9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+    | tests:     295 C + 110 Python checks, 0 failures
+PIN OK  /tmp/r5-artifact/hi5622_wifi.ko  383240 B  65 params  24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c
+
+=== FINAL
+artifact: /tmp/r5-rebuilt/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+sha256:   24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c
+size:     383240 B
+params:   65
+unstripped: 1424680 B sha256 233df986cfcd2c6a5936a5cab532e9d1986e473b40ca194144f02a2a036a0cfa
+.text sha: a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d (expected a727c339714b8826ea069194a50d376622175ec5adf8e7b537442edc7731d11d)
+vermagic: 6.18.60 SMP mod_unload ARMv7 p2v8 
+host tests: 295 C + 110 Python checks, 0 failures (stage-10 log)
+equal to the installed-form 24f7221b: MATCH
+chain elapsed: 129s

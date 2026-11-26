@@ -1,0 +1,11 @@
+vap_start_g0_selftest: 293 checks, 0 failures
+r4b_order_frame_test: 93 checks, 0 failures
+== DONE - gate-inverted module (host-built, NOT fired)
+artifact:  /tmp/vsg-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+size:      382376 B (stripped); unstripped 1423132 B
+sha256:    9bf1d846e730ce57a5adfef9a2fed9ab589fcba159b6cd08165339917673cf82
+unstripped: 99eeb5b97594062bfa407b6b9505ab838d7d4f88c5d1c853b785411b77496777
+text:      f9ce407d6d60314d07ed996b01bfdbf666764d0a8c91c71c44b1b473371ee550
+params:    65 (unchanged)
+base:      /tmp/r4border-build + patches/0001-g9-g11-rf-enable-invert.patch
+tests:     293 C + 93 Python checks, 0 failures

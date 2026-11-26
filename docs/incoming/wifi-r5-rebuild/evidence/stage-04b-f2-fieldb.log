@@ -1,0 +1,10 @@
+== F2 patch pinned: 0530ca45528e0601af5a6f8b8523e3ed8e43cd2237c2361f6cfd03aa3504f926
+patching file hi5622_dfs_mode.h
+patching file hi5622_desc_table.c
+   F2 tree pin OK: hi5622_scan.c 8fbc8e1e180e3cd139aac0f4c28e6e8e0a8d314b62f6e917907b8a5b6523eca7
+   F2 tree pin OK: hi5622_scan_logic.c 75b9bdd5fd34bcd3862a7e185fb48bc98f6012c217b04fa5030ced899502f07c
+   F2 tree pin OK: hi5622_scan_logic.h b83e74cc5bd834eb981e0dc07f197e6c4c3cdc9bd4eb60107b35b1c973e0766e
+   F2 tree pin OK: Kbuild 900fb204ad817e787a0cde9201a02c6dc34d69d893ef0e4f06d140630fcb0759
+   F2 tree pin OK: hi5622_dfs_mode.h cd3b76aa75c5153654ca1e981d0f767fc100e7cb8e83406c55a43d0b4ce3c70b
+   F2 tree pin OK: hi5622_desc_table.c 5af935f29aa9a329aba365da1753c5edd896b74cfe1c0c50665de13b39797810
+== F2 tree: field B = 0x00 in both frame builders (the band-1 context)

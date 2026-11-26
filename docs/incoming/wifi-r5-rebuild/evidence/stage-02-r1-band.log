@@ -1,0 +1,14 @@
+== 0. pin the base tree source
+   base pinned (hi5622_vapscan_provider.c)
+== 1. base tree staged: 89 files
+== 2. apply the one-field VAP-start band patch
+== 3. patched provider: cfg_a = p->band
+== 4. module build clean (0 warnings/errors)
+== 5. debug-strip keeps .text identical
+== 6. contract PASS: 59 params, ap_chan_wait_ms/vap5g present
+artifact: /tmp/r1-band-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+e8b17f7238afce459db61a9ca65b9a0a1336ce232c933c65990d444350e4abd4  /tmp/r1-band-artifact/hi5622_wifi.ko
+unstripped sha256: 84b5591c7cf9b0a1fd9b28ee9b65e8263628db90fddcbc6f63ffb0a56597429b
+size: 356612 B; params: 59
+base: pinned beacon tree /tmp/beacon5g-build
+patch: patches/0001-vap-start-band.patch

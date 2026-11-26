@@ -1,0 +1,20 @@
+== F2 base tree pins OK (the field-B fix is in the base)
+== lane patch + portable sources pinned
+== 1. pinned F2 base staged: 93 files
+== 2. apply this lane's patches/0001-band-start-send.patch (the 0x0242 step)
+== 3. patch applied (2 portable sources match)
+== 4. module build clean (0 warnings/errors)
+== 5. debug-strip keeps .text identical
+== 6. artifact contract PASS (63 params incl band_start + band_start_fallback, key immediates, feature strings, 12 symvers)
+artifact: /tmp/bandstart-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY - never committed)
+size: 371212 B (stripped); unstripped 1399948 B
+sha256: e231240292f059e431ede6a2e9a347c357cdc2c3713a1695d46fd38547afa028
+unstripped sha256: 50f105f406474131a244f217ee539cae3794f58bced2f8346e5f5c4fa86a59d7
+text sha256: 884f0a35da01194598decd72fa81921188a6d32e00b0a4a3b3cd6078c2aea275
+vermagic=6.18.60 SMP mod_unload ARMv7 p2v8 
+params: 63 (F2 61 + band_start + band_start_fallback)
+chain: pinned F2 base (364,184 B sha 12427b8675b9151598d66c0b75410752bcc142178908542ff7d82aa54f059468) + patches/0001-band-start-send.patch
+band_start: default 0 (off, current behaviour); 1 = post the 33-B 0x0242 sync start after dfs_mode and before ap_chan; >1 refused
+band_start_fallback: default 0 (off); 1 = forced-start 0x0242 then the 0x0243 nudge if state[1] != 2; requires band_start=1
+keys: 0x0242 (primary 33 B, forced 33 B) + 0x0243 (nudge 29 B), g0 id1, field B = the AP-start module
+== DONE - host-built module with the H2D 0x0242 band-1 MAC-start send (NOT fired)
