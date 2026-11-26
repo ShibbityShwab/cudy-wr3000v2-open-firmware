@@ -4,7 +4,7 @@
 **HOST-ONLY**: static firmware decode + fire-recipe delta; no device contact, no
 fire, no binary build. Grades: **[V]** re-derived by
 [tools/fw_cac_ctx_re.py](tools/fw_cac_ctx_re.py) (70/70 selftest),
-**[V\*]** committed earlier lane/bench, **[B]** bench datum, **[I]** inference,
+**[V*]** committed earlier lane/bench, **[B]** bench datum, **[I]** inference,
 **[U]** needs a device read. All firmware addresses are CA = file offset +
 0x40000 of the pinned 928,920 B image (sha256 `7fc87e20...311b`).
 
@@ -160,7 +160,7 @@ is not our VAP. Valid sequences:
 
 ## 7. The stock question (item 4)
 
-Known [B]/[V\*]: the stock 5 GHz AP is up with +0x49C..+0x4A8 = 0 (23:00 read);
+Known [B]/[V*]: the stock 5 GHz AP is up with +0x49C..+0x4A8 = 0 (23:00 read);
 the same reference boot earlier read the band-1 sub-base bit0 = 1 (armed); the
 stock sends g0-id1 key 0x0065 x4 and 0x07E7 x3 in a 210 s boot capture; the
 stock AP order is 0x0124 -> 0x0005 -> 0x006D -> 0x0127 -> 0x0065; a DFS AP
@@ -222,8 +222,8 @@ tool prints only re-derived addresses/ids/lengths (no vendor bytes). Evidence:
 * `../wifi-5g-dfs-order` REPORT sec. 6/7, FIRE-RECIPE R1a/R1b/R2 (the
   baseline this lane corrects) [V].
 * `../wifi-vap-start-gates` REPORT sec. 2/4 (the 0x0065 worker call map and
-  the stock AP order) [V\*].
+  the stock AP order) [V*].
 * `../wifi-5g-160-dfs` REPORT-DFS sec. 1/2 (the CAC host flow, CAC times,
-  the DFS arm-before-BSS order) [V\*].
+  the DFS arm-before-BSS order) [V*].
 * `../wifi-f1-from-capture` FAMILY-TABLE (stock sends 0x0065 x4, 0x07E7 x3)
-  [V\*].
+  [V*].

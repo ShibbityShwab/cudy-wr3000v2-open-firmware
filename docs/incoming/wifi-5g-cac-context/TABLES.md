@@ -122,6 +122,6 @@ Single-VAP fresh ladder: only the 0x0065 sets +0x0E (AP -> 1).
 | --- | --- | --- |
 | stock mctx four words at AP-up | all 0 | [B] 2026-11-26 23:00 |
 | stock band-1 SMAC sub-base +0 bit0, earlier same boot | 1 (armed) | [B] 2026-11-26 21:00 |
-| stock capture frames (210 s boot) | 0x0065 x4, 0x07E7 x3, 0x01F7 x1, 0x0124 x3 | [V\*] wifi-f1-from-capture |
-| stock AP order | 0x0124 -> 0x0005 -> 0x006D -> 0x0127 -> 0x0065 | [V\*] wifi-vap-start-gates / wifi-re-report |
-| DFS AP flow | 0x07E7{1} -> CAC 60 s -> 0x07E7{0} -> start all BSS (emits the 0x0065) | [V\*] wifi-5g-160-dfs |
+| stock capture frames (210 s boot) | 0x0065 x4, 0x07E7 x3, 0x01F7 x1, 0x0124 x3 | [V*] wifi-f1-from-capture |
+| stock AP order | 0x0124 -> 0x0005 -> 0x006D -> 0x0127 -> 0x0065 | [V*] wifi-vap-start-gates / wifi-re-report |
+| DFS AP flow | 0x07E7{1} -> CAC 60 s -> 0x07E7{0} -> start all BSS (emits the 0x0065) | [V*] wifi-5g-160-dfs |
