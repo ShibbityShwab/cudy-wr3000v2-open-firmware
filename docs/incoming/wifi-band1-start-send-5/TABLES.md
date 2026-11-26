@@ -93,5 +93,5 @@ cause C1).  R5 is exactly that order on the host side.
 | R5 patch | patches/0001-r5-order.patch, 25,415 B, sha256 e464f4cf0038859705be492967771e7c3294ef7ba84275c96bb4b473a6b86cf7 |
 | R5 test patch | patches/0002-r5-selftest-update.patch, 4,857 B, sha256 f35d34e4370da5469d24b0defd078aec8dacd4895b2e1226d8135c72d32cba4e |
 | R5 tree pins | hi5622_scan.c 86d6c57e..., hi5622_scan_logic.c 15c50d34..., hi5622_scan_logic.h 6af774ef..., hi5622_vap_start_g0.c 346b5441..., hi5622_vap_start_g0.h 81533d9c..., hi5622_band_start.h e2f059cf..., hi5622_band_start.c 71019718..., Kbuild 1bb51085... (full shas in BUILD-NOTES) |
-| R5 artefact | /tmp/r5-artifact/hi5622_wifi.ko, **383,240 B**, sha256 **24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c**, 65 params |
+| R5 artefact | /tmp/r5-artifact/hi5622_wifi.ko, **383,240 B**, sha256 **24f7221bfc4c79971ce1a0aa93cfdc2c0293261226c24111037c094ab13fa70c**, 65 params (sha at the default WORK=/tmp/r5-build; another WORK keeps the same .text) |
 | host tests | 295 C + 110 Python = 405 checks, 0 failures |

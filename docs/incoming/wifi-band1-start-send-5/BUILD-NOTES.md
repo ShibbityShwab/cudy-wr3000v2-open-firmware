@@ -40,6 +40,13 @@ warnings/errors/undefined symbols, and an artifact-contract mismatch.
 
 Full shas: evidence/base-chain.txt and evidence/build-artifact.txt.
 
+The whole-file artifact sha is reproducible at the default WORK path
+(/tmp/r5-build).  An out-of-tree build in a different WORK path produces the
+same .text (sha256 a727c339...) and the same 65 params, but 20 bytes of
+out-of-tree build metadata outside .text differ, so the whole-file sha
+changes; the Lead's deploy gate is the default-path sha plus size/params/
+strings (the build script checks all of those).
+
 ## Contract checks implemented by the build script
 
 1. the R4b source tree exists (else it names the R4b build script);

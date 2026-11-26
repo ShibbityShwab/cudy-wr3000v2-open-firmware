@@ -50,7 +50,11 @@ CROSS=$STAGING_DIR/toolchain-arm_cortex-a9_gcc-14.4.0_musl_eabi/bin/arm-openwrt-
 rm -rf "$WORK" "$ART" "$TESTCOPY"
 cp -a "$TREE_SRC" "$WORK"
 ( cd "$WORK" && rm -f *.o *.ko *.mod *.mod.c .*.cmd Module.symvers modules.order modules.order.cmd build.log .t1 .t2 2>/dev/null ) || true
-( cd "$WORK" && patch -p1 --no-backup-if-mismatch < "$GATES/patches/0001-g9-g11-rf-enable-invert.patch" >/dev/null )
+if grep -q "HI5622_VAP_START_G0_RF_ENABLED" "$WORK/hi5622_vap_start_g0.h"; then
+	echo "build-r5-order: base tree is already gate-inverted - gate patch already applied"
+else
+	( cd "$WORK" && patch -p1 --no-backup-if-mismatch < "$GATES/patches/0001-g9-g11-rf-enable-invert.patch" >/dev/null )
+fi
 grep -q "HI5622_VAP_START_G0_RF_ENABLED" "$WORK/hi5622_vap_start_g0.h" || {
 	echo "build-r5-order: gate patch did not apply" >&2; exit 1; }
 assert_sha() {
