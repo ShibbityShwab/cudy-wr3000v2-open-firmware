@@ -1,0 +1,64 @@
+=== the sibling 0x07E7 contract is intact ===
+PASS   1  key == 0x07E7
+PASS   2  wire length 29
+PASS   3  arm body 0x01
+PASS   4  clear body 0x00
+PASS   5  arm mask 0x2D
+PASS   6  0x07E7 is NOT the 0x01F7 key
+PASS   7  arm frame == firmware-decode KAT
+PASS   8  clear frame == firmware-decode KAT
+PASS   9  the six register CAs are unchanged
+PASS  10  the armed pattern is {1,0,1,1,0,1} = 0x2D
+PASS  11  builder still in hi5622_dfs_set.c
+PASS  12  Kbuild still builds hi5622_dfs_set.o
+PASS  13  no new module parameter (24 module_param_named calls in scan.c)
+PASS  14  fail-closed parameter still wired
+
+=== the relaxed +0x4A0 gate (header + hi5622_dfs_set.c) ===
+PASS  15  +0x49C is the CAC config block+0x118
+PASS  16  +0x4A0 is the CAC context word (no longer '0 to arm')
+PASS  17  +0x4A4 is the config-length word
+PASS  18  +0x4A8 is the unexplained bench-1 word
+PASS  19  the probe carries the four CAC words
+PASS  20  the probe carries ctx_present
+PASS  21  precheck takes a WRITABLE probe
+PASS  22  precheck still has the same definition shape
+PASS  23  precheck derives ctx_present from b4a0
+PASS  24  precheck no longer refuses on b4a0
+PASS  25  the other precheck gates are kept
+PASS  26  the CAC-flag gate still refuses before the wire
+PASS  27  the old +0x4A0 refusal verdict is gone
+PASS  28  the verdict names the register-only arm
+PASS  29  postcheck now takes the probe
+PASS  30  the old postcheck signature is gone
+PASS  31  postcheck requires the six-register armed pattern
+PASS  32  postcheck requires CAC flag 1 on the full arm
+PASS  33  postcheck keeps CLEAR fail-closed on flag 0
+PASS  34  postcheck refuses NULL/bad mode
+PASS  35  arm_kind is exposed and returns register-only/full
+
+=== hi5622_scan.c: the four-word probe pack + the post site ===
+PASS  36  the probe reads +0x49C/+0x4A4/+0x4A8
+PASS  37  the probe derives ctx_present
+PASS  38  the pre-0x0065 dmesg line exists
+PASS  39  the pre-0x0065 line is before the 0x0065 post-read
+PASS  40  the pre-0x0065 line is before the dfs_set pre line
+PASS  41  the dfs_set pre line carries the four words + ctx_present
+PASS  42  both postcheck calls pass the probe
+PASS  43  the ARM post line prints ctx_present/arm_kind
+PASS  44  the post site calls arm_kind
+PASS  45  the register-only PASS text exists
+PASS  46  the full-arm PASS text still exists
+PASS  47  the ARM_CLEAR pre-clear refusal records ctx_present
+PASS  48  the ARM_CLEAR pre-clear refusal stays fail-closed
+PASS  49  the CLEAR frame's postcheck is unchanged in intent
+
+=== the ladder ORDER is still the task-228 one ===
+PASS  50  0x0065 post-read before the dfs_set step
+PASS  51  dfs_set step (0x07E7) before the dfs_mode step (0x01F7)
+PASS  52  dfs_mode step (0x01F7) before the band_start (0x0242)
+PASS  53  the dfs_set_arm post string is intact
+PASS  54  the dfs_set block still builds + posts both frames
+PASS  55  the dfs_set block keeps the plan-call shape
+
+RESULT: 55/55 checks PASS

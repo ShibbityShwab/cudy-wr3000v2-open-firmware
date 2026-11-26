@@ -1,0 +1,329 @@
+--- a/hi5622_dfs_set.c
++++ b/hi5622_dfs_set.c
+@@ -9,6 +9,11 @@
+  * facts are this lane's ../REPORT.md + ../TABLES.md, re-derived by
+  * tools/fw_dfs_set_re.py.  This file only synthesizes the host-built
+  * protocol bytes and refuses malformed/unrequested requests.
++ *
++ * MODIFIED by lane wifi-5g-dfs-relax (task-230): the ARM/ARM_CLEAR +0x4A0
++ * pre-gate refusal is removed - the firmware's register-only silent-success
++ * arm with a present CAC context is legitimate; the postcheck grades the
++ * six-register 0x2D pattern and the CAC flag per arm kind.
+  */
+ #include "hi5622_dfs_set.h"
+ 
+@@ -124,7 +129,7 @@
+ 	return regs_pattern == (u8)HI5622_DFS_SET_ARM_MASK;
+ }
+ 
+-int hi5622_dfs_set_precheck(const struct hi5622_dfs_set_probe *p, u8 mode)
++int hi5622_dfs_set_precheck(struct hi5622_dfs_set_probe *p, u8 mode)
+ {
+ 	if (!p)
+ 		return -EINVAL;
+@@ -150,10 +155,13 @@
+ 			return -EPERM;
+ 		return 0;
+ 	}
+-	/* ARM / ARM_CLEAR: the arm is skipped when u32[ctx+0x4A0] is set, and
+-	 * the helper pair is skipped when the CAC flag is already 1. */
+-	if (p->b4a0)
+-		return -EBUSY;
++	/* ARM / ARM_CLEAR: the firmware worker writes the six band-1 SMAC
++	 * sub-base bit0s FIRST and unconditionally.  When u32[ctx+0x4A0] is set
++	 * (the CAC context the 0x0065 allocated) it then returns success without
++	 * the CAC flag/helper pair - the register-only arm; that is NOT a
++	 * refusal.  Record the context and let the postcheck grade the result.
++	 * The CAC-flag gate stays fail-closed. */
++	p->ctx_present = p->b4a0 != 0u ? 1u : 0u;
+ 	if (p->cac)
+ 		return -EALREADY;
+ 	return 0;
+@@ -183,18 +191,37 @@
+ 		return "the CLEAR gates are open";
+ 	}
+ 	if (p->b4a0)
+-		return "u32[mctx+0x4A0] gate is nonzero - the worker would return without setting the flag";
++		return "the 0x0065 already allocated the CAC context (b4a0 != 0) - the ARM is the register-only arm (six SMAC regs; the CAC flag is skipped by the worker and the worker returns 0)";
+ 	if (p->cac)
+ 		return "the CAC-active flag is already 1 - ARM is a no-op";
+ 	return "the ARM gates are open";
+ }
+ 
+-int hi5622_dfs_set_postcheck(unsigned int cac_flag, u8 mode)
++int hi5622_dfs_set_postcheck(const struct hi5622_dfs_set_probe *p, u8 mode)
+ {
++	if (!p)
++		return -EINVAL;
++	if (mode > HI5622_DFS_SET_PARM_MAX || mode == HI5622_DFS_SET_MODE_OFF)
++		return -EINVAL;
+ 	if (mode == HI5622_DFS_SET_MODE_CLEAR)
+-		return cac_flag == 0u ? 0 : -EIO;
+-	/* ARM and the ARM half of ARM_CLEAR must show the flag set. */
+-	return cac_flag == 1u ? 0 : -EIO;
++		return p->cac == 0u ? 0 : -EIO;
++	/* ARM and the ARM half of ARM_CLEAR: the firmware worker writes the six
++	 * band-1 SMAC sub-base bit0s FIRST in both branches, so the armed pattern
++	 * 0x2D is required.  The CAC flag differs: the full arm sets it 1; with
++	 * a present CAC context the silent-success branch skips CA 0xF593C /
++	 * CA 0x5F450 and the flag stays 0. */
++	if (!hi5622_dfs_set_armed(p->regs_pattern))
++		return -EIO;
++	if (p->ctx_present)
++		return p->cac == 0u ? 0 : -EIO;
++	return p->cac == 1u ? 0 : -EIO;
++}
++
++const char *hi5622_dfs_set_arm_kind(const struct hi5622_dfs_set_probe *p)
++{
++	if (!p)
++		return "?";
++	return p->ctx_present ? "register-only" : "full";
+ }
+ 
+ int hi5622_dfs_set_status_line(unsigned int dfs_set, int last_rc,
+--- a/hi5622_dfs_set.h
++++ b/hi5622_dfs_set.h
+@@ -19,9 +19,27 @@
+  *     (the non-bit0 bits are preserved: val = (old & ~1) | bit)
+  *   the CLEAR writes bit0 = 0 on all six (only when it reads the exact ARM
+  *     pattern back; the mismatch path is diagnostic-only)
+- *   then the CAC-active flag u8[module_ctx+0x4A5] is set 1 (ARM) / 0 (CLEAR)
+- *     through the helper pair CA 0xF593C+0x5F450 (arm) / 0xF58D8+0x5E95C
+- *     (clear); the arm is gated by u32[module_ctx+0x4A0] == 0.
++ *   the six-register write happens FIRST and unconditionally; THEN:
++ *     - if u32[module_ctx+0x4A0] == 0: the CAC-active flag u8[module_ctx+0x4A5]
++ *       is set 1 (ARM) through the helper pair CA 0xF593C+0x5F450 - the FULL
++ *       arm (the CLEAR side CA 0xF58D8+0x5E95C, only when the flag is 1, sets
++ *       it 0);
++ *     - if u32[module_ctx+0x4A0] != 0 (the CAC context the 0x0065 VAP start
++ *       allocated via CA 0x5F450 is present): the worker returns success
++ *       WITHOUT the flag/helper pair (the silent-success branch 0xB590C) -
++ *       the REGISTER-ONLY arm (lane wifi-5g-dfs-relax, task-230).
++ *   The host pre-gate ALLOWS the register-only arm (the R2 refusal was the
++ *   host gate, not the worker) and the postcheck grades the six-register
++ *   pattern {1,0,1,1,0,1} = 0x2D plus the CAC flag 1 (full arm) / 0
++ *   (register-only arm).
++ *
++ * RELAXED by lane wifi-5g-dfs-relax (shared task task-230, 2026-11-26) after
++ * the ../wifi-5g-cac-context decode (commit 0c76fd8): the ARM with a present
++ * CAC context is the firmware's register-only silent success, so the +0x4A0
++ * pre-gate is no longer a refusal; precheck records ctx_present, the
++ * postcheck grades the 0x2D register pattern + the CAC flag per arm kind,
++ * and the probe pack carries the four CAC words (+0x49C..+0x4A8) for the
++ * dmesg.  Frame bytes, the CLEAR gates and the other ARM gates are unchanged.
+  *
+  * The vendor HOST-side CAC machinery (60 s / 600 s CAC timers, the 30 min
+  * NOL, hmac_start_all_bss_of_band on CAC completion) is NOT implemented
+@@ -118,8 +136,13 @@
+ #define HI5622_DFS_SET_MCTX_STATE_OFF	0x0eu	/* u8: VAP state, 1..3 started */
+ #define HI5622_DFS_SET_MCTX_BAND_OFF	0x11u	/* u8: 1 = 5 GHz */
+ #define HI5622_DFS_SET_MCTX_BAND_OBJ_OFF 0x4b8u	/* u32: band object */
+-#define HI5622_DFS_SET_MCTX_GATE_OFF	0x4a0u	/* u32: 0 to arm */
+-#define HI5622_DFS_SET_MCTX_CAC_OFF	0x4a5u	/* u8: CAC active flag */
++/* the CAC context the 0x0065 VAP start allocates (CA 0x5F450): a present
++ * +0x4A0 selects the firmware worker's register-only silent-success arm. */
++#define HI5622_DFS_SET_MCTX_CACCTX_OFF	0x49cu	/* u32: config block + 0x118 */
++#define HI5622_DFS_SET_MCTX_GATE_OFF	0x4a0u	/* u32: CAC block; != 0 = register-only arm */
++#define HI5622_DFS_SET_MCTX_CACLEN_OFF	0x4a4u	/* u32: +0x4A6 = config length (0xA3 class) */
++#define HI5622_DFS_SET_MCTX_CAC_OFF	0x4a5u	/* u8: CAC active flag (byte 1 of +0x4A4) */
++#define HI5622_DFS_SET_MCTX_B4A8_OFF	0x4a8u	/* u32: bench 1; no writer found [U] */
+ #define HI5622_DFS_SET_MCTX_HELPER_OFF	0x4acu	/* u32: helper object */
+ #define HI5622_DFS_SET_BANDOBJ_EC8_OFF	0x0ec8u	/* u8: band-up, 1 = normal */
+ #define HI5622_DFS_SET_STATE_MIN	1u
+@@ -157,8 +180,12 @@
+ 	u8	state;		/* u8[mctx+0x0E]; 1..3 = started */
+ 	u8	ec8;		/* u8[bandobj+0xEC8]; 1 = band up */
+ 	u8	cac;		/* u8[mctx+0x4A5]; 1 = CAC active */
+-	u32	b4a0;		/* u32[mctx+0x4A0]; 0 = arm allowed */
++	u32	b49c;		/* u32[mctx+0x49C]; CAC config block+0x118 */
++	u32	b4a0;		/* u32[mctx+0x4A0]; CAC block; 0 = full arm, != 0 = register-only arm */
++	u32	b4a4;		/* u32[mctx+0x4A4]; high u16 = the CAC config length */
++	u32	b4a8;		/* u32[mctx+0x4A8]; bench 1, no writer in the image [U] */
+ 	u32	b4ac;		/* u32[mctx+0x4AC]; helper object */
++	u8	ctx_present;	/* derived: 1 = b4a0 != 0, the CAC context is present */
+ 	u8	regs_pattern;	/* bit i = bit0 of REG_CA[i] (device IO read) */
+ };
+ 
+@@ -168,20 +195,32 @@
+  *  - -EINVAL  band is not 5 GHz;
+  *  - -EAGAIN  the VAP state u8[mctx+0x0E] is not 1..3, or the band-up flag
+  *             u8[bandobj+0xEC8] is not 1;
+- *  - -EBUSY   ARM/ARM_CLEAR: u32[mctx+0x4A0] is non-zero (the worker would
+- *             return without setting the flag);
+  *  - -EALREADY ARM/ARM_CLEAR: the CAC flag is already 1;
+  *  - -EPERM   CLEAR: the CAC flag is not 1 or the registers are not in the
+- *             armed pattern {1,0,1,1,0,1} (the worker would not write). */
+-int hi5622_dfs_set_precheck(const struct hi5622_dfs_set_probe *p, u8 mode);
++ *             armed pattern {1,0,1,1,0,1} (the worker would not write).
++ * ARM/ARM_CLEAR no longer refuse on u32[mctx+0x4A0] != 0: that is the CAC
++ * context the 0x0065 allocated and the firmware worker then does the
++ * register-only silent-success arm.  p->ctx_present is set from b4a0 (the
++ * function takes a writable probe) and the postcheck grades the result. */
++int hi5622_dfs_set_precheck(struct hi5622_dfs_set_probe *p, u8 mode);
+ 
+ /* Human-readable verdict of the FIRST failing gate, for the dmesg line. */
+ const char *hi5622_dfs_set_verdict(const struct hi5622_dfs_set_probe *p,
+ 				   u8 mode);
+ 
+-/* Post-post verdict (read-only): 0 when the expected CAC flag is seen.
+- *  - -EIO for ARM/ARM_CLEAR when the flag is not 1, or CLEAR when not 0. */
+-int hi5622_dfs_set_postcheck(unsigned int cac_flag, u8 mode);
++/* Post-post verdict (read-only): 0 when the expected post state is seen.
++ * ARM/ARM_CLEAR: the six-register armed pattern {1,0,1,1,0,1} = 0x2D is
++ *   required; the CAC flag must then be 1 when the CAC context is absent (the
++ *   full arm) and 0 when it is present (the register-only arm the firmware
++ *   worker's silent-success branch 0xB590C produces).
++ * CLEAR: the CAC flag must be 0.
++ *  - -EIO when the state is not the expected one; -EINVAL for NULL/bad mode. */
++int hi5622_dfs_set_postcheck(const struct hi5622_dfs_set_probe *p, u8 mode);
++
++/* The arm kind for the dmesg arm_kind= field: "register-only" when the CAC
++ * context is present (the worker skipped CA 0xF593C/CA 0x5F450 and the
++ * +0x4A5 flag), "full" otherwise; "?" for NULL. */
++const char *hi5622_dfs_set_arm_kind(const struct hi5622_dfs_set_probe *p);
+ 
+ /* The six band-1 SMAC sub-base register addresses (CA), in ARM-pattern
+  * order: {+0, +4, +8, +0xA0, +0xA4, +0xA8}.  The kernel layer converts each
+--- a/hi5622_scan.c
++++ b/hi5622_scan.c
+@@ -1833,9 +1833,11 @@
+  * u32[hcc_ctx+0x4B0] and the started-module scan CA 0xA4C0E (>= 1 module
+  * context with state u8[ctx+0x0E] in 1..3), then reads u32[mctx+0x4A0] and
+  * u8[mctx+0x4A5], writes the six band-1 SMAC sub-base u16 bit0s at
+- * CA 0x4010E000/+4/+8/+A0/+A4/+A8 and sets the flag.  This helper reads the
+- * same live fields plus bit0 of the six device registers (read-only; the
+- * window is host-readable, phys = CA + 0x3B8000) and never writes. */
++ * CA 0x4010E000/+4/+8/+A0/+A4/+A8 and sets the flag (unless the CAC context
++ * is present - lane wifi-5g-dfs-relax).  This helper reads the same live
++ * fields (+ the four CAC-context words +0x49C/+0x4A0/+0x4A4/+0x4A8) plus
++ * bit0 of the six device registers (read-only; the window is host-readable,
++ * phys = CA + 0x3B8000) and never writes. */
+ static void hi5622_scan_dfs_set_probe(struct hi5622_pci *ctx,
+ 				      struct hi5622_dfs_set_probe *p)
+ {
+@@ -1860,9 +1862,15 @@
+ 			mctx + HI5622_DFS_SET_MCTX_STATE_OFF);
+ 	p->band = (u8)hi5622_fw_ram_read(ctx,
+ 			mctx + HI5622_DFS_SET_MCTX_BAND_OFF);
++	p->b49c = hi5622_fw_ram_read(ctx, mctx + HI5622_DFS_SET_MCTX_CACCTX_OFF);
+ 	p->b4a0 = hi5622_fw_ram_read(ctx, mctx + HI5622_DFS_SET_MCTX_GATE_OFF);
++	p->b4a4 = hi5622_fw_ram_read(ctx, mctx + HI5622_DFS_SET_MCTX_CACLEN_OFF);
++	p->b4a8 = hi5622_fw_ram_read(ctx, mctx + HI5622_DFS_SET_MCTX_B4A8_OFF);
+ 	p->b4ac = hi5622_fw_ram_read(ctx,
+ 			mctx + HI5622_DFS_SET_MCTX_HELPER_OFF);
++	/* A present CAC context (the 0x0065 CA 0x5F450 allocation) selects the
++	 * firmware worker's silent-success register-only arm. */
++	p->ctx_present = p->b4a0 != 0u ? 1u : 0u;
+ 	p->cac = (u8)hi5622_fw_ram_read(ctx,
+ 			mctx + HI5622_DFS_SET_MCTX_CAC_OFF);
+ 	bandobj = hi5622_fw_ram_read(ctx,
+@@ -2649,6 +2657,7 @@
+ 			struct hi5622_vap_start_g0_plan vgp;
+ 			struct hi5622_vap_start_g0_probe vgprobe;
+ 			struct hi5622_band_start_state vgst;
++			struct hi5622_dfs_set_probe dsctx0;
+ 			u32 vg_out0 = 0;
+ 			u32 vg_state_0e;
+ 			u8 vg_band;
+@@ -2715,6 +2724,17 @@
+ 						 "cfg80211: vap_start_g0: restart after host-side stop - the 0x0065 VAP start is NOT re-posted\n");
+ 					vap_start_g0_ok = true;
+ 				} else {
++					/* lane wifi-5g-dfs-relax (task-230):
++					 * E1 - the four CAC-context words BEFORE
++					 * the 0x0065.  A fresh ladder reads all
++					 * zero; the 0x0065 producer (CA 0x5F450)
++					 * then populates +0x49C/+0x4A0/+0x4A4.
++					 * Read-only, not a gate. */
++					hi5622_scan_dfs_set_probe(c->ctx, &dsctx0);
++					dev_info(wdev_dev,
++						 "cfg80211: dfs_ctx pre0x0065: b49c=0x%08x b4a0=0x%08x b4a4=0x%08x b4a8=0x%08x\n",
++						 dsctx0.b49c, dsctx0.b4a0,
++						 dsctx0.b4a4, dsctx0.b4a8);
+ 					len = 0;
+ 					vgrc = hi5622_vap_start_g0_build(wire,
+ 						HI5622_FRAME_MAX_TOTAL, &len, &vgp);
+@@ -2791,9 +2811,13 @@
+ 		 * ladder's ONLY writer of mctx[0x0E] is the key-0x0065 VAP
+ 		 * start, which is what opens the worker's started-module gate
+ 		 * CA 0xA4C0E): AFTER the 0x0065 VAP start and BEFORE the
+-		 * 0x0242 band start.  The post-read must show the CAC flag
+-		 * 1 (ARM) / 0 (CLEAR) or the sequence aborts.  The gates are
+-		 * the fail-closed dfs_set parameter plus the live probe pack;
++		 * 0x0242 band start.  The post-read must show the six-register
++		 * armed pattern 0x2D and, for the ARM, the CAC flag 1 (full
++		 * arm) or 0 (register-only arm: the 0x0065 already allocated
++		 * the CAC context, the worker's silent-success branch) - lane
++		 * wifi-5g-dfs-relax (task-230) - or the sequence aborts.  The
++		 * gates are the fail-closed dfs_set parameter plus the live
++		 * probe pack;
+ 		 * the frame is refused before the wire when the model says
+ 		 * no.  The vendor's 60 s / 600 s CAC timer + NOL are NOT
+ 		 * implemented (this is the SET/CLEAR frame, not the full CAC
+@@ -2818,11 +2842,13 @@
+ 			if (dsp.post) {
+ 				hi5622_scan_dfs_set_probe(c->ctx, &dsprobe);
+ 				dev_info(wdev_dev,
+-					 "cfg80211: dfs_set pre: mctx=0x%08x band=%u state=%u ec8=%u b4a0=0x%08x b4ac=0x%08x cac=%u regs_pattern=0x%02x (%s)\n",
++					 "cfg80211: dfs_set pre: mctx=0x%08x band=%u state=%u ec8=%u b49c=0x%08x b4a0=0x%08x b4a4=0x%08x b4a8=0x%08x b4ac=0x%08x cac=%u ctx_present=%u regs_pattern=0x%02x (%s)\n",
+ 					 dsprobe.mctx, (unsigned)dsprobe.band,
+ 					 (unsigned)dsprobe.state,
+-					 (unsigned)dsprobe.ec8, dsprobe.b4a0,
++					 (unsigned)dsprobe.ec8, dsprobe.b49c,
++					 dsprobe.b4a0, dsprobe.b4a4, dsprobe.b4a8,
+ 					 dsprobe.b4ac, (unsigned)dsprobe.cac,
++					 (unsigned)dsprobe.ctx_present,
+ 					 (unsigned)dsprobe.regs_pattern,
+ 					 hi5622_dfs_set_verdict(&dsprobe,
+ 								dsp.mode));
+@@ -2872,16 +2898,20 @@
+ 						 len);
+ 					hi5622_scan_dfs_set_probe(c->ctx,
+ 								  &dsprobe);
+-					drc = hi5622_dfs_set_postcheck(
+-							dsprobe.cac,
++					drc = hi5622_dfs_set_postcheck(&dsprobe,
+ 							(u8)HI5622_DFS_SET_MODE_ARM);
+ 					dev_info(wdev_dev,
+-						 "cfg80211: dfs_set arm post: cac=%u regs_pattern=0x%02x (%s)\n",
++						 "cfg80211: dfs_set arm post: cac=%u regs_pattern=0x%02x ctx_present=%u arm_kind=%s (%s)\n",
+ 						 (unsigned)dsprobe.cac,
+ 						 (unsigned)dsprobe.regs_pattern,
+-						 drc ?
+-						 "FAIL - the CAC flag is not 1 after the ARM (the worker's own gates refused it)" :
+-						 "PASS - the firmware armed the band-1 SMAC sub-base + CAC flag");
++						 (unsigned)dsprobe.ctx_present,
++						 hi5622_dfs_set_arm_kind(&dsprobe),
++						 drc ? (dsprobe.ctx_present ?
++						 "FAIL - the register-only arm did not write the six band-1 SMAC sub-base bits (regs_pattern != 0x2D) - the worker's own gates refused it" :
++						 "FAIL - the full arm post-read is not armed pattern 0x2D + CAC flag 1 (the worker's own gates refused it)") :
++						 (dsprobe.ctx_present ?
++						 "PASS - register-only arm: the firmware wrote the six band-1 SMAC sub-base bits (0x2D); the CAC flag is skipped (the 0x0065 CAC context is present)" :
++						 "PASS - the firmware armed the band-1 SMAC sub-base + CAC flag"));
+ 					if (drc) {
+ 						hi5622_dfs_set_refusals++;
+ 						rc = drc;
+@@ -2903,9 +2933,10 @@
+ 							dsprobe.regs_pattern) ||
+ 						    dsprobe.cac != 1u) {
+ 							dev_warn(wdev_dev,
+-								 "cfg80211: dfs_set REFUSED: ARM_CLEAR read back pattern=0x%02x cac=%u after the ARM (expected the armed pattern + flag 1); clear NOT posted\n",
++								 "cfg80211: dfs_set REFUSED: ARM_CLEAR read back pattern=0x%02x cac=%u ctx_present=%u after the ARM (the CLEAR needs the armed pattern + flag 1; with a present CAC context the ARM is register-only and never sets the flag) - clear NOT posted, use dfs_set=1 on this rung\n",
+ 								 (unsigned)dsprobe.regs_pattern,
+-								 (unsigned)dsprobe.cac);
++								 (unsigned)dsprobe.cac,
++								 (unsigned)dsprobe.ctx_present);
+ 							hi5622_dfs_set_refusals++;
+ 							rc = -EPERM;
+ 							goto out;
+@@ -2956,8 +2987,7 @@
+ 						 len);
+ 					hi5622_scan_dfs_set_probe(c->ctx,
+ 								  &dsprobe);
+-					drc = hi5622_dfs_set_postcheck(
+-							dsprobe.cac,
++					drc = hi5622_dfs_set_postcheck(&dsprobe,
+ 							(u8)HI5622_DFS_SET_MODE_CLEAR);
+ 					dev_info(wdev_dev,
+ 						 "cfg80211: dfs_set clear post: cac=%u regs_pattern=0x%02x (%s)\n",

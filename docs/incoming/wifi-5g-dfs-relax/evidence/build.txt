@@ -1,0 +1,18 @@
+order: 0x0065 < pre0x0065-line < 0x07E7 < 0x01F7 < 0x0242 (byte offsets ok)
+RESULT: 101/101 checks PASS
+RESULT: 55/55 checks PASS
+RESULT: 46/46 checks PASS
+== DONE - dfs_set RELAX module (host-built, NOT fired)
+artifact:  /tmp/dfs-relax-artifact/hi5622_wifi.ko (LOCAL EVIDENCE ONLY)
+size:      392868 B (stripped); unstripped 1446240 B
+sha256:    6c50d796a80b4afd1bb008ce89d0c51d25d642eb2a35101f16dc584790d27948
+unstripped: 12d7a44707e442073b611045c876b001475a04bed45ab793d792afa37ac033eb
+text:      5653b024ef7d53ec9694c1905ea170316d618b3b024f5a2afc464197e28790df
+params:    66 (66 = the R5 65 + dfs_set; the relax adds no parameter)
+base:      the dfs_order tree a5ec150c (this tree = a5ec150cfc7d7b8df1b87bd59f5847f0e720b772e69524c76f2d26620babdb7e)
+relax:     the ARM/ARM_CLEAR +0x4A0 pre-gate allows the firmware's
+           register-only silent-success arm; the postcheck grades the six
+           band-1 SMAC sub-base pattern 0x2D + the CAC flag 1 (full) / 0
+           (register-only), and the dmesg prints ctx_present/arm_kind.
+order:     vap_start_g0(0x0065) -> dfs_ctx line -> dfs_set(0x07E7) -> dfs_mode(0x01F7) -> band_start(0x0242)
+tests:     C contract selftest + Python RELAX test + Python ORDER regression

@@ -1,0 +1,40 @@
+# pins - wifi-5g-dfs-relax (shared task task-230), 2026-11-26
+
+All hashes are sha256.  HOST-ONLY lane: no device contact, no fire, no flash.
+The .ko is LOCAL EVIDENCE ONLY (/tmp); the repo carries no binaries.
+
+## Base (the dfs_order tree / module a5ec150c)
+
+| item | value |
+| --- | --- |
+| /tmp/dfs-order-artifact/hi5622_wifi.ko | 391,408 B / a5ec150cfc7d7b8df1b87bd59f5847f0e720b772e69524c76f2d26620babdb7e |
+| /tmp/dfs-order-build/hi5622_scan.c | d2e894d4b24b6a6a0c4481a161eb012a5dc763455aa1e4cbc6045342fce12713 |
+| /tmp/dfs-order-build/hi5622_scan_logic.c | 4400d546f4da045643bad1588b005ca6ad4774ba82d2d80a6d8c4b904e355f3c |
+| /tmp/dfs-order-build/hi5622_dfs_set.h | bb25e2faa4c962f55b0b79673029f267f00c3c3ee76efa3f866643b24be139c0 |
+| /tmp/dfs-order-build/hi5622_dfs_set.c | f7631f7cbfcd9fff77625ca556120f8a9152d1c129a6c1db9511a29460115e79 |
+
+## This lane
+
+| item | value |
+| --- | --- |
+| patches/0001-dfs-relax.patch | a7e1a286277689eaad3fb3cf3852cba408acb23b222b1b9b2fd84dfecbd0a9b9 |
+| patched hi5622_dfs_set.c | 9c64594dc4a56487828d88385244d0d37b2503877520d05427ea826f18083330 |
+| patched hi5622_dfs_set.h | f8bb83b3d5a926952bd9bf4bf7ca1109f77d160d03f69ccf3e21589f043168f7 |
+| patched hi5622_scan.c | 75b12c4dc4b60dc458153497b1fc4cac6927d5ede85b98f5fdb2b8efdbb71273 |
+
+## Artifact (host-built, NOT fired)
+
+| item | value |
+| --- | --- |
+| /tmp/dfs-relax-artifact/hi5622_wifi.ko | 392,868 B (stripped); sha256 6c50d796a80b4afd1bb008ce89d0c51d25d642eb2a35101f16dc584790d27948 |
+| unstripped /tmp/dfs-relax-build/hi5622_wifi.ko | 1,446,240 B; sha256 12d7a44707e442073b611045c876b001475a04bed45ab793d792afa37ac033eb |
+| .text | 5653b024ef7d53ec9694c1905ea170316d618b3b024f5a2afc464197e28790df |
+| params | 66 (the R5 65 + dfs_set; the relax adds none) |
+
+## Host tests
+
+| test | result | evidence |
+| --- | --- | --- |
+| C contract selftest (src/dfs_set_selftest.c) | 101/101 PASS | evidence/host-selftest-c.txt |
+| Python RELAX test (tools/dfs_relax_test.py) | 55/55 PASS | evidence/host-test-relax.txt |
+| Python ORDER regression (../wifi-5g-dfs-order/tools/dfs_order_test.py) | 46/46 PASS | evidence/host-test-order.txt |
