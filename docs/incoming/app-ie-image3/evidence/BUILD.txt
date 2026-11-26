@@ -1,0 +1,19 @@
+# app-ie-image3 build summary (reproduced by tools/build-app-ie-image3.sh)
+# base: IMAGE #3 merged module tree (a717c86d source, 64 params)
+# patch: patches/0001-app-ie-image3.patch (sha256 09523f98...)
+# build: make -j4 ARCH=arm CROSS_COMPILE=<OpenWrt 6.18.60 gcc> -C <KDIR> M=<work> modules
+warnings: 0
+errors: 0
+
+364516 /tmp/app-ie-image3/hi5622_wifi.ko
+1461464 /tmp/app-ie-image3/hi5622_wifi.unstripped.ko
+163052 /tmp/app-ie-image3/.text.bin
+2a2fff3508bdbffad4a23d04c31c17ef91f7ce46ae190fdae090119bcb6263e2  /tmp/app-ie-image3/hi5622_wifi.ko
+43a1ef000cddcb8a76ee5525d64393e173a2b76919ea604d0b6c8e4271f520a7  /tmp/app-ie-image3/hi5622_wifi.unstripped.ko
+c1ad137974b6866bbc7cdc1971288ade203bf9dfcca6421b73343ef3d50b9417  /tmp/app-ie-image3/.text.bin
+
+params: 66 (64 IMAGE #3 + app_ie + app_ie_type)
+license:        GPL
+license:        GPL
+depends:        cfg80211
+vermagic:       6.18.60 SMP mod_unload ARMv7 p2v8 

@@ -1,0 +1,28 @@
+# BASE CONTROL BUILD - is /tmp/wifi-image-3-module the source of the shipped
+# IMAGE #3 module (a717c86d)?
+#
+# Tree   : /tmp/wifi-image-3-module (97 source files; manifest
+#          evidence/base-tree.sha256, verified OK)
+# Build  : rsync-clean copy -> make -s -j4 ARCH=arm CROSS_COMPILE=<OpenWrt
+#          6.18.60 gcc> -C <KDIR> M=<copy> modules
+#          rc=0, 0 warnings, 0 errors
+#
+unstripped 1441720 B sha256 bee29adeb214ea12f49886d39a4dff6921f59647a10c112b06ccfcb1b37485fb
+# (unstripped sha is build-path dependent: the module embeds the build path)
+#
+# strip: OpenWrt scripts/strip-kmod.sh (NO_RENAME=1)
+#
+installed    358544 B sha256 a717c86db2b974cfa4c5560648508cbb589f67b47393a48993ee8eb939321fed
+.text        160592 B sha256 494ccd42100e3e3792738bb0a94419c7e549b86a11812ac505a7b1df2b18f2a1
+params       64
+#
+# Comparison with the shipped IMAGE #3 pins
+# (docs/incoming/wifi-image-3/build-evidence/module-build/artifacts.txt and
+#  payload/etc/modprobe.d/hi5622-wifi.conf):
+#   installed a717c86d...  MATCH (exact)
+#   .text     494ccd42...  MATCH (exact; also the image #3 activity/installed
+#                          .text identity)
+#   64 params              MATCH
+# => /tmp/wifi-image-3-module is the genuine source tree of the shipped
+#    IMAGE #3 merged module.  The rebase below is therefore done on the
+#    module lineage the bench actually runs, not on the R5-order tree.

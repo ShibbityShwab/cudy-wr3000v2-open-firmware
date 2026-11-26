@@ -1,0 +1,19 @@
+ok   the .text extract is present
+ok   installed sha256 = 2a2fff35
+ok   installed size = 364516 B
+ok   parameter count = 66
+ok   app_ie parameter present
+ok   app_ie_type parameter present
+ok   .text sha256 = c1ad1379
+ok   witness string: app_ie: collected %zu B of vendor IE(s) (0xDD) from ...
+ok   witness string: start_ap beacon_static: 'app_ie' posted (%zu B, g0 i...
+ok   witness string: app_ie post: mctx=0x%08x vap=0x%08x slot(class %u)=v...
+ok   image-#3 placement witness string
+ok   portable .c = task-234 pin
+ok   portable .h = task-234 pin
+ok   rebase patch sha256 = 09523f98
+ok   IMAGE #3 base-tree manifest (97 files)
+ok   host KAT: 55 checks, 0 failures
+ok   host KAT stock-frame vector byte-exact
+KAT: 17/17 PASS
+KAT: PASS

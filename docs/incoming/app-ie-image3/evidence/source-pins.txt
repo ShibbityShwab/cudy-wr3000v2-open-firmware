@@ -1,0 +1,4 @@
+# app-ie-image3 source pins (sha256)
+19c9cbf7d822a05eac919ac4bf660058b38b86d67b4a912feac0470be5a306ba  src/hi5622_app_ie.c
+e0f3b39f9b15d410ed70a62a7e7977433d3454158457a7b9c7c4e0902929432c  src/hi5622_app_ie.h
+09523f988b7a0256565278017a4e82687d7dd6363abbccc5722de595550adb7d  patches/0001-app-ie-image3.patch

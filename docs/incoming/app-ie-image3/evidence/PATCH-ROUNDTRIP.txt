@@ -1,0 +1,20 @@
+# PATCH ROUND-TRIP - the committed rebase patch reproduces the built tree
+#
+# patch: patches/0001-app-ie-image3.patch
+# sha256: 09523f988b7a0256565278017a4e82687d7dd6363abbccc5722de595550adb7d
+# format: unified diff against the IMAGE #3 module tree (diff -ruN a/ b/;
+#         patch -p1), 829 lines, 6 files:
+#           + hi5622_app_ie.c / hi5622_app_ie.h   (new, byte-identical to task-234)
+#           ~ Kbuild, hi5622_scan.c, hi5622_scan_logic.c, hi5622_scan_logic.h
+#
+# check (host, this lane):
+#   rsync --exclude build artefacts  /tmp/wifi-image-3-module/ -> a/
+#   cp -a a/ chk/ ; (cd chk && patch -p1 -s < patch)  -> apply OK
+#   diff -r work-tree vs chk (sources only)            -> ROUNDTRIP_IDENTICAL
+#
+# i.e. the patch applied to a clean copy of the pinned IMAGE #3 tree
+# reproduces the tree that tools/build-app-ie-image3.sh builds and that
+# produced the delivered module (installed 2a2fff35..., .text c1ad1379...).
+# The same check was run before the final read-back-wait edit with the
+# then-current patch (sha ee094f4a...) and also passed; this record is the
+# final committed revision.
