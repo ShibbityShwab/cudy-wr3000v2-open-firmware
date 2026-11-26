@@ -1,0 +1,192 @@
+LANE wifi-rx-d2h-post :: D2H post path (HOST-ONLY static decode)
+FIRMWARE.bin 928920 B sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b ; CA = file + 0x40000
+
+[1] hcc_msg_tx CA 0x102760 -- queued, per-dest/per-group routing
+   00102760  push {r4, r5, r6, lr}
+   00102762  mov r5, r0
+   00102764  cbnz r0, #0x102776
+   00102766  movw r1, #0x179
+   0010276A  ldr r0, [pc, #0xac]   ; =0x207A002A
+   0010276C  bl #0x42c28
+   00102770  movw r0, #0x8b2d
+   00102774  pop {r4, r5, r6, pc}
+   00102776  bl #0x409ea
+   0010277A  cbnz r0, #0x102782
+   0010277C  movw r1, #0x17f
+   00102780  b #0x10276a
+   00102782  ldrb r3, [r0, #1]
+   00102784  ubfx r3, r3, #4, #4
+   00102788  strb r3, [r0, #9]
+   0010278A  mov r0, r5
+   0010278C  bl #0x409ea
+   00102790  mov r4, r0
+   00102792  cbnz r0, #0x10279a
+   00102794  movw r1, #0x189
+   00102798  b #0x10276a
+   0010279A  mov.w r3, #0x448
+   0010279E  movs r2, #0x18
+   001027A0  ldrb r1, [r0, #9]
+   001027A2  smlabb r2, r2, r1, r3
+   001027A6  ldr r3, [pc, #0x74]   ; =0x00171B6C
+   001027A8  ldrb r1, [r0]
+   001027AA  add r2, r3
+   001027AC  and r1, r1, #0xf
+   001027B0  mov r0, r2
+   001027B2  bl #0x102744
+   001027B6  cmp r0, #0
+   001027B8  beq #0x102794
+   001027BA  ldrh r1, [r4, #6]
+   001027BC  ldr r3, [r0]
+   001027BE  cmp r1, r3
+   001027C0  bhs #0x1027ce
+   001027C2  ldr r3, [r0, #4]
+   001027C4  add.w r3, r3, r1, lsl #4
+   001027C8  ldr r1, [r3, #8]
+   001027CA  adds r1, #1
+   001027CC  str r1, [r3, #8]
+   001027CE  ldr r1, [r0, #8]
+   001027D0  mov r0, r2
+   001027D2  bl #0x1024ce
+   001027D6  mov r4, r0
+   001027D8  cmp r0, #0
+   001027DA  beq #0x102794
+   001027DC  add.w r6, r0, #0xc
+   001027E0  mov r0, r6
+   001027E2  bl #0xfdf8e
+   001027E6  add.w r1, r4, #0x40
+   001027EA  mov r2, r0
+   001027EC  mov r0, r5
+   001027EE  bl #0x102662
+   001027F2  mov r0, r6
+   001027F4  mov r1, r2
+   001027F6  bl #0xfdf50
+   001027FA  ldr.w r4, [r4, #0xc0]
+   001027FE  cbz r4, #0x102814
+   00102800  movs r1, #1
+   00102802  add.w r0, r4, #0x48
+   00102806  bl #0x1024bc
+   0010280A  adds r0, r4, #4
+   0010280C  bl #0xc2a54
+   00102810  movs r0, #0
+   00102812  b #0x102774
+   00102814  mov r0, r4
+   00102816  b #0x102774
+   00102818  movs r2, r5
+   0010281A  movs r0, #0x7a
+   0010281C  subs r4, r5, r5
+   0010281E  movs r7, r2
+   00102820  b #0x1024e6
+
+[2] ETE deposit op CA 0xC61E0 (ops table 0x10CEDC +0x10) -> commit 0xC192A -> notify 0xC6170(id 6)
+   000C61E0  push {r0, r1, r2, r4, r5, lr}
+   000C61E2  mov r5, r0
+   000C61E4  movs r0, #0
+   000C61E6  str r2, [sp]
+   000C61E8  strh.w r0, [sp, #4]
+   000C61EC  ldr r2, [sp, #4]
+   000C61EE  uxth r3, r3
+   000C61F0  bfi r2, r3, #0x10, #0x10
+   000C61F4  mov r4, r1
+   000C61F6  ldr r1, [sp, #0x18]
+   000C61F8  str r2, [sp, #4]
+   000C61FA  ldr r3, [sp, #4]
+   000C61FC  cbz r1, #0xc6236
+   000C61FE  movw r2, #0xd2b
+   000C6202  orr r3, r3, #0x4000
+   000C6206  str r3, [sp, #4]
+   000C6208  ldr r3, [sp, #4]
+   000C620A  mov r1, sp
+   000C620C  orr r3, r3, #0x2000
+   000C6210  str r3, [sp, #4]
+   000C6212  ldr r3, [sp, #4]
+   000C6214  mov r0, r4
+   000C6216  bfi r3, r2, #0, #0xd
+   000C621A  str r3, [sp, #4]
+   000C621C  bl #0xc192a
+   000C6220  movs r1, #6
+   000C6222  ldr r0, [r5, #0x58]
+   000C6224  bl #0xc6170
+   000C6228  ldr.w r3, [r4, #0x340]
+   000C622C  adds r3, #1
+   000C622E  str.w r3, [r4, #0x340]
+   000C6232  add sp, #0xc
+   000C6234  pop {r4, r5, pc}
+
+[3] d2h_notify CA 0xC6170 (id<=0xA; pending mask -> out[1] + doorbell)
+   000C6170  cmp r1, #0xa
+   000C6172  push {r3, r4, r5, r6, r7, lr}
+   000C6174  mov r7, r1
+   000C6176  bhi #0xc61d6
+   000C6178  cbnz r0, #0xc61d6
+   000C617A  ldr r3, [pc, #0x60]   ; =0x00172130
+   000C617C  ldr r5, [r3]
+   000C617E  cbz r5, #0xc61d6
+   000C6180  add.w r6, r5, #0xc0
+   000C6184  mov r0, r6
+   000C6186  bl #0xfdf8e
+   000C618A  ldr.w r1, [r5, #0xb8]
+   000C618E  lsr.w r4, r1, r7
+   000C6192  ands r4, r4, #1
+   000C6196  bne #0xc61d0
+   000C6198  movs r3, #1
+   000C619A  ldr.w r2, [r5, #0xb4]
+   000C619E  lsls r3, r7
+   000C61A0  orrs r3, r1
+   000C61A2  str.w r3, [r5, #0xb8]
+   000C61A6  cbnz r2, #0xc61c4
+   000C61A8  ldr.w r1, [r5, #0x9c]
+   000C61AC  str.w r3, [r5, #0xb4]
+   000C61B0  str r3, [r1]
+   000C61B2  ldr.w r4, [r5, #0xa4]
+   000C61B6  str.w r2, [r5, #0xb8]
+   000C61BA  ldr r3, [r4]
+   000C61BC  orr r3, r3, #1
+   000C61C0  str r3, [r4]
+   000C61C2  mov r4, r2
+   000C61C4  mov r1, r0
+   000C61C6  mov r0, r6
+   000C61C8  bl #0xfdf50
+   000C61CC  mov r0, r4
+   000C61CE  pop {r3, r4, r5, r6, r7, pc}
+   000C61D0  movw r4, #0x8b2d
+   000C61D4  b #0xc61c4
+   000C61D6  movw r4, #0x8b2d
+   000C61DA  b #0xc61cc
+
+[4] deferred flush CA 0xC6108 (wait out[1]==0, publish shadow g+0xB8)
+   000C6108  push {r4, r5, r6, lr}
+   000C610A  mov r4, r0
+   000C610C  cbz r0, #0xc611e
+   000C610E  movs r2, #1
+   000C6110  ldr.w r3, [r0, #0xb0]
+   000C6114  str r2, [r3]
+   000C6116  mov.w r3, #0x10000
+   000C611A  subs r3, #1
+   000C611C  bne #0xc6120
+   000C611E  pop {r4, r5, r6, pc}
+   000C6120  ldr.w r2, [r4, #0x9c]
+   000C6124  ldr r6, [r2]
+   000C6126  cmp r6, #0
+   000C6128  bne #0xc611a
+   000C612A  add.w r5, r4, #0xc0
+   000C612E  mov r0, r5
+   000C6130  bl #0xfdf8e
+   000C6134  ldr.w r3, [r4, #0xb8]
+   000C6138  mov r1, r0
+   000C613A  str.w r3, [r4, #0xb4]
+   000C613E  cbnz r3, #0xc6150
+   000C6140  mov r0, r5
+   000C6142  bl #0xfdf50
+   000C6146  mov r0, r4
+   000C6148  pop.w {r4, r5, r6, lr}
+   000C614C  b.w #0xc5128
+   000C6150  ldr.w r2, [r4, #0x9c]
+   000C6154  mov r0, r5
+   000C6156  str r3, [r2]
+   000C6158  ldr.w r2, [r4, #0xa4]
+   000C615C  str.w r6, [r4, #0xb8]
+   000C6160  ldr r3, [r2]
+   000C6162  orr r3, r3, #1
+   000C6166  str r3, [r2]
+   000C6168  pop.w {r4, r5, r6, lr}
+   000C616C  b.w #0xfdf50

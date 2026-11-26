@@ -1,0 +1,17 @@
+READ-ONLY probe pack (physical/BAR0 addresses; no writes)
+ P0  host catalogue before/after: any group-2 id-3 frame? any g1 id13 frame?
+ P12 dest-nibble source: band0 obj CA 0x00174BF0 -> phys 0x0082CBF0 (u32; bytes 0..3)
+     band1 obj CA 0x00175A18 -> phys 0x0082DA18
+ P13 producer post-failure counter: band0 +0xCCE CA 0x001758BE phys 0x0082D8BE (u8)
+     band1 +0xCCE CA 0x001766E6 phys 0x0082E6E6
+ P14 dest0 record CA 0x00171FB4 phys 0x00829FB4 (u32 x6): [0]=dest idx [1]=map [2]=queue array
+     [3]=? [4]=group array [5]=?
+ P15 follow P14[2] (queue array): read queue objects at base+0xE4*i for i=0,1,2
+     fields: +8 state, +0x48 msg-list count, +0xC0 notifier ptr, +0xC4 flag
+ P16 follow P14[4] (group array): read 12-B records for groups 0..4;
+     group2 record = base+0x18 -> {max_id, item_array, qidx}; expect item_array entry3
+     = {id=3, handler=0xBBC9C, aux, stats}; stats delta == successful g2id3 posts
+ P17 g0 item-array entry stats as control; compare with P13 failure counter
+ P18 CRX side: after P16 stats moves, read band0+0xCC5 (CRX drop) CA 0x001758B5 phys 0x0082D8B5;
+     then P0 catalogue: a g1 id13 frame proves the local dispatch + CRX build + D2H deposit
+ P19 band1 mirrors of P12-P18

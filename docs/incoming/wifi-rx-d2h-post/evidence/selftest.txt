@@ -1,0 +1,148 @@
+PASS fw size 928920
+PASS fw sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+PASS chain hcc_msg_tx @0x00102760 'push {r4, r5, r6, lr}' 
+PASS chain hcc_msg_tx @0x00102760 'mov r5, r0' 
+PASS chain hcc_msg_tx @0x00102776 'bl #0x409ea' 
+PASS chain hcc_msg_tx @0x00102782 'ldrb r3, [r0, #1]' 
+PASS chain hcc_msg_tx @0x00102782 'ubfx r3, r3, #4, #4' 
+PASS chain hcc_msg_tx @0x00102782 'strb r3, [r0, #9]' 
+PASS chain dest record @0x0010279A 'mov.w r3, #0x448' 
+PASS chain dest record @0x0010279A 'movs r2, #0x18' 
+PASS chain dest record @0x0010279A 'ldrb r1, [r0, #9]' 
+PASS chain dest record @0x0010279A 'smlabb r2, r2, r1, r3' 
+PASS chain group resolver @0x001027B2 'bl #0x102744' 
+PASS chain id stat @0x001027BA 'ldrh r1, [r4, #6]' 
+PASS chain id stat @0x001027BA 'ldr r3, [r0]' 
+PASS chain id stat @0x001027BA 'cmp r1, r3' 
+PASS chain id stat @0x001027BA 'ldr r3, [r0, #4]' 
+PASS chain id stat @0x001027BA 'add.w r3, r3, r1, lsl #4' 
+PASS chain id stat @0x001027BA 'ldr r1, [r3, #8]' 
+PASS chain id stat @0x001027BA 'adds r1, #1' 
+PASS chain id stat @0x001027BA 'str r1, [r3, #8]' 
+PASS chain queue select @0x001027CE 'ldr r1, [r0, #8]' 
+PASS chain queue select @0x001027CE 'mov r0, r2' 
+PASS chain queue select @0x001027CE 'bl #0x1024ce' 
+PASS chain dequeue-free twin @0x001024CE 'ldr r3, [r0, #4]' 
+PASS chain dequeue-free twin @0x001024CE 'ldr r3, [r3, #8]' 
+PASS chain dequeue-free twin @0x001024CE 'cmp r3, r1' 
+PASS chain dequeue-free twin @0x001024CE 'ldr r3, [r0, #8]' 
+PASS chain dequeue-free twin @0x001024CE 'movs r0, #0xe4' 
+PASS chain dequeue-free twin @0x001024CE 'mla r0, r0, r1, r3' 
+PASS chain enqueue @0x001027E2 'bl #0xfdf8e' 
+PASS chain enqueue @0x001027E2 'add.w r1, r4, #0x40' 
+PASS chain enqueue @0x001027E2 'mov r0, r5' 
+PASS chain enqueue @0x001027E2 'bl #0x102662' 
+PASS chain enqueue @0x001027E2 'bl #0xfdf50' 
+PASS chain notify @0x001027FA 'ldr.w r4, [r4, #0xc0]' 
+PASS chain notify @0x001027FA 'movs r1, #1' 
+PASS chain notify @0x001027FA 'add.w r0, r4, #0x48' 
+PASS chain notify @0x001027FA 'bl #0x1024bc' 
+PASS chain notify @0x001027FA 'adds r0, r4, #4' 
+PASS chain notify @0x001027FA 'bl #0xc2a54' 
+PASS chain error @0x00102770 'movw r0, #0x8b2d' 
+PASS ops-table row @0x0010CEDC ops table: +0=0x4003A000, +4=0x40039508, +0x10=deposit
+PASS chain deposit op @0x000C61E0 'push {r0, r1, r2, r4, r5, lr}' 
+PASS chain deposit op @0x000C61E0 'movw r2, #0xd2b' 
+PASS chain deposit op @0x000C61E0 'orr r3, r3, #0x4000' 
+PASS chain deposit op @0x000C61E0 'orr r3, r3, #0x2000' 
+PASS chain deposit op @0x000C61E0 'bfi r3, r2, #0, #0xd' 
+PASS chain deposit op @0x000C61E0 'bl #0xc192a' 
+PASS chain deposit op @0x000C61E0 'movs r1, #6' 
+PASS chain deposit op @0x000C61E0 'ldr r0, [r5, #0x58]' 
+PASS chain deposit op @0x000C61E0 'bl #0xc6170' 
+PASS chain ring commit @0x000C192A 'push {r4}' 
+PASS chain ring commit @0x000C192A 'ldr r2, [r0, #0xc]' 
+PASS chain ring commit @0x000C192A 'ldr r3, [r0]' 
+PASS chain ring commit @0x000C192A 'ldr r4, [r1]' 
+PASS chain ring commit @0x000C192A 'ubfx r2, r2, #0, #0xa' 
+PASS chain ring commit @0x000C192A 'str.w r4, [r3, r2, lsl #3]' 
+PASS chain producer advance @0x000C1906 'ldr r3, [r0]' 
+PASS chain producer advance @0x000C1906 'adds r2, r3, #1' 
+PASS chain producer advance @0x000C1906 'bfi r3, r2, #0, #0xa' 
+PASS chain producer advance @0x000C1906 'ubfx r2, r3, #0, #0xa' 
+PASS chain producer advance @0x000C1906 'cmp r2, r1' 
+PASS chain producer advance @0x000C1906 'bfceq r3, #0, #0xa' 
+PASS chain producer advance @0x000C1906 'ubfxeq r2, r3, #0xa, #1' 
+PASS chain producer advance @0x000C1906 'eoreq r2, r2, #1' 
+PASS chain producer advance @0x000C1906 'bfieq r3, r2, #0xa, #1' 
+PASS chain d2h notify @0x000C6170 'cmp r1, #0xa' 
+PASS chain d2h notify @0x000C6170 'bhi' 
+PASS chain d2h notify @0x000C6170 'cbnz r0' 
+PASS chain d2h notify @0x000C6170 'ldr r3, [pc, #0x60]   ; =0x00172130' 
+PASS chain d2h notify @0x000C6170 'ldr.w r2, [r5, #0xb4]' 
+PASS chain d2h notify @0x000C6170 'lsls r3, r7' 
+PASS chain d2h notify @0x000C6170 'str.w r3, [r5, #0xb8]' 
+PASS chain d2h notify @0x000C6170 'ldr.w r1, [r5, #0x9c]' 
+PASS chain d2h notify @0x000C6170 'str.w r3, [r5, #0xb4]' 
+PASS chain d2h notify @0x000C6170 'str r3, [r1]' 
+PASS chain d2h notify @0x000C6170 'ldr.w r4, [r5, #0xa4]' 
+PASS chain d2h notify @0x000C6170 'orr r3, r3, #1' 
+PASS chain d2h notify @0x000C6170 'str r3, [r4]' 
+PASS chain deferred flush @0x000C6108 'ldr.w r3, [r0, #0xb0]' 
+PASS chain deferred flush @0x000C6108 'str r2, [r3]' 
+PASS chain deferred flush @0x000C6108 'ldr.w r2, [r4, #0x9c]' 
+PASS chain deferred flush @0x000C6108 'ldr r6, [r2]' 
+PASS chain deferred flush @0x000C6108 'cmp r6, #0' 
+PASS ETE ops base 0x4003A000 
+PASS ETE ops intr 0x40039508 
+PASS ETE ops[+0x10] deposit 0xC61E1 
+PASS builder SMAC producer g2 id3 @0x000B5462 'movs r2, #2' 
+PASS builder SMAC producer g2 id3 @0x000B5468 'bfi r3, r2, #0, #4' 
+PASS builder SMAC producer g2 id3 @0x000B546E 'movs r3, #3' 
+PASS builder SMAC producer g2 id3 @0x000B5470 'strb r3, [r0, #6]' 
+PASS builder SMAC producer g2 id3 @0x000B5472 'ldrb r2, [r4]' 
+PASS builder SMAC producer g2 id3 @0x000B5476 'bfi r3, r2, #4, #4' 
+PASS builder SMAC producer g2 id3 @0x000B5488 'str r4, [r0, #0x14]' 
+PASS builder SMAC producer g2 id3 @0x000B548C 'str r6, [r0, #0xc]' 
+PASS builder SMAC producer g2 id3 @0x000B5492 'bl #0x102760' 
+PASS builder heartbeat g4 id4 @0x000C6BD6 'ldrb r3, [r0, #1]' 
+PASS builder heartbeat g4 id4 @0x000C6BDA 'bfc r3, #4, #4' 
+PASS builder heartbeat g4 id4 @0x000C6BDE 'strb r3, [r0, #1]' 
+PASS builder heartbeat g4 id4 @0x000C6BE0 'movs r3, #0' 
+PASS builder heartbeat g4 id4 @0x000C6BE2 'strb r2, [r0]' 
+PASS builder heartbeat g4 id4 @0x000C6BE6 'strb r2, [r0, #6]' 
+PASS builder heartbeat g4 id4 @0x000C6BE8 'strb r3, [r0, #7]' 
+PASS builder heartbeat g4 id4 @0x000C6C0A 'bl #0x102760' 
+PASS builder CRX RX g1 id13 @0x000BA0AA 'mov.w sb, #1' 
+PASS builder CRX RX g1 id13 @0x000BA0C0 'bl #0x1024ea' 
+PASS builder CRX RX g1 id13 @0x000BA0F8 'ldrh.w fp, [r0, #0x11]' 
+PASS builder CRX RX g1 id13 @0x000BA146 'add.w fp, fp, #0x3c' 
+PASS builder CRX RX g1 id13 @0x000BA14A 'bfi r3, sb, #0, #4' 
+PASS builder CRX RX g1 id13 @0x000BA150 'movs r3, #0xd' 
+PASS builder CRX RX g1 id13 @0x000BA152 'strb r3, [r4, #6]' 
+PASS builder CRX RX g1 id13 @0x000BA17A 'bl #0x102760' 
+PASS builder consumer g2 id3 handler @0x000BA48A 'bl #0xb9780' 
+PASS heartbeat 'HEARTBEAT' payload literal 
+PASS heartbeat dest nibble clear (bfc r3,#4,#4 @0xC6BDA) 
+PASS heartbeat id=4 (strb r2,[r0,#6] @0xC6BE6, r2=4 @0xC6BD8) 
+PASS local dispatcher 0xFD7E8 'push {r4, r5, r6, lr}' 
+PASS local dispatcher 0xFD7E8 'bl #0x409ea' 
+PASS local dispatcher 0xFD7E8 'ldrb r1, [r0]' 
+PASS local dispatcher 0xFD7E8 'ldrh r2, [r0, #6]' 
+PASS local dispatcher 0xFD7E8 'and r1, r1, #0xf' 
+PASS local dispatcher 0xFD7E8 'bl #0xfd4c8' 
+PASS local dispatcher 0xFD7E8 'bx r3' 
+PASS registration BL @0x0004833C 
+PASS registration BL @0x00048346 
+PASS registration BL @0x00047BC8 
+PASS registration 0x00048338 group=2 table=0x0010CC18 count=19 boot task 0x48338: firmware-local group-2 table (id3 -> 0xBBC9C)
+PASS registration table value 0x0010CC18 present in image 
+PASS registration 0x00048342 group=0 table=0x0010CCFC count=40 boot task 0x48342: firmware-local group-0 table (40 ids)
+PASS registration table value 0x0010CCFC present in image 
+PASS registration 0x00047BC4 group=0 table=0x0010CBEC count=1 hcc init 0x47BC4: firmware-local group-0 table (1 id)
+PASS registration table value 0x0010CBEC present in image 
+PASS producer entry counter +0xCC0 band0 CA 0x1758B0
+PASS producer failure counter +0xCCE band0 CA 0x1758BE
+PASS band getter 0xF4F48 'movw r0, #0xe28' 
+PASS band getter 0xF4F48 'ldr [pc, #0xc]   ; =0x00174BF0' 
+PASS g2 table has 19 ids [2, 3, 4, 5, 6, 9, 10, 11, 12, 14, 26, 27, 31, 35, 37, 38, 39, 40, 42]
+PASS g2 id3 -> 0xBBC9D (handler 0xBBC9C|thumb) 0x000BBC9D
+PASS g2 id2 -> 0xB9781 (CRX builder|thumb) 0x000B9781
+PASS g2 id5 -> 0xB9781 (CRX builder|thumb) 0x000B9781
+PASS group-config lead table groups 0..4 in order [(0, 1, 1152056, 50), (1, 0, 1151416, 40), (2, 1, 1150728, 43), (3, 0, 1150392, 21), (4, 2, 1101604, 5)]
+PASS group-config lead: g2 queue idx qidx=1
+PASS group-config lead: g4 queue idx qidx=2
+PASS group-config lead: g1 queue idx qidx=0
+PASS hcc instance 0x171B6C literal refs 4 refs: ['0x47d6c', '0x86fc8', '0x10281c', '0x1028ec']
+
+146/146 PASS
