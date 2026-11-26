@@ -1,0 +1,39 @@
+# tools/reproduce.sh --with-image3-check - end-to-end run (host-only)
+# date: 2026-11-26; exit=0; tail:
+== 1. rebuild the pinned chain up to the dfs-mode tree (~10 min)
+== beacon5g base pin OK, r1-band patched base pin OK
+== base artifact pinned: e8b17f7238afce459db61a9ca65b9a0a1336ce232c... (356612 B)
+== sibling 0x00F7 patch + sources pinned
+== 1. pinned r1-band base staged: 89 files
+== 2. apply sibling patches/0001-desc-table-send.patch (the 0x00F7 step)
+== 3. sibling 0x00F7 step applied (2 portable sources match)
+== 4. apply this lane's patches/0001-dfs-mode-send.patch (the 0x01F7 step)
+== 5. src/ matches the patched tree (2 files)
+== 6. module build clean (0 warnings/errors)
+== 7. debug-strip keeps .text identical
+== 8. artifact contract PASS (61 params incl dfs_mode, feature strings, 12 symvers)
+== DONE - host-built module with the H2D 0x01F7 DFS/RF mode send (NOT fired)
+== 2. stage the clean IMAGE #3 tree at /tmp/wifi-image-3-module
+   staged 93 source files
+   patch: F2 field-B fix
+   patch: T4 RX watermark
+   patch: BA skeleton (Kbuild hunk offset +2 is expected)
+   patch: HE caps (cfg80211 clean; the Kbuild hunk FAILS as recorded)
+   IMAGE #3 source manifest OK (2d87525e1bab6bbf94486244b55fd1396e2ad691645d40c8469d247ffd766c45)
+== 2b. byte-exact IMAGE #3 base module check
+   IMAGE #3 base module reproduces byte-for-byte (unstripped/activity/.text)
+== 3. RC-2 build (../wifi-rc-impl-2/tools/build-rc2.sh)
+== 1. base pin + deterministic patch application
+== 2. host suites on the patched tree
+== rc2_frame_selftest
+== rc2_c2_order_selftest
+== rc2_matrix_selftest
+== all host suites PASS (evidence: evidence/rc2_*.txt)
+== 3. cross toolchain
+== 4. module build (0 warnings/errors required)
+== 5. artifact identity
+== build PASS: /tmp/rc2-artifact/hi5622_wifi.ko
+   RC-2 identities OK (module 1519716 B, activity 401884 B)
+== 4. stage the expected artifact in /tmp/rc2-rebuilt
+== PASS - the rebuilt module is byte-identical to the recorded RC-2 artifact
+EXIT=0 (PASS from /tmp/reproduce-test2.log)

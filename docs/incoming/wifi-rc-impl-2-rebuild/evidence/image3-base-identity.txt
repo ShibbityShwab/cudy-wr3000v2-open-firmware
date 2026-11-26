@@ -1,5 +1,5 @@
 # IMAGE #3 merged driver source tree - identity of the reproduced tree
-# date: 2569-11-26T04:47:00Z
+# date: 2026-11-26 (project clock; the container date command reports a shifted year)
 #
 # reproduced tree: /tmp/wifi-image-3-module (97 source files, artifacts removed)
 # pin file:       ../wifi-rc-impl-2/evidence/base-pin.txt

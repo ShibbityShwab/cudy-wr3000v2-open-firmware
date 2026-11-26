@@ -24,7 +24,7 @@ set -eu
 
 LANE=$(cd "$(dirname "$0")/.." && pwd)
 DOCS=$(cd "$LANE/.." && pwd)
-I3=$DOCS/wifi-image-3-module-artifacts
+I3=/home/shibbityshwab/wifi-image-3-module-artifacts   # the pinned IMAGE #3 base module (local evidence)
 BASE=/tmp/wifi-image-3-module          # the lane's canonical base path
 OUT=/tmp/rc2-rebuilt
 WITH_I3=0
