@@ -15,8 +15,8 @@ The R5 module (`/tmp/r5-rebuilt/hi5622_wifi.ko`, 383,240 B, sha256
     .text sha256 a8b737a466106cfed51fecc54f4e836a23b6e2509056681a76feaeb3f558d335
 
 Host tests inside the build: **84/84** C contract checks
-([evidence/selftest.txt](evidence/selftest.txt)) + **46/46** independent Python
-integration checks ([evidence/frame-test.txt](evidence/frame-test.txt)).
+([evidence/host-selftest-c.txt](evidence/host-selftest-c.txt)) + **46/46** independent Python
+integration checks ([evidence/host-test-python.txt](evidence/host-test-python.txt)).
 
 ## Base provenance (why this is the byte-exact R5 base)
 
