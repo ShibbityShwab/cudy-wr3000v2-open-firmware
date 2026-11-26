@@ -1,0 +1,316 @@
+FIRMWARE.bin 928920 B sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b ; CA = file + 0x40000
+phys(firmware RAM) = 0x40000000 + 0x6B8000 + CA
+
+== notifier install (msg_tx tail)  CA 0x001027FA
+  01027FA: ldr.w r4, [r4, #0xc0]
+  01027FE: cbz r4, #0x102814
+  0102800: movs r1, #1
+  0102802: add.w r0, r4, #0x48
+  0102806: bl #0x1024bc
+  010280A: adds r0, r4, #4
+  010280C: bl #0xc2a54
+  0102810: movs r0, #0
+  0102812: b #0x102774
+  0102814: mov r0, r4
+  0102816: b #0x102774
+  0102818: movs r2, r5
+   queue+0xC0 = notifier/customer; set notifier+0x48=1 (atomic) and post schedule notifier+4 via 0xC2A54
+
+== queue cfg -> customer index  CA 0x0004809E
+  004809E: mov r1, r5
+  00480A0: ldr r0, [sp, #0x18]
+  00480A2: bl #0x1024ce
+  00480A6: cbz r0, #0x48104
+  00480A8: ldr.w lr, [r0, #4]
+  00480AC: cmp.w lr, #0
+  00480B0: beq #0x48104
+  00480B2: ldr.w r1, [r4, #0x44c]
+  00480B6: ldrb.w r2, [lr, #3]
+  00480BA: cbz r1, #0x48104
+   queue = 0x1024CE(dest0, qidx); cfg = [queue+4]; customer index = u8[cfg+3]; customer = customer_array + 0x68*idx
+
+== bind queue to customer + notifier  CA 0x000480D0
+  00480D0: ldr r1, [r2, #0x54]
+  00480D2: add.w r7, r2, #0x54
+  00480D6: cmp r7, r1
+  00480D8: bne #0x480e4
+  00480DA: ldr r3, [r2, #0x58]
+  00480DC: str r0, [r3]
+  00480DE: str r7, [r0]
+  00480E0: str r0, [r2, #0x58]
+  00480E2: b #0x48100
+  00480E4: mov.w ip, #0
+  00480E8: cbz r1, #0x48100
+  00480EA: ldr r3, [r1, #4]
+  00480EC: ldrb.w sb, [lr, #7]
+   append the queue object to the customer binding list at customer+0x54 and set queue+0xC0 = customer
+
+== customer init (thread table record)  CA 0x0004802A
+  004802A: movs r3, #0x30
+  004802C: ldr r5, [r2, #0x1c]
+  004802E: mla r5, r3, sb, r5
+  0048032: cmp r5, #0
+  0048034: beq.w #0x4782e
+  0048038: mul r2, fp, sb
+  004803C: ldr.w r1, [r4, #0x454]
+  0048040: adds r7, r1, r2
+  0048042: beq.w #0x4782e
+  0048046: ldr r3, [sp, #0x18]
+  0048048: adds r0, r7, #4
+   thread record = thread_table + 0x30*customer; customer = [dest0+0xC] + 0x68*customer
+
+== customer init (fields + thread create)  CA 0x00048046
+  0048046: ldr r3, [sp, #0x18]
+  0048048: adds r0, r7, #4
+  004804A: str r3, [r1, r2]
+  004804C: add.w r2, r7, #0x54
+  0048050: strd r2, r2, [r7, #0x54]
+  0048054: bl #0xc71b8
+  0048058: movs r1, #0
+  004805A: add.w r0, r7, #0x48
+  004805E: bl #0x1024bc
+  0048062: str r5, [r7, #0x4c]
+  0048064: ldr r2, [r5, #0x2c]
+   customer+0 = dest record; +0x54 binding list self-init; 0xC71B8(+4) inits the wait object; +0x48 pending = 0; +0x4C = thread record; task arg = customer; +0x50 = task handle
+
+== struct bases (dest0)  CA 0x00047E30
+  0047E30: cmp r0, #3
+  0047E32: itttt ne
+  0047E34: movne r5, #0xe4
+  0047E36: mlane r0, r5, r0, r8
+  0047E3A: addne r0, #4
+  0047E3C: strne.w r0, [r4, #0x450]
+  0047E40: cmp r1, #3
+  0047E42: itttt ne
+  0047E44: movne r0, #0x68
+  0047E46: mlane r1, r0, r1, r8
+  0047E4A: addne.w r1, r1, #0x2b0
+   dest0 arrays: queues = instance+4 (stride 0xE4); customers = instance+0x2B0 (stride 0x68); groups = instance+0x3E8 (stride 0xC)
+
+== queue constructor  CA 0x00047F14
+  0047F14: ldr.w r1, [r4, #0x450]
+  0047F18: cmp r1, #0
+  0047F1A: beq.w #0x4782e
+  0047F1E: mul r0, fp, r7
+  0047F22: ldr.w r2, [r4, #0x44c]
+  0047F26: adds r5, r1, r0
+  0047F28: ldr r2, [r2, #0x18]
+  0047F2A: add.w r2, r2, r7, lsl #3
+  0047F2E: beq #0x47f68
+  0047F30: cbz r2, #0x47f68
+   every queue: +0 cfg, +0x40/+0x80 list heads, +0xC lock, +0xC0 notifier=NULL, +0xC4 flag=0, +8 state=1
+
+== HCC RX thread entry (worker)  CA 0x00102552
+  0102552: push.w {r0, r1, r2, r4, r5, r6, r7, r8, sb, sl, fp, lr}
+  0102556: mov r5, r0
+  0102558: cmp r0, #0
+  010255A: beq #0x10265c
+  010255C: adds r6, r5, #4
+  010255E: ldr r4, [r5, #0x48]
+  0102560: cmp r4, #1
+  0102562: bne #0x102588
+  0102564: movs r1, #0
+  0102566: add.w r0, r5, #0x48
+  010256A: bl #0x1024bc
+  010256E: add.w r3, r5, #0x54
+   customer thread body: if +0x48 pending==1 clear it; for each bound queue: lock queue+0xC, splice queue+0x40 -> queue+0x80, unlock, limit=u16[cfg+4], pop (0x1024EA) + resolve (0xFD4C8, table = [customer]) + dispatch (0xFD7E8) then free; when idle block in 0xC23AC(customer+4)
+
+== list helpers  CA 0x001024EA
+  01024EA: ldr r3, [r0]
+  01024EC: movs r2, #0
+  01024EE: cmp r0, r3
+  01024F0: beq #0x102510
+  01024F2: ldr r1, [r3]
+  01024F4: strb r2, [r3]
+  01024F6: strb r2, [r3, #1]
+  01024F8: strb r2, [r3, #2]
+  01024FA: strb r2, [r3, #3]
+  01024FC: ldr r2, [r0, #4]
+  01024FE: str r1, [r0]
+  0102500: cmp r3, r2
+  0102502: ldr r2, [r0, #8]
+  0102504: it eq
+  0102506: streq r0, [r0, #4]
+  0102508: subs r2, #1
+   0x1024EA = pop head (list head at [obj]; count at +8); 0x102662 = append tail; 0x102530 = splice; 0x102514 = list init
+
+== registrar 0x102866  CA 0x00102866
+  0102866: push {r0, r1, r2, r4, r5, r6, r7, lr}
+  0102868: ldr r4, [pc, #0x80]   ; =0x00171B6C
+  010286A: mov r3, r0
+  010286C: ldr.w r0, [r4, #0x44c]
+  0102870: mov r7, r2
+  0102872: cbz r0, #0x10287a
+  0102874: ldr r2, [r0, #0x10]
+  0102876: cmp r3, r2
+  0102878: blo #0x102896
+  010287A: movs r2, #0
+  010287C: movs r1, #0x77
+  010287E: str r2, [sp]
+  0102880: ldr r0, [pc, #0x6c]   ; =0x107A002A
+  0102882: bl #0x41cde
+   0x102866(group, table, count): item[id] = {id, handler(thumb|1)} in the dest0 group array; local tables therefore land in the dest0 map
+
+== boot task registers local g2 table  CA 0x00048336
+  0048336: movs r2, #0x13
+  0048338: ldr r1, [pc, #0x1a4]   ; =0x0010CC18
+  004833A: movs r0, #2
+  004833C: bl #0x102866
+  0048340: movs r2, #0x28
+  0048342: ldr r1, [pc, #0x1a0]   ; =0x0010CCFC
+  0048344: movs r0, #0
+  0048346: bl #0x102866
+  004834A: mov.w r3, #0x118
+  004834E: movs r2, #0
+  0048350: mov r1, r3
+  0048352: ldr r0, [pc, #0x194]   ; =0x001ADB80
+   g2: 19 entries (table 0x10CC18), g0: 40 entries (table 0x10CCFC)
+
+== g2 id3 handler 0xBBC9C  CA 0x000BBC9C
+  00BBC9C: push {r0, r1, r4, r5, r6, lr}
+  00BBC9E: cbnz r0, #0xbbcb4
+  00BBCA0: movw r1, #0x93d
+  00BBCA4: ldr r0, [pc, #0xa4]   ; =0x10380CF8
+  00BBCA6: bl #0x42c28
+  00BBCAA: movw r4, #0x8b2d
+  00BBCAE: mov r0, r4
+  00BBCB0: add sp, #8
+  00BBCB2: pop {r4, r5, r6, pc}
+  00BBCB4: bl #0x409ea
+  00BBCB8: ldr r5, [r0, #0x14]
+  00BBCBA: mov r6, r0
+   0xBBC9C: band = hdr[0x14]; chip = 0xA4FC8(u8[band], u8[band+1]); splice the hdr[0xC] received-frame chain; 0xBA1C8(chip, band, list); on 0x8B2D re-arm the PPDU descriptors 0xB52F0
+
+== g2 id3 -> report class msg (0xBA1C8)  CA 0x000BA408
+  00BA408: movs r1, #6
+  00BA40A: movs r0, #0x14
+  00BA40C: bl #0x102822
+  00BA410: str r0, [sp, #0x28]
+  00BA412: cbnz r0, #0xba444
+  00BA414: mov.w r1, #0x748
+  00BA418: ldr r0, [pc, #0x88]   ; =0x10380CF8
+  00BA41A: bl #0x42c28
+  00BA41E: ldrb.w r3, [sl, #0xccd]
+  00BA422: mov r1, r7
+  00BA424: adds r3, #1
+   0xBA1C8 builds a g2/id2 report-class message (chip=u8[band], hdr[0x14]=band, hdr[0xC]=frame descriptor) and calls the CRX builder 0xB9780 once per descriptor
+
+== CRX builder 0xB9780 head (G1/G2)  CA 0x000B9780
+  00B9780: push.w {r4, r5, r6, r7, r8, sb, sl, fp, lr}
+  00B9784: sub sp, #0xe4
+  00B9786: cbnz r0, #0xb979c
+  00B9788: movw r1, #0xa89
+  00B978C: ldr r0, [pc, #0x33c]   ; =0x10380CF8
+  00B978E: bl #0x42c28
+  00B9792: movs r4, #0x64
+  00B9794: mov r0, r4
+  00B9796: add sp, #0xe4
+  00B9798: pop.w {r4, r5, r6, r7, r8, sb, sl, fp, pc}
+  00B979C: bl #0x409ea
+   G1: chip resolvable; the per-chip RX ctx pointer [chip+0x1A00] must be non-NULL
+
+== CRX builder 0xB9780 per-frame select  CA 0x000B980E
+  00B980E: ldr.w r5, [sl, #0xc]
+  00B9812: ldr r4, [r5, #-0x4]
+  00B9816: sub.w sb, r5, #4
+  00B981A: mov r0, r4
+  00B981C: bl #0x40cce
+  00B9820: ldrb r7, [r0, #-0x1f]
+  00B9824: mov r0, r4
+  00B9826: bl #0x40cce
+  00B982A: ldrb r4, [r0, #-0x1d]
+   per frame: forward flag = bit6 of the RX-info byte (0x40CCE(frame)-0x1F); class nibble = (0x40CCE(frame)-0x1D)>>4; flag=0 -> append the frame to the local list, flag=1 -> 0xB2CF4 builds the forwarded list
+
+== CRX builder class-nibble gate  CA 0x000B9864
+  00B9864: cmp r4, #3
+  00B9866: beq #0xb989a
+  00B9868: cbz r4, #0xb989a
+  00B986A: ldr r7, [pc, #0x260]   ; =0x10380CF8
+  00B986C: ldr r3, [sp, #0xa0]
+  00B986E: add r0, sp, #0xa0
+  00B9870: cmp r3, r0
+  00B9872: bne #0xb98b4
+  00B9874: ldr r3, [sp, #0x60]
+  00B9876: add r7, sp, #0x60
+  00B9878: cmp r3, r7
+  00B987A: bne.w #0xba0a0
+  00B987E: ldr r0, [sp, #8]
+  00B9880: bl #0xbfd4c
+   class nibble must be 1 or 2; nibble 0 or 3 drops the whole list (log 0xA6A), return 0x8B2D (no counter)
+
+== CRX build+post loop  CA 0x000BA0A0
+  00BA0A0: movs r1, #6
+  00BA0A2: ldrb.w r0, [r6, #0xd6d]
+  00BA0A6: bl #0x4c9b4
+  00BA0AA: mov.w sb, #1
+  00BA0AE: ldr.w r8, [pc, #0x44]   ; =0x10380CF8
+  00BA0B2: ldr.w sl, [pc, #0x34]   ; =0x20380CF8
+  00BA0B6: ldr r3, [sp, #0x60]
+  00BA0B8: cmp r3, r7
+  00BA0BA: beq.w #0xb987e
+  00BA0BE: mov r0, r7
+   C6/C7: frame_len = u16[rxinfo+0x11]; fwd idx = u8[rxinfo+6]; dest = 0xBC524(idx); G8: frame_len+0x3C <= 0x680 else band+0xCC5++; G7: dest==0 -> drop (log 0x49F); build group1/id13/total=frame_len+0x3C; hdr[1]hi = u8[dest+2], hdr[2]=u8[dest+1], hdr[3]=u8[dest]; copy MPDU (0x4BDCE) then post 0x102760
+
+== fwd/dest resolver 0xBC524  CA 0x000BC524
+  00BC524: push {r3, r4, r5, lr}
+  00BC526: mov r5, r0
+  00BC528: movs r0, #0
+  00BC52A: bl #0xfe558
+  00BC52E: cbnz r0, #0xbc53e
+  00BC530: movs r1, #0x94
+  00BC532: mov r2, r0
+  00BC534: ldr r0, [pc, #0x24]   ; =0x207A001A
+  00BC536: bl #0x41f90
+  00BC53A: movs r0, #0
+  00BC53C: pop {r3, r4, r5, pc}
+  00BC53E: cmp r5, #0x12
+  00BC540: bls #0xbc54a
+  00BC542: mov r2, r5
+   0xBC524(idx<=0x12) = u16[chipmgr+0x6FC] + u32[chipmgr+0x650+4*idx]; the destination nibble copied by the builder is u8[dest+2] & 0xF
+
+== chip ctx resolver 0xA4FC8  CA 0x000A4FC8
+  00A4FC8: push {r3, lr}
+  00A4FCA: mov r2, r0
+  00A4FCC: mov r3, r1
+  00A4FCE: cbnz r0, #0xa4fd4
+  00A4FD0: cmp r1, #1
+  00A4FD2: bls #0xa4fe2
+  00A4FD4: movw r1, #0x361
+  00A4FD8: ldr r0, [pc, #0x14]   ; =0x107A1169
+  00A4FDA: bl #0x41df4
+  00A4FDE: movs r0, #0
+  00A4FE0: pop {r3, pc}
+  00A4FE2: movw r1, #0x1b68
+  00A4FE6: ldr r0, [pc, #0xc]   ; =0x0015CA08
+   chip = 0x15CA08 + 0x1B68*u8[band+1]; REQUIRES u8[band]==0 (else log 0x361 and NULL) - the same byte the SMAC producer copies into the g2-id3 dest nibble
+
+== chip+0x1A00 installer  CA 0x00048A68
+  0048A68: add.w r3, r4, #0x1a00
+  0048A6C: str.w sl, [r3]
+  0048A70: ldrb.w r3, [sl, #1]
+  0048A74: mov.w r8, #1
+  0048A78: cmp r3, #2
+  0048A7A: it hs
+  0048A7C: movhs r3, #2
+  0048A7E: strb.w r3, [r4, #0xd70]
+  0048A82: movs r3, #6
+  0048A84: strb r3, [r4, #0x1e]
+  0048A86: movs r3, #5
+   the per-band init stores the RX ctx pointer sl into chip+0x1A00 and derives chip+0xD70 = min(ctx[1],2); the gate is init-time, not per-frame
+
+== SMAC producer g2 id3  CA 0x000B545E
+  00B545E: bl #0x409ea
+  00B5462: movs r2, #2
+  00B5464: ldrb r3, [r0]
+  00B5466: strb r5, [r0, #7]
+  00B5468: bfi r3, r2, #0, #4
+  00B546C: strb r3, [r0]
+  00B546E: movs r3, #3
+  00B5470: strb r3, [r0, #6]
+  00B5472: ldrb r2, [r4]
+  00B5474: ldrb r3, [r0, #1]
+  00B5476: bfi r3, r2, #4, #4
+  00B547A: strb r3, [r0, #1]
+  00B547C: ldrb r3, [r4, #2]
+   the only g2/id3 builder: group=2, id=3, dest nibble = u8[band]=0, hdr[0x14]=band, hdr[0xC]=frame chain; post 0x102760; post failure bumps band+0xCCE
+

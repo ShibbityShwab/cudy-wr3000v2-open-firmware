@@ -1,0 +1,11 @@
+# read-only probe pack - HOST-ONLY document; the Lead fires
+  P0   host D2H catalogue                                   rd_catalog                               -      any g2 id3, any g1 id13
+  P12  band0 object word0                                   CA 0x00174BF0 phys 0x4082CBF0            4      byte0 must be 0 (chip/dest idx)
+  P13  band0 post-failure +0xCCE                            CA 0x001758BE phys 0x4082D8BE            1      0 expected
+  P15  q0/q1/q2 state/8, list+0x48, notifier+0xC0, flag+0xC4 CA 0x00171B70 phys 0x40829B70            4x3    q1 notifier 0x00171E84
+  P16  group2 item[3] {id,handler,aux,stats} of [0x171F6C+4] follow group array                       16     handler 0x000BBC9D; stats delta = accepted g2id3
+  P18  band0 CRX drop +0xCC5                                CA 0x001758B5 phys 0x4082D8B5            1      0 expected
+  P20  customer1 +0 +4 +0x48 +0x4C +0x50 +0x54 +0x58        CA 0x00171E84 phys 0x40829E84            7x4    +0=0x00171FB4 +0x4C=0x0010CFF8 +0x50!=0 +0x54=0x00171C54
+  P21  chip0 RX ctx [chip+0x1A00]                           CA 0x0015E408 phys 0x40816408            4      !=0
+  P22  fwd/dest table: base u16 + 0x13 u32 entries          CA 0x00171504 phys 0x40829504            2+0x4C dest_i = base + entry_i; u8[dest_i+2]&0xF
+  P23  chip0 band index byte +0xD70                         CA 0x0015D778 phys 0x40815778            1      0/1

@@ -1,0 +1,75 @@
+PASS fw size 928920
+PASS fw sha256 7fc87e2051e80b5e3935a9481d666aefb8426efe7e7bcb3ec5ede352c3ef311b
+PASS decode notifier install (msg_tx tail) @0x001027FA ldr.w r4, [r4, #0xc0] -> movs r1, #1 -> add.w r0, r4, #0x48
+PASS decode queue cfg -> customer index @0x0004809E mov r1, r5 -> ldr r0, [sp, #0x18] -> bl #0x1024ce
+PASS decode bind queue to customer + notifier @0x000480D0 ldr r1, [r2, #0x54] -> cmp r7, r1 -> ldr r3, [r2, #0x58]
+PASS decode customer init (thread table record) @0x0004802A movs r3, #0x30 -> ldr r5, [r2, #0x1c] -> mla r5, r3, sb, r5
+PASS decode customer init (fields + thread create) @0x00048046 ldr r3, [sp, #0x18] -> str r3, [r1, r2] -> add.w r2, r7, #0x54
+PASS decode struct bases (dest0) @0x00047E30 movne r5, #0xe4 -> addne r0, #4 -> strne.w r0, [r4, #0x450]
+PASS decode queue constructor @0x00047F14 ldr.w r1, [r4, #0x450] -> mul r0, fp, r7 -> ldr.w r2, [r4, #0x44c]
+PASS decode HCC RX thread entry (worker) @0x00102552 push.w {r0, r1, r2, r4, r5, r6, r7, r8, sb, sl, fp, lr} -> ldr r4, [r5, #0x48] -> add.w r0, r5, #0x48
+PASS decode list helpers @0x001024EA ldr r3, [r0] -> cmp r0, r3 -> ldr r1, [r3]
+PASS decode registrar 0x102866 @0x00102866 ldr.w r0, [r4, #0x44c] -> movs r5, #0xc -> muls r5, r3, r5
+PASS decode boot task registers local g2 table @0x00048336 movs r2, #0x13 -> ldr r1, [pc, #0x1a4] -> movs r0, #2
+PASS decode g2 id3 handler 0xBBC9C @0x000BBC9C push {r0, r1, r4, r5, r6, lr} -> bl #0x409ea -> ldr r5, [r0, #0x14]
+PASS decode g2 id3 -> report class msg (0xBA1C8) @0x000BA408 movs r1, #6 -> movs r0, #0x14 -> bl #0x102822
+PASS decode CRX builder 0xB9780 head (G1/G2) @0x000B9780 push.w {r4, r5, r6, r7, r8, sb, sl, fp, lr} -> bl #0x409ea -> ldr r3, [r0, #0x14]
+PASS decode CRX builder 0xB9780 per-frame select @0x000B980E ldr.w r5, [sl, #0xc] -> ldr r4, [r5, #-0x4] -> bl #0x40cce
+PASS decode CRX builder class-nibble gate @0x000B9864 cmp r4, #3 -> cbz r4 -> movw r1, #0xa6a
+PASS decode CRX build+post loop @0x000BA0A0 movs r1, #6 -> ldrb.w r0, [r6, #0xd6d] -> bl #0x4c9b4
+PASS decode fwd/dest resolver 0xBC524 @0x000BC524 push {r3, r4, r5, lr} -> mov r5, r0 -> movs r0, #0
+PASS decode chip ctx resolver 0xA4FC8 @0x000A4FC8 push {r3, lr} -> mov r2, r0 -> mov r3, r1
+PASS decode chip+0x1A00 installer @0x00048A68 add.w r3, r4, #0x1a00 -> str.w sl, [r3] -> ldrb.w r3, [sl, #1]
+PASS decode SMAC producer g2 id3 @0x000B545E bl #0x409ea -> movs r2, #2 -> ldrb r3, [r0]
+PASS data hcc map n_queues 
+PASS data hcc map n_customers 
+PASS data hcc map n_groups 
+PASS data hcc map queue cfg 0x1040C0 
+PASS data hcc map thread table 0x10CFC8 
+PASS data hcc map group table 0x10CF74 
+PASS data thread0 name HCC TX Thread 
+PASS data thread1 name HCC RX Thread 
+PASS data thread2 name HCC OAM Thread 
+PASS data RX thread id 1 
+PASS data RX thread entry 0x102553 
+PASS data TX thread entry 0xC515F 
+PASS data OAM thread entry 0xC515F 
+PASS data queue cfg q0 customer 0 
+PASS data queue cfg q1 customer 1 
+PASS data queue cfg q2 customer 2 
+PASS data queue cfg q0 round limit 100 
+PASS data queue cfg q1 round limit 80 
+PASS data queue cfg q2 round limit 80 
+PASS data g2 table entry0 id 2 -> 0xB9781 
+PASS data g2 table entry1 id 3 -> 0xBBC9D 
+PASS data g2 table entry3 id 5 -> 0xB9781 
+PASS data g0 table count 40 (last id 48) 
+PASS data group table g0 -> q1 
+PASS data group table g1 -> q0 
+PASS data group table g2 -> q1 
+PASS data group table g4 -> q2 
+PASS data g2 item array ptr 
+PASS data chip base literal 0x15CA08 
+PASS data chipmgr base literal 0x170E08 
+PASS data boot g2 registration literal 0x10CC18 
+PASS data boot g0 registration literal 0x10CCFC 
+PASS data thread table record size 0x30 
+PASS derived q1 = 0x171C54 
+PASS derived q1 notifier slot = 0x171D14 
+PASS derived customer array = 0x171E1C 
+PASS derived customer1 = 0x171E84 
+PASS derived customer2 = 0x171EEC 
+PASS derived group array = 0x171F54 
+PASS derived dest0 record = 0x171FB4 
+PASS derived queue array end == customer array 
+PASS derived phys(q1 notifier slot) = 0x40829D14 
+PASS derived phys(band0) = 0x4082CBF0 
+PASS derived phys(chip0+0x1A00) = 0x40816408 
+PASS derived phys(dest table entries) = 0x40829458 
+PASS boot task g2 registration count 
+PASS boot task g0 registration count 
+PASS worker round limit u16[cfg+4] 
+PASS worker list splice 
+PASS worker dispatch resolver 
+
+73/73 PASS

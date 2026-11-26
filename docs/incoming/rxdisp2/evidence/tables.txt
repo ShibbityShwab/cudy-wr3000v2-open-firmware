@@ -1,0 +1,110 @@
+# T2 - dest0 runtime wiring (derived from the init immediates)
+  queue array        CA 0x00171B70  phys 0x40829B70
+  q0                 CA 0x00171B70  phys 0x40829B70
+  q1                 CA 0x00171C54  phys 0x40829C54
+  q2                 CA 0x00171D38  phys 0x40829D38
+  q0 notifier slot   CA 0x00171C30  phys 0x40829C30
+  q1 notifier slot   CA 0x00171D14  phys 0x40829D14
+  q2 notifier slot   CA 0x00171DF8  phys 0x40829DF8
+  customer array     CA 0x00171E1C  phys 0x40829E1C
+  customer0          CA 0x00171E1C  phys 0x40829E1C
+  customer1          CA 0x00171E84  phys 0x40829E84
+  customer2          CA 0x00171EEC  phys 0x40829EEC
+  group array        CA 0x00171F54  phys 0x40829F54
+  dest0 record       CA 0x00171FB4  phys 0x40829FB4
+
+# queue cfg (static) qidx customer round-limit
+  q0  cfg 0x001040C0  idx=0 customer=0 limit=100 byte7=7
+  q1  cfg 0x001040C8  idx=1 customer=1 limit=80 byte7=7
+  q2  cfg 0x001040D0  idx=2 customer=2 limit=80 byte7=0
+
+# T3 - local handler tables
+  g2 table 0x0010CC18 count 19
+    id 2  handler 0x000B9780
+    id 3  handler 0x000BBC9C
+    id 4  handler 0x0008F52C
+    id 5  handler 0x000B9780
+    id 6  handler 0x00092888
+    id 9  handler 0x000627FC
+    id 39 handler 0x0008CF84
+    id 10 handler 0x000956A8
+    id 11 handler 0x00060B4C
+    id 14 handler 0x0008E2AC
+    id 26 handler 0x000608BC
+    id 27 handler 0x000845E0
+    id 31 handler 0x0004C082
+    id 35 handler 0x0004B1B0
+    id 37 handler 0x000811E2
+    id 38 handler 0x0008785C
+    id 40 handler 0x000C5ED0
+    id 42 handler 0x0008F668
+  g0 table 0x0010CCFC count 40
+    id 0  handler 0x00081694
+    id 1  handler 0x00043D58
+    id 2  handler 0x000D6068
+    id 3  handler 0x000B5FE0
+    id 6  handler 0x000601FC
+    id 7  handler 0x0009832C
+    id 8  handler 0x00096224
+    id 9  handler 0x000974F8
+    id 10 handler 0x0005FF64
+    id 11 handler 0x0005E2F4
+    id 12 handler 0x0006494C
+    id 13 handler 0x0005DE78
+    id 14 handler 0x000A4A64
+    id 15 handler 0x00062EC0
+    id 16 handler 0x0005E28C
+    id 17 handler 0x00062E1C
+    id 18 handler 0x0005DE7C
+    id 19 handler 0x000968A4
+    id 21 handler 0x00063A2C
+    id 22 handler 0x00062D88
+    id 23 handler 0x0005F950
+    id 24 handler 0x0005F8BC
+    id 25 handler 0x00061648
+    id 28 handler 0x0005DFA0
+    id 29 handler 0x000B568C
+    id 30 handler 0x00087800
+    id 32 handler 0x00085630
+    id 34 handler 0x0008F668
+    id 35 handler 0x0008D4BC
+    id 36 handler 0x000B55E0
+    id 39 handler 0x00081B18
+    id 41 handler 0x0004BC50
+    id 40 handler 0x000B5FB2
+    id 44 handler 0x0004AAE4
+    id 45 handler 0x0004A8E8
+    id 49 handler 0x0004A9E0
+    id 43 handler 0x000A1520
+    id 46 handler 0x0008CFC4
+    id 48 handler 0x000938F6
+
+# T4 - CRX builder gates
+  G1      CA 0x000B97EE  [chip+0x1A00] != 0 (init-time)
+  00B97EE: add.w r3, r6, #0x1a00
+  00B97F2: ldr.w r8, [r3]
+  00B97F6: cmp.w r8, #0
+  Gselect CA 0x000B9820  forward flag = bit6(0x40CCE(frame)-0x1F)
+  00B9820: ldrb r7, [r0, #-0x1f]
+  00B9824: mov r0, r4
+  00B9826: bl #0x40cce
+  Gclass  CA 0x000B982A  class nibble = (0x40CCE(frame)-0x1D)>>4 in {1,2}
+  00B982A: ldrb r4, [r0, #-0x1d]
+  00B982E: ubfx r7, r7, #6, #1
+  00B9832: lsrs r4, r4, #4
+  00B9834: cbz r7, #0xb9858
+  Glen    CA 0x000BA110  frame_len+0x3C <= 0x680 else band+0xCC5++
+  00BA110: add.w r1, r2, #0xc
+  00BA114: cmp.w r1, #0x680
+  00BA118: bls #0xba134
+  Gdest   CA 0x000BA134  dest = 0xBC524(u8[rxinfo+6]) != 0
+  00BA134: cbnz r0, #0xba144
+  00BA136: ldrb r2, [r3, #6]
+  00BA138: movw r1, #0x49f
+  00BA13C: mov r0, r8
+  Gpost   CA 0x000BA17A  0x102760(group1/id13) must return 0
+  00BA17A: bl #0x102760
+  00BA17E: mov r4, r0
+  00BA180: cmp r0, #0
+  00BA182: beq #0xba0b6
+  00BA184: mov r0, r5
